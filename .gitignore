@@ -1,0 +1,10 @@
+
+# LangGraph API
+.langgraph_api
+.vscode/
+# Tool-generated file backups
+.backups/
+.memory/
+__pycache__/
+.env
+base/
