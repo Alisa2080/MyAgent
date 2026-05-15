@@ -32,3 +32,14 @@
 - Keep LangChain-facing file tool policy in `agent_tools/file_tools.py`; keep low-level file operation mechanics in `agent_tools/file_toolkit/`.
 - Keep workspace path policy in `agent_tools/file_policy.py`; low-level toolkit modules should not know about project-specific workspace rules.
 - Avoid adding new behavior to `agent_tools/general.py`; it exists only as a compatibility export layer.
+
+## Hermes Terminal Session Contract
+
+The shell tool uses Hermes terminal toolkit under the hood. Runtime session isolation is derived from the LangGraph execution thread:
+
+- When LangChain provides `ToolRuntime.execution_info.thread_id`, the shell tool hashes that thread id into a path-safe Hermes `task_id`.
+- The raw thread id is not exposed to the model and is not written into Hermes paths or checkpoints.
+- If no runtime thread id is available, tools fall back to the Hermes `default` task id. This fallback is intended for local tests and direct function calls only.
+- Production callers should provide a stable LangGraph `thread_id` for each conversation/run thread.
+
+Future `terminal` and `process` tools must use the same helper in `agent_core.session_context` and must not expose `task_id` as a model-controlled argument.
