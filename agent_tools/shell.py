@@ -1,9 +1,10 @@
 import re
 from pathlib import Path
 
-from langchain.tools import tool
+from langchain.tools import ToolRuntime, tool
 from pydantic import BaseModel, Field
 
+from agent_core.session_context import hermes_task_id_from_runtime
 from agent_core.workspace import WORKDIR
 from agent_tools.common import truncate
 from agent_tools.hermes_shell_adapter import run_foreground_command
@@ -97,14 +98,19 @@ def _has_path_outside_workspace(command: str) -> bool:
 
 
 @tool("execute_command", args_schema=ExecuteCommandInput)
-def execute_command(command: str) -> str:
+def execute_command(command: str, runtime: ToolRuntime | None = None) -> str:
     """Execute a shell command inside the workspace. Returns JSON: status, message, data."""
     reason = _is_dangerous(command)
     if reason:
         return tool_error("execute_command", f"Dangerous command blocked: {reason}", code="blocked_command")
     if _has_path_outside_workspace(command):
         return tool_error("execute_command", "Command references absolute paths outside the workspace", code="invalid_path")
-    payload = run_foreground_command(command, workdir=str(WORKDIR), timeout=120)
+    payload = run_foreground_command(
+        command,
+        workdir=str(WORKDIR),
+        timeout=120,
+        task_id=hermes_task_id_from_runtime(runtime),
+    )
     if not isinstance(payload, dict):
         return tool_error("execute_command", "Terminal backend returned an invalid response.", code="invalid_response")
 
