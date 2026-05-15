@@ -35,11 +35,31 @@
 
 ## Hermes Terminal Session Contract
 
-The shell tool uses Hermes terminal toolkit under the hood. Runtime session isolation is derived from the LangGraph execution thread:
+The project exposes three shell-related tools:
 
-- When LangChain provides `ToolRuntime.execution_info.thread_id`, the shell tool hashes that thread id into a path-safe Hermes `task_id`.
+- `execute_command`: compatibility tool for foreground commands with the legacy output schema and stricter project-side blocking.
+- `terminal`: first-class Hermes terminal tool for foreground and background commands.
+- `process`: first-class Hermes process tool for background process polling, logs, waiting, stdin, and killing.
+
+Runtime session isolation is derived from the LangGraph execution thread:
+
+- When LangChain provides `ToolRuntime.execution_info.thread_id`, terminal tools hash that thread id into a path-safe Hermes `task_id`.
+- If `execution_info.thread_id` is unavailable, tools fall back to `runtime.config["configurable"]["thread_id"]`.
 - The raw thread id is not exposed to the model and is not written into Hermes paths or checkpoints.
-- If no runtime thread id is available, tools fall back to the Hermes `default` task id. This fallback is intended for local tests and direct function calls only.
-- Production callers should provide a stable LangGraph `thread_id` for each conversation/run thread.
+- If no runtime thread id is available, tools fall back to the Hermes `default` task id. This fallback is intended for local tests and direct implementation calls only.
+- Production callers should provide a stable LangGraph `thread_id` for each user conversation/session.
 
-Future `terminal` and `process` tools must use the same helper in `agent_core.session_context` and must not expose `task_id` as a model-controlled argument.
+`terminal` and `process` do not expose `task_id` in their tool schemas. `process` validates that `session_id` belongs to the current runtime-derived `task_id` before allowing `poll`, `log`, `wait`, `kill`, `write`, `submit`, or `close`.
+
+Security and approval:
+
+- `terminal` uses Hermes built-in command guards by calling Hermes with `force=False`.
+- `terminal` and `process` are intercepted by the human-in-the-loop middleware before execution.
+- `execute_command` remains as a compatibility layer and should not be used for new long-running/background workflows.
+
+Lifecycle policy:
+
+- Normal agent turns preserve background processes.
+- Explicit user-session shutdown should call `cleanup_terminal_session_for_thread_id(thread_id)` or `cleanup_terminal_session_for_runtime(runtime)`.
+- Explicit cleanup kills running processes for the session task id and cleans the active Hermes environment.
+- Parent agent startup calls `recover_terminal_processes()`. Hermes can recover host-backed background processes as detached sessions after restart; sandbox-backed processes are skipped by Hermes because their in-sandbox PIDs are not meaningful after restart.
