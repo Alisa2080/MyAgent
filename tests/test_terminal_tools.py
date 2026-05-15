@@ -233,3 +233,28 @@ def test_process_toolnode_injects_runtime_thread_for_list(monkeypatch):
 
     assert payload["ok"] is True
     assert calls[0]["task_id"] == hermes_task_id_from_thread_id("toolnode-process-thread")
+
+
+def _tool_names(tools):
+    return {getattr(tool, "name", "") for tool in tools}
+
+
+def test_parent_base_tools_include_terminal_and_process():
+    from agent_core.delegation import BASE_TOOLS, READ_ONLY_TOOLS
+
+    parent_names = _tool_names(BASE_TOOLS)
+    read_only_names = _tool_names(READ_ONLY_TOOLS)
+
+    assert "terminal" in parent_names
+    assert "process" in parent_names
+    assert "terminal" not in read_only_names
+    assert "process" not in read_only_names
+
+
+def test_human_interrupt_intercepts_terminal_and_process():
+    from agent_core.builders import HUMAN_INTERRUPT_ON
+
+    assert "terminal" in HUMAN_INTERRUPT_ON
+    assert "process" in HUMAN_INTERRUPT_ON
+    assert HUMAN_INTERRUPT_ON["terminal"]["allowed_decisions"] == ["approve", "edit", "reject", "respond"]
+    assert HUMAN_INTERRUPT_ON["process"]["allowed_decisions"] == ["approve", "edit", "reject", "respond"]

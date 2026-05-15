@@ -18,6 +18,7 @@ from agent_tools.file_tools import file_info, list_directory, patch, read_file, 
 from agent_tools.shell import execute_command
 from agent_tools.skill_manage import skill_manage
 from agent_tools.skills import skill_view, skills_list
+from agent_tools.terminal_tools import process, terminal
 from agent_tools.web import web_fetch, web_search
 
 logger = logging.getLogger(__name__)
@@ -38,6 +39,8 @@ BASE_TOOLS = [
     write_file,
     patch,
     execute_command,
+    terminal,
+    process,
     skill_manage,
 ]
 

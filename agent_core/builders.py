@@ -38,6 +38,14 @@ HUMAN_INTERRUPT_ON = {
         "allowed_decisions": ["approve", "edit", "reject", "respond"],
         "description": "Review this shell command before it executes.",
     },
+    "terminal": {
+        "allowed_decisions": ["approve", "edit", "reject", "respond"],
+        "description": "Review this Hermes terminal command before it executes.",
+    },
+    "process": {
+        "allowed_decisions": ["approve", "edit", "reject", "respond"],
+        "description": "Review this Hermes background process action before it executes.",
+    },
     "write_file": {
         "allowed_decisions": ["approve", "edit", "reject", "respond"],
         "description": "Review this file write before it modifies the workspace.",
