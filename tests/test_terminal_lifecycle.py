@@ -43,10 +43,12 @@ def test_recover_terminal_processes_is_thread_safe(monkeypatch):
     import agent_core.terminal_lifecycle as lifecycle
 
     calls = []
+    recovery_started = threading.Event()
     release_recover = threading.Event()
 
     def fake_recover():
         calls.append("recover")
+        recovery_started.set()
         release_recover.wait(timeout=5)
         return 2
 
@@ -67,9 +69,9 @@ def test_recover_terminal_processes_is_thread_safe(monkeypatch):
     for thread in threads:
         thread.start()
 
-    deadline = time.monotonic() + 5
-    while len(calls) < 1 and time.monotonic() < deadline:
-        time.sleep(0.01)
+    assert recovery_started.wait(timeout=5)
+    time.sleep(0.05)
+    assert results == []
 
     release_recover.set()
     for thread in threads:

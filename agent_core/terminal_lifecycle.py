@@ -17,7 +17,8 @@ def recover_terminal_processes() -> int:
     """Recover host-backed Hermes background processes from checkpoint metadata once per process.
 
     Recovery is marked attempted before the registry call so failures do not retry in
-    the same process.
+    the same process. Concurrent callers wait for the first recovery attempt to finish
+    before returning 0.
     """
     global _recovery_attempted
     with _recovery_lock:
@@ -25,7 +26,7 @@ def recover_terminal_processes() -> int:
             logger.info("Hermes terminal process recovery already attempted; skipping.")
             return 0
         _recovery_attempted = True
-    recovered = process_registry.recover_from_checkpoint()
+        recovered = process_registry.recover_from_checkpoint()
     logger.info("Recovered %s Hermes terminal process(es) from checkpoint.", recovered)
     return recovered
 
