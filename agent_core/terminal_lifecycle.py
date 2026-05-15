@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 from typing import Any
 
 from agent_core.session_context import hermes_task_id_from_runtime, hermes_task_id_from_thread_id
@@ -9,15 +10,21 @@ from agent_tools.hermes_terminal_toolkit.terminal_tool import cleanup_vm
 
 logger = logging.getLogger(__name__)
 _recovery_attempted = False
+_recovery_lock = threading.Lock()
 
 
 def recover_terminal_processes() -> int:
-    """Recover host-backed Hermes background processes from checkpoint metadata once per process."""
+    """Recover host-backed Hermes background processes from checkpoint metadata once per process.
+
+    Recovery is marked attempted before the registry call so failures do not retry in
+    the same process.
+    """
     global _recovery_attempted
-    if _recovery_attempted:
-        logger.info("Hermes terminal process recovery already attempted; skipping.")
-        return 0
-    _recovery_attempted = True
+    with _recovery_lock:
+        if _recovery_attempted:
+            logger.info("Hermes terminal process recovery already attempted; skipping.")
+            return 0
+        _recovery_attempted = True
     recovered = process_registry.recover_from_checkpoint()
     logger.info("Recovered %s Hermes terminal process(es) from checkpoint.", recovered)
     return recovered

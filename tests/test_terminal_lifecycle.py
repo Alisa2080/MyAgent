@@ -36,6 +36,50 @@ def test_recover_terminal_processes_runs_once_per_process(monkeypatch):
     assert calls == ["recover"]
 
 
+def test_recover_terminal_processes_is_thread_safe(monkeypatch):
+    import threading
+    import time
+
+    import agent_core.terminal_lifecycle as lifecycle
+
+    calls = []
+    release_recover = threading.Event()
+
+    def fake_recover():
+        calls.append("recover")
+        release_recover.wait(timeout=5)
+        return 2
+
+    assert hasattr(lifecycle, "_recovery_lock")
+    monkeypatch.setattr(lifecycle, "_recovery_attempted", False)
+    monkeypatch.setattr(lifecycle.process_registry, "recover_from_checkpoint", fake_recover)
+
+    results = []
+    errors = []
+
+    def worker():
+        try:
+            results.append(lifecycle.recover_terminal_processes())
+        except Exception as exc:
+            errors.append(exc)
+
+    threads = [threading.Thread(target=worker), threading.Thread(target=worker)]
+    for thread in threads:
+        thread.start()
+
+    deadline = time.monotonic() + 5
+    while len(calls) < 1 and time.monotonic() < deadline:
+        time.sleep(0.01)
+
+    release_recover.set()
+    for thread in threads:
+        thread.join(timeout=5)
+
+    assert errors == []
+    assert sorted(results) == [0, 2]
+    assert calls == ["recover"]
+
+
 def test_cleanup_terminal_session_for_thread_id_kills_processes_and_cleans_env(monkeypatch):
     import agent_core.terminal_lifecycle as lifecycle
 
