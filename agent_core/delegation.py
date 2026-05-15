@@ -5,9 +5,15 @@ from langchain.tools import tool
 
 from agent_core.message_utils import extract_text_from_agent_response
 from agent_core.model_config import SMALL_MODEL
-from agent_core.prompts import SUBAGENT_SYSTEM_PROMPT
 from agent_core.schemas import TaskInput
+from agent_core.system_prompt import (
+    SystemPromptBuilder,
+    build_prompt_context,
+    load_project_instruction_blocks,
+    model_display_name,
+)
 from agent_core.tool_limits import build_tool_call_limit_middleware
+from agent_core.workspace import WORKDIR
 from agent_tools.file_tools import file_info, list_directory, patch, read_file, search_files, write_file
 from agent_tools.shell import execute_command
 from agent_tools.skill_manage import skill_manage
@@ -37,9 +43,14 @@ BASE_TOOLS = [
 
 
 def build_task_subagent():
+    prompt_context = build_prompt_context(
+        workdir=WORKDIR,
+        model_name=model_display_name(SMALL_MODEL),
+        project_instruction_blocks=load_project_instruction_blocks(WORKDIR),
+    )
     return create_agent(
         model=SMALL_MODEL,
-        system_prompt=SUBAGENT_SYSTEM_PROMPT,
+        system_prompt=SystemPromptBuilder().build_subagent(prompt_context),
         middleware=build_tool_call_limit_middleware(),
         tools=READ_ONLY_TOOLS,
     )
