@@ -54,6 +54,13 @@ def _status_code_from_payload(payload: dict) -> str:
     return "terminal_error"
 
 
+def _exit_code_from_payload(payload: dict) -> int | None:
+    try:
+        return int(payload["exit_code"])
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
 def _terminal_impl(
     *,
     command: str,
@@ -83,6 +90,16 @@ def _terminal_impl(
             "terminal",
             str(payload["error"]),
             code=_status_code_from_payload(payload),
+            data=payload,
+            meta={"backend": "hermes_terminal_toolkit"},
+        )
+    exit_code = _exit_code_from_payload(payload)
+    if not background and exit_code not in (None, 0):
+        code = "timeout" if exit_code == 124 else "command_failed"
+        return tool_error(
+            "terminal",
+            f"Command exited with code {exit_code}.",
+            code=code,
             data=payload,
             meta={"backend": "hermes_terminal_toolkit"},
         )

@@ -148,6 +148,6 @@ def _execute_command_impl(command: str, runtime: ToolRuntime | None = None) -> s
 
 
 @tool("execute_command", args_schema=ExecuteCommandInput)
-def execute_command(command: str, runtime: ToolRuntime) -> str:
+def execute_command(command: str, runtime: ToolRuntime = None) -> str:
     """Execute a shell command inside the workspace. Returns JSON: status, message, data."""
     return _execute_command_impl(command, runtime)

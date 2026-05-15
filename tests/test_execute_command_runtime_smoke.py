@@ -80,3 +80,23 @@ def test_execute_command_still_blocks_dangerous_commands_before_hermes():
 
     assert payload["ok"] is False
     assert payload["error"]["code"] == "blocked_command"
+
+
+def test_execute_command_direct_invoke_does_not_require_runtime(monkeypatch):
+    import agent_tools.shell as shell
+    from agent_tools.shell import execute_command
+
+    calls = []
+
+    def fake_run_foreground_command(command, *, workdir, timeout=120, task_id="default"):
+        calls.append({"command": command, "task_id": task_id})
+        return {"output": "direct-ok\n", "exit_code": 0, "error": None}
+
+    monkeypatch.setattr(shell, "run_foreground_command", fake_run_foreground_command)
+
+    raw = execute_command.invoke({"command": "printf direct-ok"})
+    payload = _decode_tool_result(raw)
+
+    assert payload["ok"] is True
+    assert payload["data"]["output"] == "direct-ok\n"
+    assert calls == [{"command": "printf direct-ok", "task_id": "default"}]

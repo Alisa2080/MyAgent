@@ -80,6 +80,31 @@ def test_terminal_preserves_hermes_guard_block_response(monkeypatch):
     assert "task_id" not in payload["meta"]
 
 
+def test_terminal_foreground_nonzero_exit_is_tool_error(monkeypatch):
+    import agent_tools.terminal_tools as terminal_tools
+
+    def fake_run_terminal(**kwargs):
+        return json.dumps({"output": "failed\n", "exit_code": 2, "error": None})
+
+    monkeypatch.setattr(terminal_tools, "run_terminal", fake_run_terminal)
+
+    raw = terminal_tools._terminal_impl(
+        command="false",
+        background=False,
+        timeout=None,
+        workdir=None,
+        pty=False,
+        notify_on_complete=False,
+        watch_patterns=None,
+        runtime=None,
+    )
+    payload = json.loads(raw)
+
+    assert payload["ok"] is False
+    assert payload["error"]["code"] == "command_failed"
+    assert payload["data"]["exit_code"] == 2
+
+
 def test_terminal_toolnode_injects_runtime_thread(monkeypatch):
     from langchain_core.messages import AIMessage
     from langgraph.graph import MessagesState, StateGraph
