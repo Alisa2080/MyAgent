@@ -124,6 +124,7 @@ def test_terminal_toolnode_injects_runtime_thread(monkeypatch):
     payload = json.loads(result["messages"][-1].content)
 
     assert payload["ok"] is True
+    assert "task_id" not in payload["meta"]
     assert calls[0]["task_id"] == hermes_task_id_from_thread_id("toolnode-terminal-thread")
 
 
