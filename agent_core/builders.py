@@ -17,6 +17,7 @@ from agent_core.system_prompt import (
     load_project_instruction_blocks,
     model_display_name,
 )
+from agent_core.terminal_lifecycle import recover_terminal_processes
 from agent_core.tool_limits import build_tool_call_limit_middleware
 from agent_core.workspace import WORKDIR
 from agent_tools.memory_tools import memory_manage
@@ -67,6 +68,7 @@ HUMAN_INTERRUPT_ON = {
 
 def build_agent():
     memory_store.load_from_disk()
+    recover_terminal_processes()
     memory_blocks = []
     mem_block = memory_store.format_for_system_prompt("memory")
     user_block = memory_store.format_for_system_prompt("user")
