@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import json
 from typing import Literal
 
@@ -86,13 +84,13 @@ def _terminal_impl(
             str(payload["error"]),
             code=_status_code_from_payload(payload),
             data=payload,
-            meta={"backend": "hermes_terminal_toolkit", "task_id": task_id},
+            meta={"backend": "hermes_terminal_toolkit"},
         )
     return tool_ok(
         "terminal",
         data=payload,
         message="Terminal command completed." if not background else "Background process started.",
-        meta={"backend": "hermes_terminal_toolkit", "task_id": task_id},
+        meta={"backend": "hermes_terminal_toolkit"},
     )
 
 
