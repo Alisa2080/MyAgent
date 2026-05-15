@@ -5,6 +5,10 @@ from pathlib import Path
 from agent_tools.hermes_terminal_toolkit.terminal import run_terminal
 
 
+def _normalize_task_id(task_id: str | None) -> str:
+    return str(task_id).strip() if task_id and str(task_id).strip() else "default"
+
+
 def run_foreground_command(
     command: str,
     *,
@@ -28,7 +32,7 @@ def run_foreground_command(
         command=command,
         background=False,
         timeout=timeout,
-        task_id=task_id,
+        task_id=_normalize_task_id(task_id),
         workdir=str(Path(workdir).resolve()),
         pty=False,
         force=True,
