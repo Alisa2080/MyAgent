@@ -116,3 +116,82 @@ def terminal(
         watch_patterns=watch_patterns,
         runtime=runtime,
     )
+
+
+_PROCESS_ACTIONS_REQUIRING_SESSION = {"poll", "log", "wait", "kill", "write", "submit", "close"}
+
+
+def _session_belongs_to_task(session_id: str, task_id: str) -> bool:
+    session = process_registry.get(session_id)
+    return bool(session is not None and session.task_id == task_id)
+
+
+def _process_impl(
+    *,
+    action: str,
+    session_id: str = "",
+    data: str = "",
+    timeout: int | None = None,
+    offset: int = 0,
+    limit: int = 200,
+    runtime: ToolRuntime | None = None,
+) -> str:
+    task_id = hermes_task_id_from_runtime(runtime)
+    if action in _PROCESS_ACTIONS_REQUIRING_SESSION:
+        if not session_id:
+            return tool_error("process", f"session_id is required for {action}", code="invalid_input")
+        if not _session_belongs_to_task(session_id, task_id):
+            return tool_error(
+                "process",
+                "Process session does not belong to the current runtime task id.",
+                code="access_denied",
+                data={"session_id": session_id},
+                meta={"backend": "hermes_terminal_toolkit"},
+            )
+
+    raw = run_process(
+        action=action,
+        session_id=session_id,
+        data=data,
+        timeout=timeout,
+        offset=offset,
+        limit=limit,
+        task_id=task_id,
+    )
+    payload = _decode_hermes_payload(raw)
+    if payload.get("error"):
+        return tool_error(
+            "process",
+            str(payload["error"]),
+            code=_status_code_from_payload(payload),
+            data=payload,
+            meta={"backend": "hermes_terminal_toolkit"},
+        )
+    return tool_ok(
+        "process",
+        data=payload,
+        message="Process action completed.",
+        meta={"backend": "hermes_terminal_toolkit"},
+    )
+
+
+@tool("process", args_schema=ProcessInput)
+def process(
+    action: str,
+    runtime: ToolRuntime,
+    session_id: str = "",
+    data: str = "",
+    timeout: int | None = None,
+    offset: int = 0,
+    limit: int = 200,
+) -> str:
+    """Manage Hermes background processes scoped to the current runtime task id."""
+    return _process_impl(
+        action=action,
+        session_id=session_id,
+        data=data,
+        timeout=timeout,
+        offset=offset,
+        limit=limit,
+        runtime=runtime,
+    )

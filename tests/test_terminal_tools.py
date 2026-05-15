@@ -125,3 +125,111 @@ def test_terminal_toolnode_injects_runtime_thread(monkeypatch):
 
     assert payload["ok"] is True
     assert calls[0]["task_id"] == hermes_task_id_from_thread_id("toolnode-terminal-thread")
+
+
+def test_process_schema_does_not_expose_task_id():
+    from agent_tools.terminal_tools import process
+
+    assert "task_id" not in process.args
+    assert "action" in process.args
+    assert "session_id" in process.args
+
+
+def test_process_list_is_scoped_to_runtime_task_id(monkeypatch):
+    import agent_tools.terminal_tools as terminal_tools
+    from agent_core.session_context import hermes_task_id_from_thread_id
+
+    calls = []
+
+    def fake_run_process(**kwargs):
+        calls.append(kwargs)
+        return json.dumps({"processes": []})
+
+    monkeypatch.setattr(terminal_tools, "run_process", fake_run_process)
+    runtime = SimpleNamespace(execution_info=SimpleNamespace(thread_id="process-thread-1"))
+
+    raw = terminal_tools._process_impl(
+        action="list",
+        session_id="",
+        data="",
+        timeout=None,
+        offset=0,
+        limit=200,
+        runtime=runtime,
+    )
+    payload = json.loads(raw)
+
+    assert payload["ok"] is True
+    assert payload["data"]["processes"] == []
+    assert calls[0]["task_id"] == hermes_task_id_from_thread_id("process-thread-1")
+
+
+def test_process_rejects_cross_task_session(monkeypatch):
+    import agent_tools.terminal_tools as terminal_tools
+
+    class FakeSession:
+        task_id = "lg_other_task"
+
+    monkeypatch.setattr(terminal_tools.process_registry, "get", lambda session_id: FakeSession())
+    runtime = SimpleNamespace(execution_info=SimpleNamespace(thread_id="current-thread"))
+
+    raw = terminal_tools._process_impl(
+        action="poll",
+        session_id="proc_abc",
+        data="",
+        timeout=None,
+        offset=0,
+        limit=200,
+        runtime=runtime,
+    )
+    payload = json.loads(raw)
+
+    assert payload["ok"] is False
+    assert payload["error"]["code"] == "access_denied"
+
+
+def test_process_toolnode_injects_runtime_thread_for_list(monkeypatch):
+    from langchain_core.messages import AIMessage
+    from langgraph.graph import MessagesState, StateGraph
+    from langgraph.prebuilt import ToolNode
+
+    import agent_tools.terminal_tools as terminal_tools
+    from agent_core.session_context import hermes_task_id_from_thread_id
+    from agent_tools.terminal_tools import process
+
+    calls = []
+
+    def fake_run_process(**kwargs):
+        calls.append(kwargs)
+        return json.dumps({"processes": []})
+
+    monkeypatch.setattr(terminal_tools, "run_process", fake_run_process)
+
+    graph = StateGraph(MessagesState)
+    graph.add_node("tools", ToolNode([process]))
+    graph.set_entry_point("tools")
+    graph.set_finish_point("tools")
+    app = graph.compile()
+
+    result = app.invoke(
+        {
+            "messages": [
+                AIMessage(
+                    content="",
+                    tool_calls=[
+                        {
+                            "name": "process",
+                            "args": {"action": "list"},
+                            "id": "call-1",
+                        }
+                    ],
+                )
+            ]
+        },
+        config={"configurable": {"thread_id": "toolnode-process-thread"}},
+    )
+
+    payload = json.loads(result["messages"][-1].content)
+
+    assert payload["ok"] is True
+    assert calls[0]["task_id"] == hermes_task_id_from_thread_id("toolnode-process-thread")
