@@ -67,7 +67,7 @@ def test_execute_command_forwards_runtime_thread_as_task_id(monkeypatch):
         config={"configurable": {"thread_id": "ignored-config-thread"}},
     )
 
-    result = shell.execute_command("python -c \"print('ok')\"", runtime=runtime)
+    result = shell._execute_command_impl("python -c \"print('ok')\"", runtime=runtime)
 
     assert '"ok": true' in result
     assert calls[0]["task_id"] == hermes_task_id_from_thread_id("thread-abc")
@@ -83,7 +83,7 @@ def test_execute_command_falls_back_to_default_without_runtime(monkeypatch):
 
     monkeypatch.setattr(shell, "run_foreground_command", fake_run_foreground_command)
 
-    result = shell.execute_command("python -c \"print('ok')\"")
+    result = shell._execute_command_impl("python -c \"print('ok')\"")
 
     assert '"ok": true' in result
     assert calls == ["default"]

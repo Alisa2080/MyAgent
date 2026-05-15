@@ -97,8 +97,7 @@ def _has_path_outside_workspace(command: str) -> bool:
     return False
 
 
-@tool("execute_command", args_schema=ExecuteCommandInput)
-def execute_command(command: str, runtime: ToolRuntime | None = None) -> str:
+def _execute_command_impl(command: str, runtime: ToolRuntime | None = None) -> str:
     """Execute a shell command inside the workspace. Returns JSON: status, message, data."""
     reason = _is_dangerous(command)
     if reason:
@@ -146,3 +145,9 @@ def execute_command(command: str, runtime: ToolRuntime | None = None) -> str:
     if exit_code != 0:
         return tool_error("execute_command", f"Command exited with code {exit_code}.", code="command_failed", data=data, meta=meta)
     return tool_ok("execute_command", data=data, message="Command executed.", meta=meta)
+
+
+@tool("execute_command", args_schema=ExecuteCommandInput)
+def execute_command(command: str, runtime: ToolRuntime) -> str:
+    """Execute a shell command inside the workspace. Returns JSON: status, message, data."""
+    return _execute_command_impl(command, runtime)
