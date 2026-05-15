@@ -12,9 +12,27 @@ def test_recover_terminal_processes_delegates_to_registry(monkeypatch):
         calls.append("recover")
         return 2
 
+    monkeypatch.setattr(lifecycle, "_recovery_attempted", False)
     monkeypatch.setattr(lifecycle.process_registry, "recover_from_checkpoint", fake_recover)
 
     assert lifecycle.recover_terminal_processes() == 2
+    assert calls == ["recover"]
+
+
+def test_recover_terminal_processes_runs_once_per_process(monkeypatch):
+    import agent_core.terminal_lifecycle as lifecycle
+
+    calls = []
+
+    def fake_recover():
+        calls.append("recover")
+        return 2
+
+    monkeypatch.setattr(lifecycle, "_recovery_attempted", False)
+    monkeypatch.setattr(lifecycle.process_registry, "recover_from_checkpoint", fake_recover)
+
+    assert lifecycle.recover_terminal_processes() == 2
+    assert lifecycle.recover_terminal_processes() == 0
     assert calls == ["recover"]
 
 

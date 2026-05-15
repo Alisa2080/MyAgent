@@ -8,10 +8,16 @@ from agent_tools.hermes_terminal_toolkit.process_registry import process_registr
 from agent_tools.hermes_terminal_toolkit.terminal_tool import cleanup_vm
 
 logger = logging.getLogger(__name__)
+_recovery_attempted = False
 
 
 def recover_terminal_processes() -> int:
-    """Recover host-backed Hermes background processes from checkpoint metadata."""
+    """Recover host-backed Hermes background processes from checkpoint metadata once per process."""
+    global _recovery_attempted
+    if _recovery_attempted:
+        logger.info("Hermes terminal process recovery already attempted; skipping.")
+        return 0
+    _recovery_attempted = True
     recovered = process_registry.recover_from_checkpoint()
     logger.info("Recovered %s Hermes terminal process(es) from checkpoint.", recovered)
     return recovered
