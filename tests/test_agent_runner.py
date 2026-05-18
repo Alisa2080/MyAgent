@@ -308,3 +308,126 @@ def test_runner_wraps_initial_and_resume_turns_in_terminal_execution_scope(
         ("enter", "thread-1"),
         ("exit", "thread-1"),
     ]
+
+
+def test_runner_cleans_after_initial_turn(monkeypatch):
+    import agent_core.agent_runner as runner
+
+    cleanup_calls = []
+
+    class FakeAgent:
+        def invoke(self, input_data, config=None):
+            return {"messages": ["initial"]}
+
+    monkeypatch.delenv(runner.PER_TURN_CLEANUP_ENV, raising=False)
+    monkeypatch.setattr(runner, "drain_terminal_notifications_for_thread_id", lambda thread_id: [])
+    monkeypatch.setattr(
+        runner,
+        "cleanup_task_resources_for_thread_id",
+        lambda thread_id, reason="turn_finished": cleanup_calls.append((thread_id, reason)),
+    )
+
+    result = runner.invoke_agent_with_terminal_notifications(
+        FakeAgent(),
+        {"messages": [{"role": "user", "content": "start"}]},
+        {"configurable": {"thread_id": "thread-1"}},
+    )
+
+    assert result == {"messages": ["initial"]}
+    assert cleanup_calls == [("thread-1", "turn_finished")]
+
+
+def test_runner_cleans_after_each_resume_turn(monkeypatch):
+    import agent_core.agent_runner as runner
+
+    cleanup_calls = []
+    drain_calls = 0
+
+    class FakeAgent:
+        def __init__(self):
+            self.calls = 0
+
+        def invoke(self, input_data, config=None):
+            self.calls += 1
+            return {"messages": [f"turn-{self.calls}"]}
+
+    def fake_drain(thread_id):
+        nonlocal drain_calls
+        drain_calls += 1
+        if drain_calls == 1:
+            return [{"type": "completion", "session_id": "proc_1", "command": "job"}]
+        return []
+
+    monkeypatch.delenv(runner.PER_TURN_CLEANUP_ENV, raising=False)
+    monkeypatch.setattr(runner, "drain_terminal_notifications_for_thread_id", fake_drain)
+    monkeypatch.setattr(runner, "format_terminal_notification_message", lambda events: "formatted notification")
+    monkeypatch.setattr(
+        runner,
+        "cleanup_task_resources_for_thread_id",
+        lambda thread_id, reason="turn_finished": cleanup_calls.append((thread_id, reason)),
+    )
+
+    result = runner.invoke_agent_with_terminal_notifications(
+        FakeAgent(),
+        {"messages": [{"role": "user", "content": "start"}]},
+        {"configurable": {"thread_id": "thread-1"}},
+    )
+
+    assert result == {"messages": ["turn-2"]}
+    assert cleanup_calls == [
+        ("thread-1", "turn_finished"),
+        ("thread-1", "terminal_notification_resume_finished"),
+    ]
+
+
+def test_runner_cleans_when_agent_invoke_raises(monkeypatch):
+    import agent_core.agent_runner as runner
+
+    cleanup_calls = []
+
+    class FakeAgent:
+        def invoke(self, input_data, config=None):
+            raise RuntimeError("model failed")
+
+    monkeypatch.delenv(runner.PER_TURN_CLEANUP_ENV, raising=False)
+    monkeypatch.setattr(
+        runner,
+        "cleanup_task_resources_for_thread_id",
+        lambda thread_id, reason="turn_finished": cleanup_calls.append((thread_id, reason)),
+    )
+
+    with pytest.raises(RuntimeError, match="model failed"):
+        runner.invoke_agent_with_terminal_notifications(
+            FakeAgent(),
+            {"messages": [{"role": "user", "content": "start"}]},
+            {"configurable": {"thread_id": "thread-1"}},
+        )
+
+    assert cleanup_calls == [("thread-1", "turn_finished")]
+
+
+def test_runner_per_turn_cleanup_can_be_disabled(monkeypatch):
+    import agent_core.agent_runner as runner
+
+    cleanup_calls = []
+
+    class FakeAgent:
+        def invoke(self, input_data, config=None):
+            return {"messages": ["initial"]}
+
+    monkeypatch.setenv(runner.PER_TURN_CLEANUP_ENV, "false")
+    monkeypatch.setattr(runner, "drain_terminal_notifications_for_thread_id", lambda thread_id: [])
+    monkeypatch.setattr(
+        runner,
+        "cleanup_task_resources_for_thread_id",
+        lambda thread_id, reason="turn_finished": cleanup_calls.append((thread_id, reason)),
+    )
+
+    result = runner.invoke_agent_with_terminal_notifications(
+        FakeAgent(),
+        {"messages": [{"role": "user", "content": "start"}]},
+        {"configurable": {"thread_id": "thread-1"}},
+    )
+
+    assert result == {"messages": ["initial"]}
+    assert cleanup_calls == []
