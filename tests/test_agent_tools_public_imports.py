@@ -44,3 +44,36 @@ def test_public_web_memory_and_skills_exports_existing_tool_objects():
     assert public_skills_list is skills_list
     assert public_skill_view is skill_view
     assert public_skill_manage is skill_manage
+
+
+def test_shared_common_exports_existing_helpers():
+    from agent_tools.common import DEFAULT_EXCLUDE_DIRS, path_info, relative_path, truncate
+    from agent_tools.shared.common import (
+        DEFAULT_EXCLUDE_DIRS as public_default_exclude_dirs,
+        path_info as public_path_info,
+        relative_path as public_relative_path,
+        truncate as public_truncate,
+    )
+
+    assert public_default_exclude_dirs is DEFAULT_EXCLUDE_DIRS
+    assert public_path_info is path_info
+    assert public_relative_path is relative_path
+    assert public_truncate is truncate
+
+
+def test_shared_policy_and_output_exports_existing_helpers():
+    from agent_tools.file_policy import ensure_patch_paths, ensure_read_allowed, ensure_workspace_path
+    from agent_tools.shared.file_policy import (
+        ensure_patch_paths as public_ensure_patch_paths,
+        ensure_read_allowed as public_ensure_read_allowed,
+        ensure_workspace_path as public_ensure_workspace_path,
+    )
+    from agent_tools.shared.tool_output import tool_error as public_tool_error
+    from agent_tools.shared.tool_output import tool_ok as public_tool_ok
+    from agent_tools.tool_output import tool_error, tool_ok
+
+    assert public_ensure_patch_paths is ensure_patch_paths
+    assert public_ensure_read_allowed is ensure_read_allowed
+    assert public_ensure_workspace_path is ensure_workspace_path
+    assert public_tool_error is tool_error
+    assert public_tool_ok is tool_ok
