@@ -4,14 +4,12 @@
 
 - `agent.py`: LangGraph entrypoint. Keep this file small because `langgraph.json` loads `agent` from here.
 - `agent_core/`: agent construction, prompts, middleware helpers, model config, memory, shared schemas, and workspace path handling.
-- `agent_tools/`: LangChain tools exposed to the agent, including file tools, skill tools, shell/web/memory tools, and skill management.
-  - `file_tools.py`: LangChain-facing standard file tools (`list_directory`, `read_file`, `write_file`, `patch`, `search_files`, `file_info`) plus workspace policy.
-  - `file_policy.py`: workspace path policy and environment setup for file tools.
-  - `terminal_tools.py`: Hermes-backed terminal command execution and background process management.
-  - `web.py`: TinyFish-backed web search and fetch tools.
-  - `memory_tools.py`: durable memory tool wrapper for `memory_manage`.
-  - `skills.py` and `skill_manage.py`: skill discovery, viewing, creation, editing, and deletion.
-  - `common.py`: shared JSON response, truncation, path metadata, backup, trash, and text decoding helpers.
+- `agent_tools/`: LangChain-facing tools plus internal tool implementation packages.
+  - `public/`: preferred import location for LangChain tools exposed to agents.
+  - `shared/`: first-party helper modules used by tool wrappers.
+  - `file_toolkit/`: internal workspace file operation implementation.
+  - `hermes_terminal_toolkit/`: imported Hermes terminal toolkit implementation.
+  - Top-level modules such as `file_tools.py` and `terminal_tools.py` are compatibility shims during migration.
 - `agent_tools/file_toolkit/`: internal file operation implementation used by `agent_tools/file_tools.py`.
   - `file_tools.py`: JSON-returning primitive orchestration functions for read/write/patch/search. This is not a LangChain tool module.
   - `file_operations.py`: shell-backed low-level file operations.
