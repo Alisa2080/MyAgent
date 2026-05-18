@@ -8,7 +8,7 @@ from typing import Any
 from agent_core.session_context import hermes_task_id_from_runtime, hermes_task_id_from_thread_id
 from agent_tools.hermes_terminal_toolkit.interrupt import set_interrupt
 from agent_tools.hermes_terminal_toolkit.process_registry import process_registry
-from agent_tools.hermes_terminal_toolkit.terminal_tool import cleanup_vm
+from agent_tools.hermes_terminal_toolkit.terminal_tool import cleanup_vm, is_persistent_env
 
 logger = logging.getLogger(__name__)
 _recovery_attempted = False
@@ -57,6 +57,60 @@ def cleanup_terminal_session_for_runtime(runtime: Any | None) -> dict:
         "killed_processes": killed,
         "environment_cleaned": True,
     }
+
+
+def cleanup_task_resources_for_task_id(task_id: str, *, reason: str = "turn_finished") -> dict:
+    """Clean per-turn terminal resources for a Hermes task id.
+
+    Persistent environments intentionally survive normal turn boundaries and are
+    left for the Hermes idle reaper. Non-persistent environments are torn down at
+    turn end to avoid leaking sandbox resources.
+    """
+    try:
+        persistent = is_persistent_env(task_id)
+    except Exception:
+        logger.exception("Failed to determine whether Hermes environment is persistent for task %s.", task_id)
+        persistent = False
+
+    if persistent:
+        return {
+            "task_id": task_id,
+            "cleaned": False,
+            "persistent": True,
+            "cleanup_reason": reason,
+        }
+
+    try:
+        cleanup_vm(task_id)
+    except Exception as exc:
+        logger.exception("Failed to clean Hermes environment for task %s.", task_id)
+        result = {
+            "task_id": task_id,
+            "cleaned": False,
+            "persistent": False,
+            "cleanup_reason": reason,
+            "error": str(exc),
+        }
+        return result
+
+    return {
+        "task_id": task_id,
+        "cleaned": True,
+        "persistent": False,
+        "cleanup_reason": reason,
+    }
+
+
+def cleanup_task_resources_for_thread_id(thread_id: str | None, *, reason: str = "turn_finished") -> dict:
+    """Clean per-turn terminal resources for callers that know the LangGraph thread id."""
+    if not thread_id:
+        return {
+            "cleaned": False,
+            "cleanup_reason": reason,
+            "error": "thread_id is required for automatic terminal resource cleanup",
+        }
+    task_id = hermes_task_id_from_thread_id(thread_id)
+    return cleanup_task_resources_for_task_id(task_id, reason=reason)
 
 
 def end_terminal_session(thread_id: str | None, *, reason: str = "session_closed") -> dict:

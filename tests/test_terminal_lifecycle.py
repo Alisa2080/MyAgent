@@ -149,6 +149,95 @@ def test_end_terminal_session_requires_thread_id():
     assert "thread_id is required" in result["error"]
 
 
+def test_cleanup_task_resources_for_task_id_cleans_non_persistent_env(monkeypatch):
+    import agent_core.terminal_lifecycle as lifecycle
+
+    calls = []
+    monkeypatch.setattr(lifecycle, "is_persistent_env", lambda task_id: False)
+    monkeypatch.setattr(lifecycle, "cleanup_vm", lambda task_id: calls.append(task_id))
+
+    result = lifecycle.cleanup_task_resources_for_task_id("task-1", reason="turn_finished")
+
+    assert result == {
+        "task_id": "task-1",
+        "cleaned": True,
+        "persistent": False,
+        "cleanup_reason": "turn_finished",
+    }
+    assert calls == ["task-1"]
+
+
+def test_cleanup_task_resources_for_task_id_skips_persistent_env(monkeypatch):
+    import agent_core.terminal_lifecycle as lifecycle
+
+    calls = []
+    monkeypatch.setattr(lifecycle, "is_persistent_env", lambda task_id: True)
+    monkeypatch.setattr(lifecycle, "cleanup_vm", lambda task_id: calls.append(task_id))
+
+    result = lifecycle.cleanup_task_resources_for_task_id("task-1", reason="turn_finished")
+
+    assert result == {
+        "task_id": "task-1",
+        "cleaned": False,
+        "persistent": True,
+        "cleanup_reason": "turn_finished",
+    }
+    assert calls == []
+
+
+def test_cleanup_task_resources_for_task_id_reports_cleanup_error(monkeypatch):
+    import agent_core.terminal_lifecycle as lifecycle
+
+    monkeypatch.setattr(lifecycle, "is_persistent_env", lambda task_id: False)
+
+    def fail_cleanup(task_id):
+        raise RuntimeError(f"cannot clean {task_id}")
+
+    monkeypatch.setattr(lifecycle, "cleanup_vm", fail_cleanup)
+
+    result = lifecycle.cleanup_task_resources_for_task_id("task-1", reason="turn_finished")
+
+    assert result["task_id"] == "task-1"
+    assert result["cleaned"] is False
+    assert result["persistent"] is False
+    assert result["cleanup_reason"] == "turn_finished"
+    assert "cannot clean task-1" in result["error"]
+
+
+def test_cleanup_task_resources_for_thread_id_uses_hashed_task_id(monkeypatch):
+    import agent_core.terminal_lifecycle as lifecycle
+
+    task_id = hermes_task_id_from_thread_id("thread-cleanup")
+    calls = []
+
+    monkeypatch.setattr(
+        lifecycle,
+        "cleanup_task_resources_for_task_id",
+        lambda task_id, reason="turn_finished": calls.append((task_id, reason))
+        or {"task_id": task_id, "cleaned": True, "persistent": False, "cleanup_reason": reason},
+    )
+
+    result = lifecycle.cleanup_task_resources_for_thread_id("thread-cleanup", reason="resume_finished")
+
+    assert result == {
+        "task_id": task_id,
+        "cleaned": True,
+        "persistent": False,
+        "cleanup_reason": "resume_finished",
+    }
+    assert calls == [(task_id, "resume_finished")]
+
+
+def test_cleanup_task_resources_for_thread_id_requires_thread_id():
+    import agent_core.terminal_lifecycle as lifecycle
+
+    result = lifecycle.cleanup_task_resources_for_thread_id(None)
+
+    assert result["cleaned"] is False
+    assert result["cleanup_reason"] == "turn_finished"
+    assert "thread_id is required" in result["error"]
+
+
 def test_interrupt_unknown_thread_is_noop(monkeypatch):
     import agent_core.terminal_lifecycle as lifecycle
 
