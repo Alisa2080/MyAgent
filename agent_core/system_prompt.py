@@ -4,7 +4,7 @@ import platform
 from pathlib import Path
 from typing import Sequence
 
-from agent_tools.skills import build_skills_system_prompt
+from agent_tools.public.skills import build_skills_system_prompt
 
 
 PROJECT_INSTRUCTION_FILES = ("AGENTS.md", "CLAUDE.md")

@@ -14,11 +14,10 @@ from agent_core.system_prompt import (
 )
 from agent_core.tool_limits import build_tool_call_limit_middleware
 from agent_core.workspace import WORKDIR
-from agent_tools.file_tools import file_info, list_directory, patch, read_file, search_files, write_file
-from agent_tools.skill_manage import skill_manage
-from agent_tools.skills import skill_view, skills_list
-from agent_tools.terminal_tools import process, terminal
-from agent_tools.web import web_fetch, web_search
+from agent_tools.public.files import file_info, list_directory, patch, read_file, search_files, write_file
+from agent_tools.public.skills import skill_manage, skill_view, skills_list
+from agent_tools.public.terminal import process, terminal
+from agent_tools.public.web import web_fetch, web_search
 
 logger = logging.getLogger(__name__)
 

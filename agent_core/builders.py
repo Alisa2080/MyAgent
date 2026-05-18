@@ -20,7 +20,7 @@ from agent_core.system_prompt import (
 from agent_core.terminal_lifecycle import recover_terminal_processes
 from agent_core.tool_limits import build_tool_call_limit_middleware
 from agent_core.workspace import WORKDIR
-from agent_tools.memory_tools import memory_manage
+from agent_tools.public.memory import memory_manage
 
 
 TODO_SYSTEM_PROMPT = (

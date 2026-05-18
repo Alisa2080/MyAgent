@@ -77,3 +77,18 @@ def test_shared_policy_and_output_exports_existing_helpers():
     assert public_ensure_workspace_path is ensure_workspace_path
     assert public_tool_error is tool_error
     assert public_tool_ok is tool_ok
+
+
+def test_agent_core_uses_public_tool_facades_for_runtime_registration():
+    from pathlib import Path
+
+    delegation_source = Path("agent_core/delegation.py").read_text()
+    builders_source = Path("agent_core/builders.py").read_text()
+    system_prompt_source = Path("agent_core/system_prompt.py").read_text()
+
+    assert "from agent_tools.public.files import" in delegation_source
+    assert "from agent_tools.public.terminal import" in delegation_source
+    assert "from agent_tools.public.web import" in delegation_source
+    assert "from agent_tools.public.skills import" in delegation_source
+    assert "from agent_tools.public.memory import" in builders_source
+    assert "from agent_tools.public.skills import build_skills_system_prompt" in system_prompt_source
