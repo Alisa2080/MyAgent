@@ -55,7 +55,11 @@ Security and approval:
 
 Lifecycle policy:
 
-- Normal agent turns preserve background processes.
+- `invoke_agent_with_terminal_notifications(...)` wraps each initial and notification-resume turn in `terminal_execution_scope(thread_id)` and runs per-turn terminal cleanup after each completed turn.
+- Per-turn terminal cleanup cleans non-persistent Hermes terminal environments for the runtime-derived task id.
+- Persistent Hermes terminal environments are not cleaned at normal turn boundaries; they remain available until the persistent environment idle reaper cleans them.
+- Set `HERMES_TERMINAL_PER_TURN_CLEANUP=false` to disable runner-managed per-turn terminal cleanup.
+- Direct `agent.invoke(...)` callers are responsible for their own terminal execution scope, notification resume, interrupt, and cleanup lifecycle.
 - Explicit user-session shutdown should call `end_terminal_session(thread_id)`. Lower-level cleanup helpers remain available as `cleanup_terminal_session_for_thread_id(thread_id)` and `cleanup_terminal_session_for_runtime(runtime)`.
 - Explicit cleanup kills running processes for the session task id and cleans the active Hermes environment.
 - Parent agent startup calls `recover_terminal_processes()`. Hermes can recover host-backed background processes as detached sessions after restart; sandbox-backed processes are skipped by Hermes because their in-sandbox PIDs are not meaningful after restart.
@@ -72,6 +76,7 @@ Background process governance:
 Embedding applications are responsible for terminal lifecycle events:
 
 - Pass a stable `configurable.thread_id` for every user conversation/session.
+- Prefer `invoke_agent_with_terminal_notifications(...)` over direct `agent.invoke(...)` when you want built-in terminal execution scoping, notification resumes, and per-turn cleanup.
 - Wrap agent execution in `terminal_execution_scope(thread_id)` when new-message interrupt behavior is required. Multiple active executions for the same `thread_id` are tracked and interrupted together.
 - When a new user message arrives for the same `thread_id`, call `interrupt_terminal_wait_for_thread_id(thread_id)` before replacing or resuming the run. Blocking `process(action="wait")` calls will then return early with Hermes interrupt status.
 - When the user session is actually closed, call `end_terminal_session(thread_id)` to kill scoped background processes and clean the Hermes environment.
