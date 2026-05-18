@@ -35,10 +35,6 @@ TODO_TOOL_DESCRIPTION = (
 )
 
 HUMAN_INTERRUPT_ON = {
-    "execute_command": {
-        "allowed_decisions": ["approve", "edit", "reject", "respond"],
-        "description": "Review this shell command before it executes.",
-    },
     "terminal": {
         "allowed_decisions": ["approve", "edit", "reject", "respond"],
         "description": "Review this Hermes terminal command before it executes.",

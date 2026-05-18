@@ -7,8 +7,10 @@ WEB_FETCH_RUN_LIMIT = 5
 WEB_FETCH_THREAD_LIMIT = 12
 SEARCH_FILES_RUN_LIMIT = 8
 SEARCH_FILES_THREAD_LIMIT = 20
-EXECUTE_COMMAND_RUN_LIMIT = 8
-EXECUTE_COMMAND_THREAD_LIMIT = 16
+TERMINAL_RUN_LIMIT = 8
+TERMINAL_THREAD_LIMIT = 16
+PROCESS_RUN_LIMIT = 12
+PROCESS_THREAD_LIMIT = 32
 TASK_RUN_LIMIT = 5
 TASK_THREAD_LIMIT = 10
 
@@ -35,9 +37,14 @@ def build_tool_call_limit_middleware(
             thread_limit=SEARCH_FILES_THREAD_LIMIT,
         ),
         ToolCallLimitMiddleware(
-            tool_name="execute_command",
-            run_limit=EXECUTE_COMMAND_RUN_LIMIT,
-            thread_limit=EXECUTE_COMMAND_THREAD_LIMIT,
+            tool_name="terminal",
+            run_limit=TERMINAL_RUN_LIMIT,
+            thread_limit=TERMINAL_THREAD_LIMIT,
+        ),
+        ToolCallLimitMiddleware(
+            tool_name="process",
+            run_limit=PROCESS_RUN_LIMIT,
+            thread_limit=PROCESS_THREAD_LIMIT,
         ),
     ]
     if include_task:

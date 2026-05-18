@@ -118,6 +118,92 @@ def test_cleanup_terminal_session_for_runtime_uses_runtime_thread(monkeypatch):
     assert cleaned == [task_id]
 
 
+def test_end_terminal_session_delegates_to_thread_cleanup(monkeypatch):
+    import agent_core.terminal_lifecycle as lifecycle
+
+    calls = []
+    monkeypatch.setattr(
+        lifecycle,
+        "cleanup_terminal_session_for_thread_id",
+        lambda thread_id: calls.append(thread_id) or {"task_id": "task-1", "killed_processes": 2},
+    )
+
+    result = lifecycle.end_terminal_session("thread-1", reason="user_closed")
+
+    assert result == {
+        "task_id": "task-1",
+        "killed_processes": 2,
+        "cleaned": True,
+        "cleanup_reason": "user_closed",
+    }
+    assert calls == ["thread-1"]
+
+
+def test_end_terminal_session_requires_thread_id():
+    import agent_core.terminal_lifecycle as lifecycle
+
+    result = lifecycle.end_terminal_session(None)
+
+    assert result["cleaned"] is False
+    assert result["cleanup_reason"] == "session_closed"
+    assert "thread_id is required" in result["error"]
+
+
+def test_interrupt_unknown_thread_is_noop(monkeypatch):
+    import agent_core.terminal_lifecycle as lifecycle
+
+    monkeypatch.setattr(lifecycle, "_active_execution_threads", {})
+
+    result = lifecycle.interrupt_terminal_wait_for_thread_id("missing-thread")
+
+    assert result == {"interrupted": False, "reason": "new_user_message"}
+
+
+def test_terminal_execution_scope_registers_and_clears_interrupt(monkeypatch):
+    import threading
+
+    import agent_core.terminal_lifecycle as lifecycle
+
+    calls = []
+    monkeypatch.setattr(lifecycle, "_active_execution_threads", {})
+    monkeypatch.setattr(lifecycle, "set_interrupt", lambda active, thread_id=None: calls.append((active, thread_id)))
+
+    current_thread_id = threading.current_thread().ident
+    with lifecycle.terminal_execution_scope("thread-1"):
+        assert lifecycle._active_execution_threads == {"thread-1": {current_thread_id}}
+        result = lifecycle.interrupt_terminal_wait_for_thread_id("thread-1", reason="new_message")
+
+    assert result == {"interrupted": True, "reason": "new_message", "python_thread_ids": [current_thread_id]}
+    assert lifecycle._active_execution_threads == {}
+    assert calls == [(False, current_thread_id), (True, current_thread_id), (False, current_thread_id)]
+
+
+def test_terminal_execution_scope_ignores_missing_thread_id(monkeypatch):
+    import agent_core.terminal_lifecycle as lifecycle
+
+    calls = []
+    monkeypatch.setattr(lifecycle, "_active_execution_threads", {})
+    monkeypatch.setattr(lifecycle, "set_interrupt", lambda active, thread_id=None: calls.append((active, thread_id)))
+
+    with lifecycle.terminal_execution_scope(None):
+        assert lifecycle._active_execution_threads == {}
+
+    assert calls == []
+
+
+def test_interrupt_signals_all_active_executions_for_thread(monkeypatch):
+    import agent_core.terminal_lifecycle as lifecycle
+
+    calls = []
+    monkeypatch.setattr(lifecycle, "_active_execution_threads", {"thread-1": {11, 22}})
+    monkeypatch.setattr(lifecycle, "set_interrupt", lambda active, thread_id=None: calls.append((active, thread_id)))
+
+    result = lifecycle.interrupt_terminal_wait_for_thread_id("thread-1")
+
+    assert result == {"interrupted": True, "reason": "new_user_message", "python_thread_ids": [11, 22]}
+    assert calls == [(True, 11), (True, 22)]
+
+
 def test_build_agent_recovers_terminal_processes_after_loading_memory(monkeypatch):
     import agent_core.builders as builders
 

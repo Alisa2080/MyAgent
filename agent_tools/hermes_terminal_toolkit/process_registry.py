@@ -172,8 +172,9 @@ class ProcessRegistry:
 
         # Notification queue — unified queue for all background process events.
         # Completion notifications (notify_on_complete) and watch pattern matches
-        # both land here, distinguished by "type" field.  CLI process_loop and
-        # gateway drain this after each agent turn to auto-trigger new turns.
+        # both land here, distinguished by "type" field. This project's
+        # agent_runner/notification bridge drains it after each agent turn to
+        # auto-trigger bounded same-thread continuations.
         import queue as _queue_mod
         self.completion_queue: _queue_mod.Queue = _queue_mod.Queue()
 
@@ -281,6 +282,7 @@ class ProcessRegistry:
                 # summary event so the agent/user sees why things went quiet.
                 self.completion_queue.put({
                     "session_id": session.id,
+                    "task_id": session.task_id,
                     "session_key": session.session_key,
                     "command": session.command,
                     "type": "watch_disabled",
@@ -311,6 +313,7 @@ class ProcessRegistry:
 
         self.completion_queue.put({
             "session_id": session.id,
+            "task_id": session.task_id,
             "session_key": session.session_key,
             "command": session.command,
             "type": "watch_match",
@@ -794,6 +797,7 @@ class ProcessRegistry:
             self.completion_queue.put({
                 "type": "completion",
                 "session_id": session.id,
+                "task_id": session.task_id,
                 "command": session.command,
                 "exit_code": session.exit_code,
                 "output": output_tail,
@@ -1250,6 +1254,7 @@ class ProcessRegistry:
                 if session.watcher_interval > 0:
                     self.pending_watchers.append({
                         "session_id": session.id,
+                        "task_id": session.task_id,
                         "check_interval": session.watcher_interval,
                         "session_key": session.session_key,
                         "platform": session.watcher_platform,

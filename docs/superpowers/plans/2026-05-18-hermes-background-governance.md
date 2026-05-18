@@ -25,6 +25,7 @@
 - Configure quota with `HERMES_MAX_BACKGROUND_PROCESSES_PER_TASK`; invalid values fall back to `3`.
 - Count only live/running sessions for that `task_id`. Finished sessions should not consume quota.
 - Return a structured `tool_error("terminal", ..., code="background_quota_exceeded")` when quota is exceeded.
+- Serialize quota check plus background startup per `task_id` so concurrent starts cannot exceed the quota.
 - Keep global Hermes registry pruning unchanged.
 - Keep `terminal` and `process` human approval behavior unchanged.
 - Keep normal turns preserving background processes.
@@ -52,7 +53,7 @@
 - Create: `agent_core/terminal_process_policy.py`
 - Test: `tests/test_terminal_process_policy.py`
 
-- [ ] **Step 1: Write quota policy tests**
+- [x] **Step 1: Write quota policy tests**
 
 Add tests for:
 
@@ -92,7 +93,7 @@ def test_count_running_background_processes_for_task(monkeypatch):
     assert policy.count_running_background_processes("task-a", registry=FakeRegistry()) == 1
 ```
 
-- [ ] **Step 2: Implement policy helpers**
+- [x] **Step 2: Implement policy helpers**
 
 Create `agent_core/terminal_process_policy.py`:
 
@@ -136,7 +137,7 @@ def background_quota_available(task_id: str, registry: Any = process_registry) -
     return current < limit, current, limit
 ```
 
-- [ ] **Step 3: Run policy tests**
+- [x] **Step 3: Run policy tests**
 
 ```bash
 /home/miku/miniforge3/envs/langchain/bin/python -m pytest tests/test_terminal_process_policy.py -v
@@ -152,7 +153,7 @@ Expected: tests pass.
 - Modify: `agent_tools/terminal_tools.py`
 - Test: `tests/test_terminal_tools.py`
 
-- [ ] **Step 1: Write failing terminal quota tests**
+- [x] **Step 1: Write failing terminal quota tests**
 
 Add tests for:
 
@@ -182,13 +183,14 @@ def test_terminal_background_rejects_when_task_quota_exceeded(monkeypatch):
     assert calls == []
 ```
 
-- [ ] **Step 2: Implement quota check**
+- [x] **Step 2: Implement quota check**
 
 In `agent_tools/terminal_tools.py`:
 
 - import `background_quota_available`;
 - after deriving `task_id`, before calling `run_terminal`, check quota only when `background is True`;
 - return structured error if quota is exceeded.
+- hold a per-`task_id` `background_quota_guard(task_id)` while checking quota and starting the Hermes background process.
 
 Expected behavior:
 
@@ -205,7 +207,7 @@ if background:
         )
 ```
 
-- [ ] **Step 3: Run terminal tests**
+- [x] **Step 3: Run terminal tests**
 
 ```bash
 /home/miku/miniforge3/envs/langchain/bin/python -m pytest tests/test_terminal_tools.py tests/test_terminal_process_policy.py -v
@@ -221,7 +223,7 @@ Expected: tests pass.
 - Modify: `agent_core/terminal_lifecycle.py`
 - Test: `tests/test_terminal_lifecycle.py`
 
-- [ ] **Step 1: Write cleanup API tests**
+- [x] **Step 1: Write cleanup API tests**
 
 Add tests for:
 
@@ -236,7 +238,7 @@ Policy detail:
 - Direct test/local fallback to `default` should remain available only through existing explicit helpers.
 - New auto-cleanup API should reject missing `thread_id` with `cleaned=False`.
 
-- [ ] **Step 2: Implement auto-cleanup lifecycle function**
+- [x] **Step 2: Implement auto-cleanup lifecycle function**
 
 Add to `agent_core/terminal_lifecycle.py`:
 
@@ -257,7 +259,7 @@ def end_terminal_session(thread_id: str | None, *, reason: str = "session_closed
     }
 ```
 
-- [ ] **Step 3: Decide call-site integration**
+- [x] **Step 3: Decide call-site integration**
 
 There is currently no gateway/session manager in this repository. Therefore implementation should expose `end_terminal_session(...)` as the stable integration point and document where it must be called:
 
@@ -268,7 +270,7 @@ There is currently no gateway/session manager in this repository. Therefore impl
 
 Do not call this from `build_agent()` or every run, because that would kill intended long-lived background processes between normal turns.
 
-- [ ] **Step 4: Run lifecycle tests**
+- [x] **Step 4: Run lifecycle tests**
 
 ```bash
 /home/miku/miniforge3/envs/langchain/bin/python -m pytest tests/test_terminal_lifecycle.py -v
@@ -284,7 +286,7 @@ Expected: tests pass.
 - Modify: `agent_core/terminal_lifecycle.py`
 - Test: `tests/test_terminal_lifecycle.py`
 
-- [ ] **Step 1: Write interrupt wiring tests**
+- [x] **Step 1: Write interrupt wiring tests**
 
 Add tests for:
 
@@ -300,7 +302,7 @@ The Hermes interrupt API is thread-ident based, while this project’s session i
 LangGraph thread_id -> active Python execution thread ident
 ```
 
-- [ ] **Step 2: Implement active execution registry**
+- [x] **Step 2: Implement active execution registry**
 
 Add to `agent_core/terminal_lifecycle.py`:
 
@@ -310,7 +312,7 @@ from contextlib import contextmanager
 
 from agent_tools.hermes_terminal_toolkit.interrupt import set_interrupt
 
-_active_execution_threads: dict[str, int] = {}
+_active_execution_threads: dict[str, set[int]] = {}
 _active_execution_lock = threading.Lock()
 
 
@@ -323,15 +325,17 @@ def terminal_execution_scope(thread_id: str | None):
     python_thread_id = threading.current_thread().ident
     with _active_execution_lock:
         if python_thread_id is not None:
-            _active_execution_threads[str(thread_id)] = python_thread_id
+            _active_execution_threads.setdefault(str(thread_id), set()).add(python_thread_id)
             set_interrupt(False, thread_id=python_thread_id)
     try:
         yield
     finally:
         with _active_execution_lock:
             registered = _active_execution_threads.get(str(thread_id))
-            if registered == python_thread_id:
-                del _active_execution_threads[str(thread_id)]
+            if registered is not None:
+                registered.discard(python_thread_id)
+                if not registered:
+                    del _active_execution_threads[str(thread_id)]
             if python_thread_id is not None:
                 set_interrupt(False, thread_id=python_thread_id)
 
@@ -341,14 +345,15 @@ def interrupt_terminal_wait_for_thread_id(thread_id: str | None, *, reason: str 
     if not thread_id:
         return {"interrupted": False, "reason": reason, "error": "thread_id is required"}
     with _active_execution_lock:
-        python_thread_id = _active_execution_threads.get(str(thread_id))
-    if python_thread_id is None:
+        python_thread_ids = set(_active_execution_threads.get(str(thread_id), set()))
+    if not python_thread_ids:
         return {"interrupted": False, "reason": reason}
-    set_interrupt(True, thread_id=python_thread_id)
-    return {"interrupted": True, "reason": reason, "python_thread_id": python_thread_id}
+    for python_thread_id in python_thread_ids:
+        set_interrupt(True, thread_id=python_thread_id)
+    return {"interrupted": True, "reason": reason, "python_thread_ids": sorted(python_thread_ids)}
 ```
 
-- [ ] **Step 3: Integrate execution scope where agent runs are invoked**
+- [x] **Step 3: Integrate execution scope where agent runs are invoked**
 
 Current repository only exposes `agent = build_agent()` in `agent.py`; it does not include the gateway code that receives user messages or invokes the agent per session. Therefore add a small helper that callers can use:
 
@@ -361,7 +366,7 @@ def invoke_with_terminal_lifecycle(agent, input_data, config):
 
 Only add this helper if there is an appropriate project module for runtime/session helpers. If no such module exists, keep the API in `terminal_lifecycle.py` and document external integration.
 
-- [ ] **Step 4: Gateway integration contract**
+- [x] **Step 4: Gateway integration contract**
 
 The gateway or caller must do this:
 
@@ -370,7 +375,7 @@ The gateway or caller must do this:
 3. Then start/resume the new run normally.
 4. `process(action="wait")` will detect Hermes interrupt and return `status="interrupted"` within roughly one second.
 
-- [ ] **Step 5: Run lifecycle tests**
+- [x] **Step 5: Run lifecycle tests**
 
 ```bash
 /home/miku/miniforge3/envs/langchain/bin/python -m pytest tests/test_terminal_lifecycle.py -v
@@ -385,7 +390,7 @@ Expected: tests pass.
 **Files:**
 - Modify: `README.md`
 
-- [ ] **Step 1: Update Hermes Terminal Session Contract**
+- [x] **Step 1: Update Hermes Terminal Session Contract**
 
 Add a “Background process governance” subsection:
 
@@ -398,7 +403,7 @@ Add a “Background process governance” subsection:
 - New user messages should call `interrupt_terminal_wait_for_thread_id(thread_id)` before starting/replacing the active run.
 - Restart recovery remains best-effort for host-backed processes.
 
-- [ ] **Step 2: Document integration responsibilities**
+- [x] **Step 2: Document integration responsibilities**
 
 Document that this repository does not own the external gateway/session-close event. The embedding application is responsible for:
 
@@ -414,25 +419,25 @@ Document that this repository does not own the external gateway/session-close ev
 **Files:**
 - All modified files
 
-- [ ] **Step 1: Run focused tests**
+- [x] **Step 1: Run focused tests**
 
 ```bash
 /home/miku/miniforge3/envs/langchain/bin/python -m pytest tests/test_terminal_tools.py tests/test_terminal_lifecycle.py tests/test_terminal_process_policy.py -v
 ```
 
-- [ ] **Step 2: Run existing shell/session regression tests**
+- [x] **Step 2: Run existing shell/session regression tests**
 
 ```bash
 /home/miku/miniforge3/envs/langchain/bin/python -m pytest tests/test_execute_command_runtime_smoke.py tests/test_shell_task_id.py tests/test_session_context.py tests/test_hermes_shell_adapter_task_id.py -v
 ```
 
-- [ ] **Step 3: Compile touched modules**
+- [x] **Step 3: Compile touched modules**
 
 ```bash
 /home/miku/miniforge3/envs/langchain/bin/python -m py_compile agent_tools/terminal_tools.py agent_core/terminal_lifecycle.py agent_core/terminal_process_policy.py
 ```
 
-- [ ] **Step 4: Check whitespace**
+- [x] **Step 4: Check whitespace**
 
 ```bash
 git diff --check
@@ -462,7 +467,7 @@ Expected: all checks pass.
 
 - The repository does not currently contain the external gateway/session manager. New-message interrupt and automatic session-end cleanup can only be fully activated where user-message and session-close events are received.
 - Hermes interrupt is Python-thread-ident based, while LangGraph session identity is `thread_id`; the bridge must register active runs correctly or interrupts will be no-ops.
-- If multiple active runs for the same LangGraph `thread_id` are allowed concurrently, the simple mapping should be upgraded from `thread_id -> thread_ident` to `thread_id -> set[thread_ident]`. The recommended product policy is one active run per `thread_id`.
+- Multiple active runs for the same LangGraph `thread_id` are tracked as `thread_id -> set[thread_ident]`, and a new-message interrupt signals all active registered execution threads for that LangGraph thread.
 - Long-lived servers can still consume ports, CPU, memory, and disk. Quota reduces process count but does not enforce resource usage; container-level limits or OS-level cgroups are separate concerns.
 - Restart recovery is best effort. Host-backed sessions may recover as detached; sandbox-backed process PIDs may be skipped by Hermes.
 
@@ -474,4 +479,3 @@ Expected: all checks pass.
 4. Add active execution registry and new-message interrupt API.
 5. Document governance and embedding responsibilities.
 6. Run focused and regression verification.
-

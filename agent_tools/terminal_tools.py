@@ -5,6 +5,7 @@ from langchain.tools import ToolRuntime, tool
 from pydantic import BaseModel, Field
 
 from agent_core.session_context import hermes_task_id_from_runtime
+from agent_core.terminal_process_policy import background_quota_available, background_quota_guard
 from agent_core.workspace import WORKDIR
 from agent_tools.hermes_terminal_toolkit.terminal import run_process, run_terminal
 from agent_tools.hermes_terminal_toolkit.process_registry import process_registry
@@ -73,17 +74,40 @@ def _terminal_impl(
     runtime: ToolRuntime | None = None,
 ) -> str:
     task_id = hermes_task_id_from_runtime(runtime)
-    raw = run_terminal(
-        command=command,
-        background=background,
-        timeout=timeout,
-        task_id=task_id,
-        workdir=workdir or str(WORKDIR),
-        pty=pty,
-        notify_on_complete=notify_on_complete,
-        watch_patterns=watch_patterns,
-        force=False,
-    )
+    if background:
+        with background_quota_guard(task_id):
+            available, current, limit = background_quota_available(task_id)
+            if not available:
+                return tool_error(
+                    "terminal",
+                    f"Background process quota exceeded for this session ({current}/{limit}).",
+                    code="background_quota_exceeded",
+                    data={"current": current, "limit": limit},
+                    meta={"backend": "hermes_terminal_toolkit"},
+                )
+            raw = run_terminal(
+                command=command,
+                background=background,
+                timeout=timeout,
+                task_id=task_id,
+                workdir=workdir or str(WORKDIR),
+                pty=pty,
+                notify_on_complete=notify_on_complete,
+                watch_patterns=watch_patterns,
+                force=False,
+            )
+    else:
+        raw = run_terminal(
+            command=command,
+            background=background,
+            timeout=timeout,
+            task_id=task_id,
+            workdir=workdir or str(WORKDIR),
+            pty=pty,
+            notify_on_complete=notify_on_complete,
+            watch_patterns=watch_patterns,
+            force=False,
+        )
     payload = _decode_hermes_payload(raw)
     if payload.get("error"):
         return tool_error(

@@ -86,9 +86,11 @@ class SystemPromptBuilder:
             "For filesystem work, prefer purpose-built tools: use search_files to find files by path/name, "
             "search_files target='content' to search file contents, read_file to inspect files, patch for targeted "
             "edits or structured multi-file changes, and write_file only for full-file writes. "
-            "Use execute_command only for running tests, build commands, package scripts, or commands that cannot be "
-            "handled by those filesystem tools. Do not use execute_command for routine ls/find/grep/rg/cat file "
-            "exploration."
+            "Use terminal(background=False) for running tests, builds, package scripts, or commands that need a "
+            "shell. Use terminal(background=True) for long-running servers, watchers, or jobs, then use "
+            "process(action='poll'), process(action='log'), process(action='wait'), or process(action='kill') "
+            "to manage the returned session_id. Use pty=True only for interactive CLI tools or REPL-like commands. "
+            "Do not use terminal for routine ls/find/grep/rg/cat file exploration when filesystem tools can do it."
         )
 
     def _build_memory_policy(self) -> str:

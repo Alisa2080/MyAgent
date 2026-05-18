@@ -15,7 +15,6 @@ from agent_core.system_prompt import (
 from agent_core.tool_limits import build_tool_call_limit_middleware
 from agent_core.workspace import WORKDIR
 from agent_tools.file_tools import file_info, list_directory, patch, read_file, search_files, write_file
-from agent_tools.shell import execute_command
 from agent_tools.skill_manage import skill_manage
 from agent_tools.skills import skill_view, skills_list
 from agent_tools.terminal_tools import process, terminal
@@ -38,7 +37,6 @@ BASE_TOOLS = [
     *READ_ONLY_TOOLS,
     write_file,
     patch,
-    execute_command,
     terminal,
     process,
     skill_manage,
