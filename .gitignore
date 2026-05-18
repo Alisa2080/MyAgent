@@ -8,3 +8,4 @@
 __pycache__/
 .env
 base/
+agent_tools/hermes_terminal_toolkit/process_registry copy.py
