@@ -12,6 +12,21 @@ New runtime code should import LangChain tools from `agent_tools.public`:
 - `agent_tools.public.memory`: `memory_manage`
 - `agent_tools.public.skills`: `skills_list`, `skill_view`, `skill_manage`
 
+## Preferred Imports
+
+```python
+from agent_tools.public.files import read_file, write_file
+from agent_tools.public.terminal import terminal, process
+from agent_tools.public.web import web_fetch, web_search
+```
+
+Compatibility imports remain supported for older code:
+
+```python
+from agent_tools.file_tools import read_file
+from agent_tools.terminal_tools import terminal
+```
+
 ## Shared Helpers
 
 First-party helpers live under `agent_tools.shared`:
