@@ -68,9 +68,14 @@ def cleanup_task_resources_for_task_id(task_id: str, *, reason: str = "turn_fini
     """
     try:
         persistent = is_persistent_env(task_id)
-    except Exception:
+    except Exception as exc:
         logger.exception("Failed to determine whether Hermes environment is persistent for task %s.", task_id)
-        persistent = False
+        return {
+            "task_id": task_id,
+            "cleaned": False,
+            "cleanup_reason": reason,
+            "error": str(exc),
+        }
 
     if persistent:
         return {

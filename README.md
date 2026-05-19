@@ -55,7 +55,7 @@ Security and approval:
 
 Lifecycle policy:
 
-- `invoke_agent_with_terminal_notifications(...)` wraps each initial and notification-resume turn in `terminal_execution_scope(thread_id)` and runs per-turn terminal cleanup after each completed turn.
+- `invoke_agent_with_terminal_notifications(...)` wraps each initial and notification-resume turn in `terminal_execution_scope(thread_id)` and runs per-turn terminal cleanup after each attempted turn, including error paths.
 - Per-turn terminal cleanup cleans non-persistent Hermes terminal environments for the runtime-derived task id.
 - Persistent Hermes terminal environments are not cleaned at normal turn boundaries; they remain available until the persistent environment idle reaper cleans them.
 - Set `HERMES_TERMINAL_PER_TURN_CLEANUP=false` to disable runner-managed per-turn terminal cleanup.

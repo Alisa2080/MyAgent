@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 from typing import Any
 
@@ -15,6 +16,7 @@ from agent_core.terminal_notifications import (
 DEFAULT_MAX_AUTO_RESUMES = 3
 MAX_AUTO_RESUMES_ENV = "HERMES_TERMINAL_MAX_AUTO_RESUMES"
 PER_TURN_CLEANUP_ENV = "HERMES_TERMINAL_PER_TURN_CLEANUP"
+logger = logging.getLogger(__name__)
 
 
 def _thread_id_from_config(config: dict[str, Any] | None) -> str | None:
@@ -58,7 +60,10 @@ def _invoke_agent_turn(
             return agent.invoke(input_data, config)
     finally:
         if thread_id and per_turn_cleanup_enabled():
-            cleanup_task_resources_for_thread_id(thread_id, reason=cleanup_reason)
+            try:
+                cleanup_task_resources_for_thread_id(thread_id, reason=cleanup_reason)
+            except Exception:
+                logger.exception("Failed to run per-turn terminal cleanup for thread %s.", thread_id)
 
 
 def invoke_agent_with_terminal_notifications(

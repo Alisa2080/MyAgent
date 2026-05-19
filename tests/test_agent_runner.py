@@ -406,6 +406,50 @@ def test_runner_cleans_when_agent_invoke_raises(monkeypatch):
     assert cleanup_calls == [("thread-1", "turn_finished")]
 
 
+def test_runner_preserves_agent_error_when_cleanup_raises(monkeypatch):
+    import agent_core.agent_runner as runner
+
+    class FakeAgent:
+        def invoke(self, input_data, config=None):
+            raise RuntimeError("model failed")
+
+    def fail_cleanup(thread_id, reason="turn_finished"):
+        raise RuntimeError("cleanup failed")
+
+    monkeypatch.delenv(runner.PER_TURN_CLEANUP_ENV, raising=False)
+    monkeypatch.setattr(runner, "cleanup_task_resources_for_thread_id", fail_cleanup)
+
+    with pytest.raises(RuntimeError, match="model failed"):
+        runner.invoke_agent_with_terminal_notifications(
+            FakeAgent(),
+            {"messages": [{"role": "user", "content": "start"}]},
+            {"configurable": {"thread_id": "thread-1"}},
+        )
+
+
+def test_runner_returns_result_when_cleanup_raises(monkeypatch):
+    import agent_core.agent_runner as runner
+
+    class FakeAgent:
+        def invoke(self, input_data, config=None):
+            return {"messages": ["initial"]}
+
+    def fail_cleanup(thread_id, reason="turn_finished"):
+        raise RuntimeError("cleanup failed")
+
+    monkeypatch.delenv(runner.PER_TURN_CLEANUP_ENV, raising=False)
+    monkeypatch.setattr(runner, "drain_terminal_notifications_for_thread_id", lambda thread_id: [])
+    monkeypatch.setattr(runner, "cleanup_task_resources_for_thread_id", fail_cleanup)
+
+    result = runner.invoke_agent_with_terminal_notifications(
+        FakeAgent(),
+        {"messages": [{"role": "user", "content": "start"}]},
+        {"configurable": {"thread_id": "thread-1"}},
+    )
+
+    assert result == {"messages": ["initial"]}
+
+
 def test_runner_per_turn_cleanup_can_be_disabled(monkeypatch):
     import agent_core.agent_runner as runner
 

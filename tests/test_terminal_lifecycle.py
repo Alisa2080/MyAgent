@@ -204,6 +204,26 @@ def test_cleanup_task_resources_for_task_id_reports_cleanup_error(monkeypatch):
     assert "cannot clean task-1" in result["error"]
 
 
+def test_cleanup_task_resources_for_task_id_skips_when_persistence_check_fails(monkeypatch):
+    import agent_core.terminal_lifecycle as lifecycle
+
+    cleaned = []
+
+    def fail_persistence_check(task_id):
+        raise RuntimeError(f"cannot inspect {task_id}")
+
+    monkeypatch.setattr(lifecycle, "is_persistent_env", fail_persistence_check)
+    monkeypatch.setattr(lifecycle, "cleanup_vm", lambda task_id: cleaned.append(task_id))
+
+    result = lifecycle.cleanup_task_resources_for_task_id("task-1", reason="turn_finished")
+
+    assert result["task_id"] == "task-1"
+    assert result["cleaned"] is False
+    assert result["cleanup_reason"] == "turn_finished"
+    assert "cannot inspect task-1" in result["error"]
+    assert cleaned == []
+
+
 def test_cleanup_task_resources_for_thread_id_uses_hashed_task_id(monkeypatch):
     import agent_core.terminal_lifecycle as lifecycle
 
