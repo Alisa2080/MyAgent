@@ -109,6 +109,24 @@ def test_read_file_toolnode_injects_runtime_thread(monkeypatch):
     assert calls[0]["task_id"] == hermes_task_id_from_thread_id("toolnode-read-thread")
 
 
+def test_file_tool_impl_falls_back_to_default_task_id_without_runtime(monkeypatch):
+    import agent_tools.public.files as file_tools
+
+    calls = []
+
+    def fake_read_file_tool(**kwargs):
+        calls.append(kwargs)
+        return json.dumps({"content": "1|fallback\n", "total_lines": 1})
+
+    monkeypatch.setattr(file_tools, "read_file_tool", fake_read_file_tool)
+
+    raw = file_tools._read_file_impl(path="README.md", offset=1, limit=5, runtime=None)
+    payload = json.loads(raw)
+
+    assert payload["ok"] is True
+    assert calls[0]["task_id"] == "default"
+
+
 def test_write_file_injects_runtime_thread_as_task_id(monkeypatch):
     import agent_tools.public.files as file_tools
     from agent_core.session_context import hermes_task_id_from_thread_id
