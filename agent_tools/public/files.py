@@ -29,13 +29,11 @@ class ReadFileInput(BaseModel):
     path: str = Field(description="Path to the text file to read.")
     offset: int = Field(default=1, ge=1, description="1-indexed start line.")
     limit: int = Field(default=500, ge=1, le=2000, description="Maximum number of lines to read.")
-    task_id: str = Field(default="default", description="Session/task id for read/write tracking.")
 
 
 class WriteFileInput(BaseModel):
     path: str = Field(description="Path to write inside the workspace.")
     content: str = Field(description="Complete file content. This overwrites the entire file.")
-    task_id: str = Field(default="default", description="Session/task id for read/write tracking.")
 
 
 class PatchInput(BaseModel):
@@ -48,7 +46,6 @@ class PatchInput(BaseModel):
     new_string: str | None = Field(default=None, description="Replacement text in replace mode.")
     replace_all: bool = Field(default=False, description="Replace all matches instead of requiring a unique match.")
     patch: str | None = Field(default=None, description="V4A patch content for patch mode.")
-    task_id: str = Field(default="default", description="Session/task id for read/write tracking.")
 
 
 class SearchFilesInput(BaseModel):
@@ -63,7 +60,6 @@ class SearchFilesInput(BaseModel):
         description="Output format for content search.",
     )
     context: int = Field(default=0, ge=0, description="Context lines before and after each content match.")
-    task_id: str = Field(default="default", description="Session/task id for read/write tracking.")
 
 
 class FileInfoInput(BaseModel):
