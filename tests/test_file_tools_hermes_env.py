@@ -334,3 +334,39 @@ def test_patch_tool_move_file_tracks_source_and_destination(monkeypatch):
         ("task-move", "/workspace/dest.txt"),
     ]
     assert fake_ops.patches == [patch_content]
+
+
+def test_write_file_tool_smokes_real_local_hermes_env(tmp_path, monkeypatch):
+    from agent_tools.hermes_terminal_toolkit import terminal_tool
+    from contextlib import suppress
+
+    task_id = "task-real-file"
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("TERMINAL_ENV", "local")
+    monkeypatch.setenv("TERMINAL_CWD", str(tmp_path))
+    monkeypatch.setenv("AGENT_WRITE_SAFE_ROOT", str(tmp_path))
+
+    file_tools.clear_file_ops_cache(task_id)
+    terminal_tool.cleanup_vm(task_id)
+
+    try:
+        raw = file_tools.write_file_tool("notes.txt", "hello world", task_id=task_id)
+        payload = json.loads(raw)
+        target = tmp_path / "notes.txt"
+
+        assert "error" not in payload
+        assert payload["bytes_written"] == len("hello world")
+        assert target.exists()
+        assert target.read_text() == "hello world"
+
+        active_env = terminal_tool.get_active_env(task_id)
+        assert active_env is not None
+        assert file_tools._get_file_ops(task_id).env is active_env
+
+        read_payload = json.loads(file_tools.read_file_tool("notes.txt", task_id=task_id))
+        assert "error" not in read_payload
+        assert read_payload["content"].split("|", 1)[1] == "hello world"
+    finally:
+        with suppress(Exception):
+            terminal_tool.cleanup_vm(task_id)
+        file_tools.clear_file_ops_cache(task_id)
