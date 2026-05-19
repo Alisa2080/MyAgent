@@ -22,6 +22,7 @@ _install_lock = threading.Lock()
 _installed = False
 _cleanup_lock = threading.Lock()
 _cleanup_done = False
+_shutdown_requested = False
 _previous_signal_handlers: dict[int, Any] = {}
 
 
@@ -35,14 +36,21 @@ def signal_grace_seconds() -> float:
         return DEFAULT_SIGTERM_GRACE_SECONDS
 
 
+def is_process_shutdown_requested() -> bool:
+    """Return whether process shutdown has been requested by a signal handler."""
+    return _shutdown_requested
+
+
 def _signal_handler(signum: int, frame: FrameType | None) -> None:
+    global _shutdown_requested
+    _shutdown_requested = True
     try:
         interrupt_all_terminal_waits(reason=f"received_signal_{signum}")
         grace = signal_grace_seconds()
         if grace > 0:
             time.sleep(grace)
     except Exception:
-        logger.exception("Failed while handling process signal %s.", signum)
+        pass
     _call_previous_signal_handler(signum, frame)
     raise KeyboardInterrupt()
 
@@ -57,8 +65,7 @@ def _call_previous_signal_handler(signum: int, frame: FrameType | None) -> None:
     try:
         previous_handler(signum, frame)
     except Exception:
-        logger.exception("Previous signal handler failed for signal %s.", signum)
-        raise
+        pass
 
 
 def run_process_shutdown_cleanup(*, reason: str = "process_exit") -> dict[str, Any]:

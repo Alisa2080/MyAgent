@@ -475,3 +475,60 @@ def test_runner_per_turn_cleanup_can_be_disabled(monkeypatch):
 
     assert result == {"messages": ["initial"]}
     assert cleanup_calls == []
+
+
+def test_runner_does_not_drain_notifications_after_process_shutdown(monkeypatch):
+    import agent_core.agent_runner as runner
+
+    calls = []
+
+    class FakeAgent:
+        def invoke(self, input_data, config=None):
+            calls.append((input_data, config))
+            return {"messages": ["initial"]}
+
+    def fail_drain(thread_id):
+        raise AssertionError("should not drain notifications after shutdown")
+
+    monkeypatch.setattr(runner, "is_process_shutdown_requested", lambda: True)
+    monkeypatch.setattr(runner, "drain_terminal_notifications_for_thread_id", fail_drain)
+
+    result = runner.invoke_agent_with_terminal_notifications(
+        FakeAgent(),
+        {"messages": [{"role": "user", "content": "start"}]},
+        {"configurable": {"thread_id": "thread-1"}},
+    )
+
+    assert result == {"messages": ["initial"]}
+    assert len(calls) == 1
+
+
+def test_runner_stops_auto_resume_loop_after_process_shutdown(monkeypatch):
+    import agent_core.agent_runner as runner
+
+    calls = []
+    drain_calls = []
+
+    class FakeAgent:
+        def invoke(self, input_data, config=None):
+            calls.append(input_data)
+            return {"messages": [f"turn-{len(calls)}"]}
+
+    def fake_drain(thread_id):
+        drain_calls.append(thread_id)
+        return [{"type": "completion", "session_id": f"proc_{len(drain_calls)}", "command": "job"}]
+
+    monkeypatch.setattr(runner, "drain_terminal_notifications_for_thread_id", fake_drain)
+    monkeypatch.setattr(runner, "format_terminal_notification_message", lambda events: "formatted notification")
+    monkeypatch.setattr(runner, "is_process_shutdown_requested", lambda: len(calls) >= 2)
+
+    result = runner.invoke_agent_with_terminal_notifications(
+        FakeAgent(),
+        {"messages": [{"role": "user", "content": "start"}]},
+        {"configurable": {"thread_id": "thread-1"}},
+        max_auto_resumes=3,
+    )
+
+    assert result == {"messages": ["turn-2"]}
+    assert len(calls) == 2
+    assert len(drain_calls) == 1

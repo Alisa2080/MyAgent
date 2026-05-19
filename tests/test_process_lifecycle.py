@@ -9,6 +9,7 @@ def reset_process_lifecycle_state(monkeypatch):
 
     monkeypatch.setattr(lifecycle, "_installed", False)
     monkeypatch.setattr(lifecycle, "_cleanup_done", False)
+    monkeypatch.setattr(lifecycle, "_shutdown_requested", False)
     monkeypatch.setattr(lifecycle, "_previous_signal_handlers", {})
 
 
@@ -75,6 +76,37 @@ def test_signal_handler_skips_sleep_when_grace_is_zero(monkeypatch):
     assert calls == [("interrupt", "received_signal_1")]
 
 
+def test_signal_handler_marks_process_shutdown_requested(monkeypatch):
+    import agent_core.process_lifecycle as lifecycle
+
+    monkeypatch.setattr(lifecycle, "interrupt_all_terminal_waits", lambda reason="process_signal": {})
+    monkeypatch.setattr(lifecycle, "signal_grace_seconds", lambda: 0.0)
+
+    assert lifecycle.is_process_shutdown_requested() is False
+    with pytest.raises(KeyboardInterrupt):
+        lifecycle._signal_handler(15, None)
+
+    assert lifecycle.is_process_shutdown_requested() is True
+
+
+def test_signal_handler_swallows_interrupt_errors_without_logging(monkeypatch):
+    import agent_core.process_lifecycle as lifecycle
+
+    def fail_interrupt(reason="process_signal"):
+        raise RuntimeError("interrupt failed")
+
+    def fail_logging(*args, **kwargs):
+        raise AssertionError("signal handler should not log")
+
+    monkeypatch.setattr(lifecycle, "interrupt_all_terminal_waits", fail_interrupt)
+    monkeypatch.setattr(lifecycle.logger, "exception", fail_logging)
+
+    with pytest.raises(KeyboardInterrupt):
+        lifecycle._signal_handler(15, None)
+
+    assert lifecycle.is_process_shutdown_requested() is True
+
+
 def test_install_unregisters_direct_cleanup_and_registers_lifecycle_cleanup(monkeypatch):
     import agent_core.process_lifecycle as lifecycle
 
@@ -127,6 +159,33 @@ def test_signal_handler_invokes_previous_callable_after_interrupt_and_grace(monk
         ("sleep", 0.25),
         ("previous", 15, None),
     ]
+
+
+def test_previous_signal_handler_exception_does_not_block_keyboard_interrupt(monkeypatch):
+    import agent_core.process_lifecycle as lifecycle
+
+    calls = []
+
+    def previous_handler(signum, frame):
+        calls.append(("previous", signum, frame))
+        raise RuntimeError("previous failed")
+
+    def fail_logging(*args, **kwargs):
+        raise AssertionError("signal handler should not log previous handler failures")
+
+    monkeypatch.setattr(lifecycle, "_previous_signal_handlers", {15: previous_handler})
+    monkeypatch.setattr(
+        lifecycle,
+        "interrupt_all_terminal_waits",
+        lambda reason="process_signal": calls.append(("interrupt", reason)) or {},
+    )
+    monkeypatch.setattr(lifecycle, "signal_grace_seconds", lambda: 0.0)
+    monkeypatch.setattr(lifecycle.logger, "exception", fail_logging)
+
+    with pytest.raises(KeyboardInterrupt):
+        lifecycle._signal_handler(15, None)
+
+    assert calls == [("interrupt", "received_signal_15"), ("previous", 15, None)]
 
 
 def test_run_process_shutdown_cleanup_kills_processes_before_environments(monkeypatch):

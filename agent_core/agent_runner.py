@@ -8,6 +8,7 @@ from agent_core.terminal_lifecycle import (
     cleanup_task_resources_for_thread_id,
     terminal_execution_scope,
 )
+from agent_core.process_lifecycle import is_process_shutdown_requested
 from agent_core.terminal_notifications import (
     drain_terminal_notifications_for_thread_id,
     format_terminal_notification_message,
@@ -93,16 +94,22 @@ def invoke_agent_with_terminal_notifications(
         cleanup_reason="turn_finished",
     )
 
-    if not thread_id:
+    if not thread_id or is_process_shutdown_requested():
         return result
 
     for _ in range(resume_limit):
+        if is_process_shutdown_requested():
+            break
+
         events = drain_terminal_notifications_for_thread_id(thread_id)
         if not events:
             break
 
         message = format_terminal_notification_message(events)
         if not message:
+            break
+
+        if is_process_shutdown_requested():
             break
 
         resume_input = {"messages": [{"role": "user", "content": message}]}
