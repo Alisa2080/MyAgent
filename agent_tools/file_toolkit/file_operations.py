@@ -312,7 +312,7 @@ class ShellFileOperations(FileOperations):
         if not self._is_workspace_backend():
             return []
 
-        roots: List[str] = ["/workspace"]
+        roots: List[str] = [self._effective_cwd(), "/workspace"]
         configured_cwd = (
             getattr(self.env, "_hermes_configured_cwd", None)
             or getattr(getattr(self.env, "config", None), "cwd", None)
