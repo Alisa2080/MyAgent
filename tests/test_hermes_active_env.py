@@ -94,6 +94,70 @@ def test_get_or_create_active_env_uses_timeout_for_new_environment(monkeypatch):
     assert created[0]["timeout"] == 42
 
 
+def test_get_or_create_active_env_preserves_explicit_zero_timeout(monkeypatch):
+    from agent_tools.hermes_terminal_toolkit import terminal_tool
+
+    _reset_terminal_env_state(monkeypatch, terminal_tool)
+    created = []
+
+    def fake_create_environment(**kwargs):
+        created.append(kwargs)
+        return FakeEnv(cwd=kwargs["cwd"])
+
+    monkeypatch.setattr(terminal_tool, "_get_env_config", lambda: _fake_config())
+    monkeypatch.setattr(terminal_tool, "_create_environment", fake_create_environment)
+
+    env = terminal_tool.get_or_create_active_env("task-timeout-zero", timeout=0)
+
+    assert isinstance(env, FakeEnv)
+    assert created[0]["timeout"] == 0
+
+
+def test_get_or_create_active_env_cleans_redundant_env_outside_env_lock(monkeypatch):
+    from agent_tools.hermes_terminal_toolkit import terminal_tool
+
+    class TrackingLock:
+        def __init__(self):
+            self.is_held = False
+
+        def __enter__(self):
+            assert not self.is_held
+            self.is_held = True
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            self.is_held = False
+
+    class LockCheckingEnv(FakeEnv):
+        def __init__(self, lock):
+            super().__init__()
+            self.lock = lock
+            self.cleanup_saw_lock_held = None
+
+        def cleanup(self):
+            self.cleanup_saw_lock_held = self.lock.is_held
+            super().cleanup()
+
+    _reset_terminal_env_state(monkeypatch, terminal_tool)
+    tracking_lock = TrackingLock()
+    existing_env = FakeEnv()
+    redundant_env = LockCheckingEnv(tracking_lock)
+
+    def fake_create_environment(**kwargs):
+        terminal_tool._active_environments["race-task"] = existing_env
+        return redundant_env
+
+    monkeypatch.setattr(terminal_tool, "_env_lock", tracking_lock)
+    monkeypatch.setattr(terminal_tool, "_get_env_config", lambda: _fake_config())
+    monkeypatch.setattr(terminal_tool, "_create_environment", fake_create_environment)
+
+    env = terminal_tool.get_or_create_active_env("race-task")
+
+    assert env is existing_env
+    assert redundant_env.cleaned is True
+    assert redundant_env.cleanup_saw_lock_held is False
+
+
 def test_get_or_create_active_env_builds_docker_config(monkeypatch):
     from agent_tools.hermes_terminal_toolkit import terminal_tool
 

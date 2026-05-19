@@ -411,6 +411,119 @@ def _cleanup_thread_worker():
             time.sleep(1)
 
 
+def _image_for_env_type(config: dict, env_type: str) -> str:
+    if env_type == "docker":
+        return config["docker_image"]
+    if env_type == "singularity":
+        return config["singularity_image"]
+    return ""
+
+
+def _ssh_config_from_terminal_config(config: dict) -> dict | None:
+    if config["env_type"] != "ssh":
+        return None
+    return {
+        "host": config.get("ssh_host", ""),
+        "user": config.get("ssh_user", ""),
+        "port": config.get("ssh_port", 22),
+        "key": config.get("ssh_key", ""),
+    }
+
+
+def _container_config_from_terminal_config(config: dict) -> dict | None:
+    if config["env_type"] not in ("docker", "singularity"):
+        return None
+    return {
+        "container_cpu": config.get("container_cpu", 1),
+        "container_memory": config.get("container_memory", 5120),
+        "container_disk": config.get("container_disk", 51200),
+        "container_persistent": config.get("container_persistent", True),
+        "docker_volumes": config.get("docker_volumes", []),
+        "docker_mount_cwd_to_workspace": config.get("docker_mount_cwd_to_workspace", False),
+        "docker_forward_env": config.get("docker_forward_env", []),
+        "docker_env": config.get("docker_env", {}),
+        "docker_run_as_host_user": config.get("docker_run_as_host_user", False),
+    }
+
+
+def get_or_create_active_env(
+    task_id: Optional[str],
+    workdir: Optional[str] = None,
+    timeout: Optional[int] = None,
+):
+    """Return the active Hermes environment for *task_id*, creating it if needed.
+
+    This is the single owner of environment config resolution, environment
+    creation locks, active-env reuse, and last-activity tracking. ``workdir``
+    is accepted for call-site symmetry; environment creation intentionally uses
+    the configured backend cwd so existing terminal behavior does not change.
+    Callers can pass per-command cwd to ``env.execute(...)`` after acquiring
+    the env.
+    """
+    config = _get_env_config()
+    env_type = config["env_type"]
+    effective_task_id = _resolve_container_task_id(task_id)
+    effective_timeout = timeout if timeout is not None else config["timeout"]
+    cwd = config["cwd"]
+
+    _start_cleanup_thread()
+
+    with _env_lock:
+        env = _active_environments.get(effective_task_id)
+        if env is not None:
+            _last_activity[effective_task_id] = time.time()
+            return env
+
+    with _creation_locks_lock:
+        if effective_task_id not in _creation_locks:
+            _creation_locks[effective_task_id] = threading.Lock()
+        task_lock = _creation_locks[effective_task_id]
+
+    with task_lock:
+        with _env_lock:
+            env = _active_environments.get(effective_task_id)
+            if env is not None:
+                _last_activity[effective_task_id] = time.time()
+                return env
+
+        if env_type == "singularity":
+            _check_disk_usage_warning()
+
+        new_env = _create_environment(
+            env_type=env_type,
+            image=_image_for_env_type(config, env_type),
+            cwd=cwd,
+            timeout=effective_timeout,
+            ssh_config=_ssh_config_from_terminal_config(config),
+            container_config=_container_config_from_terminal_config(config),
+            task_id=effective_task_id,
+            host_cwd=config.get("host_cwd"),
+        )
+
+        env_to_cleanup = None
+        env_to_return = None
+        with _env_lock:
+            existing = _active_environments.get(effective_task_id)
+            if existing is not None:
+                _last_activity[effective_task_id] = time.time()
+                env_to_cleanup = new_env
+                env_to_return = existing
+            else:
+                _active_environments[effective_task_id] = new_env
+                _last_activity[effective_task_id] = time.time()
+                return new_env
+
+        if env_to_cleanup is not None:
+            try:
+                if hasattr(env_to_cleanup, "cleanup"):
+                    env_to_cleanup.cleanup()
+                elif hasattr(env_to_cleanup, "stop"):
+                    env_to_cleanup.stop()
+            except Exception:
+                logger.debug("Failed to clean redundant environment for task %s", effective_task_id, exc_info=True)
+        return env_to_return
+
+
 def _start_cleanup_thread():
     global _cleanup_thread, _cleanup_running
     with _env_lock:
