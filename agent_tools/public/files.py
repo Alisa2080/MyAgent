@@ -3,9 +3,10 @@ import os
 from pathlib import Path
 from typing import Literal
 
-from langchain.tools import tool
+from langchain.tools import ToolRuntime, tool
 from pydantic import BaseModel, Field
 
+from agent_core.session_context import hermes_task_id_from_runtime
 from agent_core.workspace import WORKDIR, safe_path
 from agent_tools.file_toolkit.file_tools import (
     patch_tool,
@@ -119,6 +120,10 @@ def _wrap_file_tool_result(
     return tool_ok(tool_name, data=payload or None, message=message, meta=meta)
 
 
+def _task_id_from_runtime(runtime: ToolRuntime | None) -> str:
+    return hermes_task_id_from_runtime(runtime)
+
+
 @tool("list_directory", args_schema=ListDirectoryInput)
 def list_directory(path: str = ".", recursive: bool = False, include_hidden: bool = False, limit: int = 200) -> str:
     """List files and directories inside the workspace."""
@@ -171,16 +176,14 @@ def list_directory(path: str = ".", recursive: bool = False, include_hidden: boo
         return tool_error("list_directory", str(exc))
 
 
-@tool("read_file", args_schema=ReadFileInput)
-def read_file(path: str, offset: int = 1, limit: int = 500, task_id: str = "default") -> str:
-    """Read a text file with line numbers and pagination."""
+def _read_file_impl(path: str, offset: int = 1, limit: int = 500, runtime: ToolRuntime | None = None) -> str:
     path_error = ensure_workspace_path(path)
     if path_error:
         return tool_error("read_file", path_error, code="invalid_path")
     read_error = ensure_read_allowed(path)
     if read_error:
         return tool_error("read_file", read_error, code="access_denied")
-    raw = read_file_tool(path=path, offset=offset, limit=limit, task_id=task_id)
+    raw = read_file_tool(path=path, offset=offset, limit=limit, task_id=_task_id_from_runtime(runtime))
     return _wrap_file_tool_result(
         "read_file",
         raw,
@@ -189,27 +192,35 @@ def read_file(path: str, offset: int = 1, limit: int = 500, task_id: str = "defa
     )
 
 
-@tool("write_file", args_schema=WriteFileInput)
-def write_file(path: str, content: str, task_id: str = "default") -> str:
-    """Write complete content to a workspace file, replacing existing content."""
+@tool("read_file", args_schema=ReadFileInput)
+def read_file(path: str, runtime: ToolRuntime, offset: int = 1, limit: int = 500) -> str:
+    """Read a text file with line numbers and pagination."""
+    return _read_file_impl(path=path, offset=offset, limit=limit, runtime=runtime)
+
+
+def _write_file_impl(path: str, content: str, runtime: ToolRuntime | None = None) -> str:
     path_error = ensure_workspace_path(path)
     if path_error:
         return tool_error("write_file", path_error, code="invalid_path")
-    raw = write_file_tool(path=path, content=content, task_id=task_id)
+    raw = write_file_tool(path=path, content=content, task_id=_task_id_from_runtime(runtime))
     return _wrap_file_tool_result("write_file", raw, success_message="File written.")
 
 
-@tool("patch", args_schema=PatchInput)
-def patch(
+@tool("write_file", args_schema=WriteFileInput)
+def write_file(path: str, content: str, runtime: ToolRuntime) -> str:
+    """Write complete content to a workspace file, replacing existing content."""
+    return _write_file_impl(path=path, content=content, runtime=runtime)
+
+
+def _patch_impl(
     mode: str = "replace",
     path: str | None = None,
     old_string: str | None = None,
     new_string: str | None = None,
     replace_all: bool = False,
     patch: str | None = None,
-    task_id: str = "default",
+    runtime: ToolRuntime | None = None,
 ) -> str:
-    """Apply targeted file edits. Prefer replace mode for small edits."""
     if mode == "replace":
         if not path:
             return tool_error("patch", "path is required for replace mode.", code="invalid_input")
@@ -227,13 +238,34 @@ def patch(
         new_string=new_string,
         replace_all=replace_all,
         patch=patch,
-        task_id=task_id,
+        task_id=_task_id_from_runtime(runtime),
     )
     return _wrap_file_tool_result("patch", raw, success_message="Patch applied.")
 
 
-@tool("search_files", args_schema=SearchFilesInput)
-def search_files(
+@tool("patch", args_schema=PatchInput)
+def patch(
+    mode: str = "replace",
+    path: str | None = None,
+    old_string: str | None = None,
+    new_string: str | None = None,
+    replace_all: bool = False,
+    patch: str | None = None,
+    runtime: ToolRuntime | None = None,
+) -> str:
+    """Apply targeted file edits. Prefer replace mode for small edits."""
+    return _patch_impl(
+        mode=mode,
+        path=path,
+        old_string=old_string,
+        new_string=new_string,
+        replace_all=replace_all,
+        patch=patch,
+        runtime=runtime,
+    )
+
+
+def _search_files_impl(
     pattern: str,
     target: str = "content",
     path: str = ".",
@@ -242,9 +274,8 @@ def search_files(
     offset: int = 0,
     output_mode: str = "content",
     context: int = 0,
-    task_id: str = "default",
+    runtime: ToolRuntime | None = None,
 ) -> str:
-    """Search workspace file contents or find files by name."""
     path_error = ensure_workspace_path(path)
     if path_error:
         return tool_error("search_files", path_error, code="invalid_path")
@@ -257,13 +288,39 @@ def search_files(
         offset=offset,
         output_mode=output_mode,
         context=context,
-        task_id=task_id,
+        task_id=_task_id_from_runtime(runtime),
     )
     return _wrap_file_tool_result(
         "search_files",
         raw,
         success_message="Search completed.",
         meta_keys=("truncated",),
+    )
+
+
+@tool("search_files", args_schema=SearchFilesInput)
+def search_files(
+    pattern: str,
+    runtime: ToolRuntime,
+    target: str = "content",
+    path: str = ".",
+    file_glob: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+    output_mode: str = "content",
+    context: int = 0,
+) -> str:
+    """Search workspace file contents or find files by name."""
+    return _search_files_impl(
+        pattern=pattern,
+        target=target,
+        path=path,
+        file_glob=file_glob,
+        limit=limit,
+        offset=offset,
+        output_mode=output_mode,
+        context=context,
+        runtime=runtime,
     )
 
 
