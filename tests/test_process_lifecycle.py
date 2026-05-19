@@ -125,3 +125,58 @@ def test_signal_handler_invokes_previous_callable_after_interrupt_and_grace(monk
         ("sleep", 0.25),
         ("previous", 15, None),
     ]
+
+
+def test_run_process_shutdown_cleanup_kills_processes_before_environments(monkeypatch):
+    import agent_core.process_lifecycle as lifecycle
+
+    calls = []
+    monkeypatch.setattr(lifecycle, "_cleanup_done", False)
+    monkeypatch.setattr(lifecycle.process_registry, "kill_all", lambda: calls.append("kill_all") or 2)
+    monkeypatch.setattr(lifecycle, "cleanup_all_environments", lambda: calls.append("cleanup_envs") or 3)
+
+    result = lifecycle.run_process_shutdown_cleanup(reason="test")
+
+    assert result == {
+        "cleaned": True,
+        "reason": "test",
+        "killed_processes": 2,
+        "cleaned_environments": 3,
+        "errors": [],
+    }
+    assert calls == ["kill_all", "cleanup_envs"]
+
+
+def test_run_process_shutdown_cleanup_runs_once(monkeypatch):
+    import agent_core.process_lifecycle as lifecycle
+
+    calls = []
+    monkeypatch.setattr(lifecycle, "_cleanup_done", False)
+    monkeypatch.setattr(lifecycle.process_registry, "kill_all", lambda: calls.append("kill_all") or 1)
+    monkeypatch.setattr(lifecycle, "cleanup_all_environments", lambda: calls.append("cleanup_envs") or 1)
+
+    first = lifecycle.run_process_shutdown_cleanup(reason="first")
+    second = lifecycle.run_process_shutdown_cleanup(reason="second")
+
+    assert first["cleaned"] is True
+    assert second == {"cleaned": False, "reason": "second", "already_done": True}
+    assert calls == ["kill_all", "cleanup_envs"]
+
+
+def test_run_process_shutdown_cleanup_reports_errors_and_continues(monkeypatch):
+    import agent_core.process_lifecycle as lifecycle
+
+    monkeypatch.setattr(lifecycle, "_cleanup_done", False)
+
+    def fail_kill_all():
+        raise RuntimeError("kill failed")
+
+    monkeypatch.setattr(lifecycle.process_registry, "kill_all", fail_kill_all)
+    monkeypatch.setattr(lifecycle, "cleanup_all_environments", lambda: 4)
+
+    result = lifecycle.run_process_shutdown_cleanup(reason="test")
+
+    assert result["cleaned"] is True
+    assert result["killed_processes"] == 0
+    assert result["cleaned_environments"] == 4
+    assert result["errors"] == ["process_registry.kill_all: kill failed"]
