@@ -1,5 +1,6 @@
 import json
 import os
+import re
 from pathlib import Path
 from typing import Literal
 
@@ -9,13 +10,15 @@ from pydantic import BaseModel, Field
 from agent_core.session_context import hermes_task_id_from_runtime
 from agent_core.workspace import WORKDIR, safe_path
 from agent_tools.file_toolkit.file_tools import (
+    _resolve_path_for_task,
     patch_tool,
     read_file_tool,
     search_tool,
     write_file_tool,
 )
+from agent_tools.file_toolkit.patch_parser import parse_v4a_patch
 from agent_tools.shared.common import DEFAULT_EXCLUDE_DIRS, path_info, relative_path
-from agent_tools.shared.file_policy import ensure_patch_paths, ensure_read_allowed, ensure_workspace_path
+from agent_tools.shared.file_policy import ensure_workspace_path
 from agent_tools.shared.tool_output import tool_error, tool_ok
 
 
@@ -124,6 +127,67 @@ def _task_id_from_runtime(runtime: ToolRuntime | None) -> str:
     return hermes_task_id_from_runtime(runtime)
 
 
+def _ensure_workspace_path_for_task(path: str | None, task_id: str) -> str | None:
+    try:
+        resolved = Path(_resolve_path_for_task(path or ".", task_id))
+    except Exception as exc:
+        return str(exc)
+    if not resolved.is_relative_to(WORKDIR):
+        return f"Path escapes workspace: {path}"
+    return None
+
+
+def _ensure_read_allowed_for_task(path: str | None, task_id: str) -> str | None:
+    try:
+        resolved = Path(_resolve_path_for_task(path or ".", task_id))
+    except Exception as exc:
+        return str(exc)
+    if not resolved.is_relative_to(WORKDIR):
+        return f"Path escapes workspace: {path}"
+
+    blocked_dirs = [
+        WORKDIR / "skills" / ".hub",
+        WORKDIR / "skills" / ".hub" / "index-cache",
+    ]
+    for blocked_dir in blocked_dirs:
+        try:
+            resolved.relative_to(blocked_dir.resolve())
+        except ValueError:
+            continue
+        return (
+            f"Access denied: {path} is an internal skill cache file "
+            "and cannot be read directly to prevent prompt injection. "
+            "Use the skills_list or skill_view tools instead."
+        )
+    return None
+
+
+def _ensure_patch_paths_for_task(patch_content: str | None, task_id: str) -> str | None:
+    if not patch_content:
+        return None
+
+    operations, parse_error = parse_v4a_patch(patch_content)
+    if not parse_error:
+        for operation in operations:
+            path_error = _ensure_workspace_path_for_task(operation.file_path, task_id)
+            if path_error:
+                return path_error
+            if operation.new_path:
+                path_error = _ensure_workspace_path_for_task(operation.new_path, task_id)
+                if path_error:
+                    return path_error
+
+    for match in re.finditer(
+        r"^\*\*\*\s+Move to:\s*(.+)$",
+        patch_content,
+        re.MULTILINE,
+    ):
+        path_error = _ensure_workspace_path_for_task(match.group(1).strip(), task_id)
+        if path_error:
+            return path_error
+    return None
+
+
 @tool("list_directory", args_schema=ListDirectoryInput)
 def list_directory(path: str = ".", recursive: bool = False, include_hidden: bool = False, limit: int = 200) -> str:
     """List files and directories inside the workspace."""
@@ -177,13 +241,12 @@ def list_directory(path: str = ".", recursive: bool = False, include_hidden: boo
 
 
 def _read_file_impl(path: str, offset: int = 1, limit: int = 500, runtime: ToolRuntime | None = None) -> str:
-    path_error = ensure_workspace_path(path)
-    if path_error:
-        return tool_error("read_file", path_error, code="invalid_path")
-    read_error = ensure_read_allowed(path)
+    task_id = _task_id_from_runtime(runtime)
+    read_error = _ensure_read_allowed_for_task(path, task_id)
     if read_error:
-        return tool_error("read_file", read_error, code="access_denied")
-    raw = read_file_tool(path=path, offset=offset, limit=limit, task_id=_task_id_from_runtime(runtime))
+        code = "access_denied" if read_error.startswith("Access denied:") else "invalid_path"
+        return tool_error("read_file", read_error, code=code)
+    raw = read_file_tool(path=path, offset=offset, limit=limit, task_id=task_id)
     return _wrap_file_tool_result(
         "read_file",
         raw,
@@ -199,10 +262,11 @@ def read_file(path: str, runtime: ToolRuntime, offset: int = 1, limit: int = 500
 
 
 def _write_file_impl(path: str, content: str, runtime: ToolRuntime | None = None) -> str:
-    path_error = ensure_workspace_path(path)
+    task_id = _task_id_from_runtime(runtime)
+    path_error = _ensure_workspace_path_for_task(path, task_id)
     if path_error:
         return tool_error("write_file", path_error, code="invalid_path")
-    raw = write_file_tool(path=path, content=content, task_id=_task_id_from_runtime(runtime))
+    raw = write_file_tool(path=path, content=content, task_id=task_id)
     return _wrap_file_tool_result("write_file", raw, success_message="File written.")
 
 
@@ -221,14 +285,15 @@ def _patch_impl(
     patch: str | None = None,
     runtime: ToolRuntime | None = None,
 ) -> str:
+    task_id = _task_id_from_runtime(runtime)
     if mode == "replace":
         if not path:
             return tool_error("patch", "path is required for replace mode.", code="invalid_input")
-        path_error = ensure_workspace_path(path)
+        path_error = _ensure_workspace_path_for_task(path, task_id)
         if path_error:
             return tool_error("patch", path_error, code="invalid_path")
     if mode == "patch":
-        path_error = ensure_patch_paths(patch)
+        path_error = _ensure_patch_paths_for_task(patch, task_id)
         if path_error:
             return tool_error("patch", path_error, code="invalid_path")
     raw = patch_tool(
@@ -238,7 +303,7 @@ def _patch_impl(
         new_string=new_string,
         replace_all=replace_all,
         patch=patch,
-        task_id=_task_id_from_runtime(runtime),
+        task_id=task_id,
     )
     return _wrap_file_tool_result("patch", raw, success_message="Patch applied.")
 
@@ -276,7 +341,8 @@ def _search_files_impl(
     context: int = 0,
     runtime: ToolRuntime | None = None,
 ) -> str:
-    path_error = ensure_workspace_path(path)
+    task_id = _task_id_from_runtime(runtime)
+    path_error = _ensure_workspace_path_for_task(path, task_id)
     if path_error:
         return tool_error("search_files", path_error, code="invalid_path")
     raw = search_tool(
@@ -288,7 +354,7 @@ def _search_files_impl(
         offset=offset,
         output_mode=output_mode,
         context=context,
-        task_id=_task_id_from_runtime(runtime),
+        task_id=task_id,
     )
     return _wrap_file_tool_result(
         "search_files",

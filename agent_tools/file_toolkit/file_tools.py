@@ -16,7 +16,10 @@ from agent_tools.file_toolkit.file_operations import (
 )
 from agent_tools.file_toolkit import file_state
 from agent_tools.file_toolkit.redact import redact_sensitive_text
-from agent_tools.file_toolkit.terminal_environment import LocalTerminalEnvironment
+from agent_tools.hermes_terminal_toolkit.terminal_tool import (
+    get_active_env,
+    get_or_create_active_env,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -93,16 +96,17 @@ def _resolve_path(filepath: str, task_id: str = "default") -> Path:
 
 def _get_live_tracking_cwd(task_id: str = "default") -> str | None:
     """Return the task's live terminal cwd for bookkeeping when available."""
+    effective_task_id = task_id or "default"
     with _file_ops_lock:
-        cached = _file_ops_cache.get(task_id)
+        cached = _file_ops_cache.get(effective_task_id)
     if cached is not None:
-        live_cwd = getattr(getattr(cached, "env", None), "cwd", None) or getattr(
-            cached, "cwd", None
-        )
+        live_cwd = getattr(getattr(cached, "env", None), "cwd", None)
         if live_cwd:
             return live_cwd
 
-    return None
+    active_env = get_active_env(effective_task_id)
+    live_cwd = getattr(active_env, "cwd", None)
+    return live_cwd or None
 
 def _resolve_path_for_task(filepath: str, task_id: str = "default") -> Path:
     """Resolve *filepath* against the task's live terminal cwd when possible."""
@@ -291,14 +295,22 @@ def _is_internal_file_status_text(content: str) -> bool:
 
 
 def _get_file_ops(task_id: str = "default") -> ShellFileOperations:
-    """Get or create local ShellFileOperations for this task."""
+    """Get or create ShellFileOperations backed by this task's Hermes env."""
+    effective_task_id = task_id or "default"
     with _file_ops_lock:
-        cached = _file_ops_cache.get(task_id)
+        cached = _file_ops_cache.get(effective_task_id)
         if cached is not None:
             return cached
-        file_ops = ShellFileOperations(LocalTerminalEnvironment())
-        _file_ops_cache[task_id] = file_ops
-    return file_ops
+
+    env = get_or_create_active_env(effective_task_id)
+    file_ops = ShellFileOperations(env)
+
+    with _file_ops_lock:
+        cached = _file_ops_cache.get(effective_task_id)
+        if cached is not None:
+            return cached
+        _file_ops_cache[effective_task_id] = file_ops
+        return file_ops
 
 
 def clear_file_ops_cache(task_id: str = None):
@@ -873,7 +885,6 @@ def search_tool(pattern: str, target: str = "content", path: str = ".",
         return tool_error(str(e))
 
 __all__ = [
-    "LocalTerminalEnvironment",
     "read_file_tool",
     "write_file_tool",
     "patch_tool",

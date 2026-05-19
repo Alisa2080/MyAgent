@@ -127,6 +127,36 @@ def test_file_tool_impl_falls_back_to_default_task_id_without_runtime(monkeypatc
     assert calls[0]["task_id"] == "default"
 
 
+def test_read_file_rejects_live_cwd_outside_workspace(monkeypatch, tmp_path):
+    import agent_tools.public.files as file_tools
+    from agent_core.session_context import hermes_task_id_from_thread_id
+
+    calls = []
+    resolve_calls = []
+    outside_path = tmp_path / "leak.txt"
+    runtime = SimpleNamespace(execution_info=SimpleNamespace(thread_id="outside-read"))
+    expected_task_id = hermes_task_id_from_thread_id("outside-read")
+
+    def fake_resolve_path_for_task(path, task_id):
+        resolve_calls.append((path, task_id))
+        return outside_path
+
+    def fake_read_file_tool(**kwargs):
+        calls.append(kwargs)
+        return json.dumps({"path": "leak.txt", "content": "secret\n"})
+
+    monkeypatch.setattr(file_tools, "_resolve_path_for_task", fake_resolve_path_for_task)
+    monkeypatch.setattr(file_tools, "read_file_tool", fake_read_file_tool)
+
+    raw = file_tools._read_file_impl(path="leak.txt", offset=1, limit=20, runtime=runtime)
+    payload = json.loads(raw)
+
+    assert payload["ok"] is False
+    assert payload["error"]["code"] == "invalid_path"
+    assert calls == []
+    assert resolve_calls == [("leak.txt", expected_task_id)]
+
+
 def test_write_file_injects_runtime_thread_as_task_id(monkeypatch):
     import agent_tools.public.files as file_tools
     from agent_core.session_context import hermes_task_id_from_thread_id
@@ -149,6 +179,68 @@ def test_write_file_injects_runtime_thread_as_task_id(monkeypatch):
     assert calls[0]["path"] == "notes.txt"
     assert calls[0]["content"] == "hello"
     assert calls[0]["task_id"] == hermes_task_id_from_thread_id("file-write-thread")
+
+
+def test_write_file_rejects_live_cwd_outside_workspace(monkeypatch, tmp_path):
+    import agent_tools.public.files as file_tools
+    from agent_core.session_context import hermes_task_id_from_thread_id
+
+    calls = []
+    resolve_calls = []
+    outside_path = tmp_path / "leak.txt"
+    runtime = SimpleNamespace(execution_info=SimpleNamespace(thread_id="outside-write"))
+    expected_task_id = hermes_task_id_from_thread_id("outside-write")
+
+    def fake_resolve_path_for_task(path, task_id):
+        resolve_calls.append((path, task_id))
+        return outside_path
+
+    def fake_write_file_tool(**kwargs):
+        calls.append(kwargs)
+        return json.dumps({"path": "leak.txt", "bytes_written": 4})
+
+    monkeypatch.setattr(file_tools, "_resolve_path_for_task", fake_resolve_path_for_task)
+    monkeypatch.setattr(file_tools, "write_file_tool", fake_write_file_tool)
+
+    raw = file_tools._write_file_impl(path="leak.txt", content="leak", runtime=runtime)
+    payload = json.loads(raw)
+
+    assert payload["ok"] is False
+    assert payload["error"]["code"] == "invalid_path"
+    assert calls == []
+    assert resolve_calls == [("leak.txt", expected_task_id)]
+
+
+def test_write_file_allows_live_cwd_inside_workspace_and_forwards_original_path(
+    monkeypatch,
+):
+    import agent_tools.public.files as file_tools
+    from agent_core.session_context import hermes_task_id_from_thread_id
+
+    calls = []
+    resolve_calls = []
+    runtime = SimpleNamespace(execution_info=SimpleNamespace(thread_id="inside-write"))
+    expected_task_id = hermes_task_id_from_thread_id("inside-write")
+
+    def fake_resolve_path_for_task(path, task_id):
+        resolve_calls.append((path, task_id))
+        return file_tools.WORKDIR / "subdir" / path
+
+    def fake_write_file_tool(**kwargs):
+        calls.append(kwargs)
+        return json.dumps({"path": "notes.txt", "bytes_written": 5})
+
+    monkeypatch.setattr(file_tools, "_resolve_path_for_task", fake_resolve_path_for_task)
+    monkeypatch.setattr(file_tools, "write_file_tool", fake_write_file_tool)
+
+    raw = file_tools._write_file_impl(path="notes.txt", content="hello", runtime=runtime)
+    payload = json.loads(raw)
+
+    assert payload["ok"] is True
+    assert resolve_calls == [("notes.txt", expected_task_id)]
+    assert calls == [
+        {"path": "notes.txt", "content": "hello", "task_id": expected_task_id}
+    ]
 
 
 def test_write_file_toolnode_injects_runtime_thread(monkeypatch):
@@ -296,6 +388,91 @@ def test_patch_injects_runtime_thread_as_task_id(monkeypatch):
     assert calls[0]["replace_all"] is False
     assert calls[0]["patch"] is None
     assert calls[0]["task_id"] == hermes_task_id_from_thread_id("file-patch-thread")
+
+
+def test_patch_move_file_rejects_live_cwd_outside_workspace_source(
+    monkeypatch, tmp_path
+):
+    import agent_tools.public.files as file_tools
+    from agent_core.session_context import hermes_task_id_from_thread_id
+
+    calls = []
+    resolve_calls = []
+    outside_path = tmp_path / "source.txt"
+    runtime = SimpleNamespace(execution_info=SimpleNamespace(thread_id="move-source"))
+    expected_task_id = hermes_task_id_from_thread_id("move-source")
+    patch_content = "\n".join(
+        [
+            "*** Begin Patch",
+            "*** Move File: source.txt -> dest.txt",
+            "*** End Patch",
+        ]
+    )
+
+    def fake_resolve_path_for_task(path, task_id):
+        resolve_calls.append((path, task_id))
+        if path == "source.txt":
+            return outside_path
+        return file_tools.WORKDIR / path
+
+    def fake_patch_tool(**kwargs):
+        calls.append(kwargs)
+        return json.dumps({"status": "success"})
+
+    monkeypatch.setattr(file_tools, "_resolve_path_for_task", fake_resolve_path_for_task)
+    monkeypatch.setattr(file_tools, "patch_tool", fake_patch_tool)
+
+    raw = file_tools._patch_impl(mode="patch", patch=patch_content, runtime=runtime)
+    payload = json.loads(raw)
+
+    assert payload["ok"] is False
+    assert payload["error"]["code"] == "invalid_path"
+    assert calls == []
+    assert resolve_calls == [("source.txt", expected_task_id)]
+
+
+def test_patch_move_file_rejects_live_cwd_outside_workspace_destination(
+    monkeypatch, tmp_path
+):
+    import agent_tools.public.files as file_tools
+    from agent_core.session_context import hermes_task_id_from_thread_id
+
+    calls = []
+    resolve_calls = []
+    outside_path = tmp_path / "dest.txt"
+    runtime = SimpleNamespace(execution_info=SimpleNamespace(thread_id="move-dest"))
+    expected_task_id = hermes_task_id_from_thread_id("move-dest")
+    patch_content = "\n".join(
+        [
+            "*** Begin Patch",
+            "*** Move File: source.txt -> dest.txt",
+            "*** End Patch",
+        ]
+    )
+
+    def fake_resolve_path_for_task(path, task_id):
+        resolve_calls.append((path, task_id))
+        if path == "dest.txt":
+            return outside_path
+        return file_tools.WORKDIR / path
+
+    def fake_patch_tool(**kwargs):
+        calls.append(kwargs)
+        return json.dumps({"status": "success"})
+
+    monkeypatch.setattr(file_tools, "_resolve_path_for_task", fake_resolve_path_for_task)
+    monkeypatch.setattr(file_tools, "patch_tool", fake_patch_tool)
+
+    raw = file_tools._patch_impl(mode="patch", patch=patch_content, runtime=runtime)
+    payload = json.loads(raw)
+
+    assert payload["ok"] is False
+    assert payload["error"]["code"] == "invalid_path"
+    assert calls == []
+    assert resolve_calls == [
+        ("source.txt", expected_task_id),
+        ("dest.txt", expected_task_id),
+    ]
 
 
 def test_patch_toolnode_injects_runtime_thread(monkeypatch):
