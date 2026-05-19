@@ -417,6 +417,7 @@ def test_build_agent_recovers_terminal_processes_after_loading_memory(monkeypatc
 
     monkeypatch.setattr(builders.memory_store, "load_from_disk", lambda: calls.append("load"))
     monkeypatch.setattr(builders.memory_store, "format_for_system_prompt", lambda namespace: "")
+    monkeypatch.setattr(builders, "install_process_signal_handlers", lambda: calls.append("install_signals"))
     monkeypatch.setattr(builders, "recover_terminal_processes", lambda: calls.append("recover"))
     monkeypatch.setattr(builders, "build_prompt_context", lambda **kwargs: SimpleNamespace())
     monkeypatch.setattr(builders, "load_project_instruction_blocks", lambda workdir: [])
@@ -432,5 +433,5 @@ def test_build_agent_recovers_terminal_processes_after_loading_memory(monkeypatc
 
     result = builders.build_agent()
 
-    assert calls == ["load", "recover"]
+    assert calls == ["install_signals", "load", "recover"]
     assert result["agent"]["system_prompt"] == "prompt"

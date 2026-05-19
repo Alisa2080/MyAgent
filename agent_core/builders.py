@@ -11,6 +11,7 @@ from agent_core.delegation import BASE_TOOLS, task
 from agent_core.human_loop import FlexibleHumanInTheLoopMiddleware
 from agent_core.memory import memory_store
 from agent_core.model_config import MAIN_MODEL, SMALL_MODEL
+from agent_core.process_lifecycle import install_process_signal_handlers
 from agent_core.system_prompt import (
     SystemPromptBuilder,
     build_prompt_context,
@@ -63,6 +64,7 @@ HUMAN_INTERRUPT_ON = {
 
 
 def build_agent():
+    install_process_signal_handlers()
     memory_store.load_from_disk()
     recover_terminal_processes()
     memory_blocks = []

@@ -180,3 +180,66 @@ def test_run_process_shutdown_cleanup_reports_errors_and_continues(monkeypatch):
     assert result["killed_processes"] == 0
     assert result["cleaned_environments"] == 4
     assert result["errors"] == ["process_registry.kill_all: kill failed"]
+
+
+def test_install_process_signal_handlers_registers_sigterm_sighup_and_atexit(monkeypatch):
+    import agent_core.process_lifecycle as lifecycle
+
+    signal_calls = []
+    unregister_calls = []
+    atexit_calls = []
+    monkeypatch.setattr(lifecycle, "_installed", False)
+    monkeypatch.setattr(
+        lifecycle.signal,
+        "signal",
+        lambda signum, handler: signal_calls.append((signum, handler)) or f"previous-{signum}",
+    )
+    monkeypatch.setattr(
+        lifecycle.atexit,
+        "unregister",
+        lambda handler: unregister_calls.append(handler),
+    )
+    monkeypatch.setattr(lifecycle.atexit, "register", lambda handler: atexit_calls.append(handler))
+
+    installed = lifecycle.install_process_signal_handlers()
+
+    assert installed is True
+    assert (lifecycle.signal.SIGTERM, lifecycle._signal_handler) in signal_calls
+    assert lifecycle._previous_signal_handlers[lifecycle.signal.SIGTERM] == (
+        f"previous-{lifecycle.signal.SIGTERM}"
+    )
+    if hasattr(lifecycle.signal, "SIGHUP"):
+        assert (lifecycle.signal.SIGHUP, lifecycle._signal_handler) in signal_calls
+        assert lifecycle._previous_signal_handlers[lifecycle.signal.SIGHUP] == (
+            f"previous-{lifecycle.signal.SIGHUP}"
+        )
+    assert unregister_calls == [lifecycle.cleanup_all_environments]
+    assert atexit_calls == [lifecycle._atexit_cleanup]
+
+
+def test_install_process_signal_handlers_is_idempotent(monkeypatch):
+    import agent_core.process_lifecycle as lifecycle
+
+    signal_calls = []
+    unregister_calls = []
+    atexit_calls = []
+    monkeypatch.setattr(lifecycle, "_installed", False)
+    monkeypatch.setattr(
+        lifecycle.signal,
+        "signal",
+        lambda signum, handler: signal_calls.append((signum, handler)) or lifecycle.signal.SIG_DFL,
+    )
+    monkeypatch.setattr(
+        lifecycle.atexit,
+        "unregister",
+        lambda handler: unregister_calls.append(handler),
+    )
+    monkeypatch.setattr(lifecycle.atexit, "register", lambda handler: atexit_calls.append(handler))
+
+    assert lifecycle.install_process_signal_handlers() is True
+    assert lifecycle.install_process_signal_handlers() is False
+    assert len(atexit_calls) == 1
+    assert len(unregister_calls) == 1
+    assert len([call for call in signal_calls if call[0] == lifecycle.signal.SIGTERM]) == 1
+    if hasattr(lifecycle.signal, "SIGHUP"):
+        assert len([call for call in signal_calls if call[0] == lifecycle.signal.SIGHUP]) == 1
