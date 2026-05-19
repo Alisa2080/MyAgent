@@ -245,13 +245,13 @@ def _patch_impl(
 
 @tool("patch", args_schema=PatchInput)
 def patch(
+    runtime: ToolRuntime,
     mode: str = "replace",
     path: str | None = None,
     old_string: str | None = None,
     new_string: str | None = None,
     replace_all: bool = False,
     patch: str | None = None,
-    runtime: ToolRuntime | None = None,
 ) -> str:
     """Apply targeted file edits. Prefer replace mode for small edits."""
     return _patch_impl(

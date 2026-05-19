@@ -2,6 +2,38 @@ import json
 from types import SimpleNamespace
 
 
+def _invoke_toolnode(tool, tool_name, args, thread_id):
+    from langchain_core.messages import AIMessage
+    from langgraph.graph import MessagesState, StateGraph
+    from langgraph.prebuilt import ToolNode
+
+    graph = StateGraph(MessagesState)
+    graph.add_node("tools", ToolNode([tool]))
+    graph.set_entry_point("tools")
+    graph.set_finish_point("tools")
+    app = graph.compile()
+
+    result = app.invoke(
+        {
+            "messages": [
+                AIMessage(
+                    content="",
+                    tool_calls=[
+                        {
+                            "name": tool_name,
+                            "args": args,
+                            "id": f"call-{tool_name}",
+                        }
+                    ],
+                )
+            ]
+        },
+        config={"configurable": {"thread_id": thread_id}},
+    )
+
+    return json.loads(result["messages"][-1].content)
+
+
 def test_file_tool_schemas_do_not_expose_task_id():
     from agent_tools.public.files import patch, read_file, search_files, write_file
 
@@ -9,6 +41,10 @@ def test_file_tool_schemas_do_not_expose_task_id():
     assert "task_id" not in write_file.args
     assert "task_id" not in patch.args
     assert "task_id" not in search_files.args
+    assert "runtime" not in read_file.args
+    assert "runtime" not in write_file.args
+    assert "runtime" not in patch.args
+    assert "runtime" not in search_files.args
 
     assert "path" in read_file.args
     assert "path" in write_file.args
@@ -44,6 +80,35 @@ def test_read_file_injects_runtime_thread_as_task_id(monkeypatch):
     assert calls[0]["task_id"] == hermes_task_id_from_thread_id("file-read-thread")
 
 
+def test_read_file_toolnode_injects_runtime_thread(monkeypatch):
+    import agent_tools.public.files as file_tools
+    from agent_core.session_context import hermes_task_id_from_thread_id
+    from agent_tools.public.files import read_file
+
+    calls = []
+
+    def fake_read_file_tool(**kwargs):
+        calls.append(kwargs)
+        return json.dumps({"path": "README.md", "content": "toolnode-ok\n"})
+
+    monkeypatch.setattr(file_tools, "read_file_tool", fake_read_file_tool)
+
+    payload = _invoke_toolnode(
+        read_file,
+        "read_file",
+        {"path": "README.md", "offset": 2, "limit": 5},
+        "toolnode-read-thread",
+    )
+
+    assert payload["ok"] is True
+    assert payload["data"]["content"] == "toolnode-ok\n"
+    assert "task_id" not in payload.get("meta", {})
+    assert calls[0]["path"] == "README.md"
+    assert calls[0]["offset"] == 2
+    assert calls[0]["limit"] == 5
+    assert calls[0]["task_id"] == hermes_task_id_from_thread_id("toolnode-read-thread")
+
+
 def test_write_file_injects_runtime_thread_as_task_id(monkeypatch):
     import agent_tools.public.files as file_tools
     from agent_core.session_context import hermes_task_id_from_thread_id
@@ -66,6 +131,34 @@ def test_write_file_injects_runtime_thread_as_task_id(monkeypatch):
     assert calls[0]["path"] == "notes.txt"
     assert calls[0]["content"] == "hello"
     assert calls[0]["task_id"] == hermes_task_id_from_thread_id("file-write-thread")
+
+
+def test_write_file_toolnode_injects_runtime_thread(monkeypatch):
+    import agent_tools.public.files as file_tools
+    from agent_core.session_context import hermes_task_id_from_thread_id
+    from agent_tools.public.files import write_file
+
+    calls = []
+
+    def fake_write_file_tool(**kwargs):
+        calls.append(kwargs)
+        return json.dumps({"path": "notes.txt", "bytes_written": 18})
+
+    monkeypatch.setattr(file_tools, "write_file_tool", fake_write_file_tool)
+
+    payload = _invoke_toolnode(
+        write_file,
+        "write_file",
+        {"path": "notes.txt", "content": "hello from toolnode"},
+        "toolnode-write-thread",
+    )
+
+    assert payload["ok"] is True
+    assert payload["data"]["path"] == "notes.txt"
+    assert "task_id" not in payload.get("meta", {})
+    assert calls[0]["path"] == "notes.txt"
+    assert calls[0]["content"] == "hello from toolnode"
+    assert calls[0]["task_id"] == hermes_task_id_from_thread_id("toolnode-write-thread")
 
 
 def test_search_files_injects_runtime_thread_as_task_id(monkeypatch):
@@ -108,6 +201,49 @@ def test_search_files_injects_runtime_thread_as_task_id(monkeypatch):
     assert calls[0]["task_id"] == hermes_task_id_from_thread_id("file-search-thread")
 
 
+def test_search_files_toolnode_injects_runtime_thread(monkeypatch):
+    import agent_tools.public.files as file_tools
+    from agent_core.session_context import hermes_task_id_from_thread_id
+    from agent_tools.public.files import search_files
+
+    calls = []
+
+    def fake_search_tool(**kwargs):
+        calls.append(kwargs)
+        return json.dumps({"matches": [{"path": "README.md", "line": 1, "text": "TODO"}]})
+
+    monkeypatch.setattr(file_tools, "search_tool", fake_search_tool)
+
+    payload = _invoke_toolnode(
+        search_files,
+        "search_files",
+        {
+            "pattern": "TODO",
+            "target": "content",
+            "path": ".",
+            "file_glob": "*.md",
+            "limit": 7,
+            "offset": 1,
+            "output_mode": "content",
+            "context": 2,
+        },
+        "toolnode-search-thread",
+    )
+
+    assert payload["ok"] is True
+    assert payload["data"]["matches"][0]["path"] == "README.md"
+    assert "task_id" not in payload.get("meta", {})
+    assert calls[0]["pattern"] == "TODO"
+    assert calls[0]["target"] == "content"
+    assert calls[0]["path"] == "."
+    assert calls[0]["file_glob"] == "*.md"
+    assert calls[0]["limit"] == 7
+    assert calls[0]["offset"] == 1
+    assert calls[0]["output_mode"] == "content"
+    assert calls[0]["context"] == 2
+    assert calls[0]["task_id"] == hermes_task_id_from_thread_id("toolnode-search-thread")
+
+
 def test_patch_injects_runtime_thread_as_task_id(monkeypatch):
     import agent_tools.public.files as file_tools
     from agent_core.session_context import hermes_task_id_from_thread_id
@@ -142,3 +278,41 @@ def test_patch_injects_runtime_thread_as_task_id(monkeypatch):
     assert calls[0]["replace_all"] is False
     assert calls[0]["patch"] is None
     assert calls[0]["task_id"] == hermes_task_id_from_thread_id("file-patch-thread")
+
+
+def test_patch_toolnode_injects_runtime_thread(monkeypatch):
+    import agent_tools.public.files as file_tools
+    from agent_core.session_context import hermes_task_id_from_thread_id
+    from agent_tools.public.files import patch
+
+    calls = []
+
+    def fake_patch_tool(**kwargs):
+        calls.append(kwargs)
+        return json.dumps({"path": "notes.txt", "replacements": 1})
+
+    monkeypatch.setattr(file_tools, "patch_tool", fake_patch_tool)
+
+    payload = _invoke_toolnode(
+        patch,
+        "patch",
+        {
+            "mode": "replace",
+            "path": "notes.txt",
+            "old_string": "old",
+            "new_string": "new",
+            "replace_all": False,
+        },
+        "toolnode-patch-thread",
+    )
+
+    assert payload["ok"] is True
+    assert payload["data"]["replacements"] == 1
+    assert "task_id" not in payload.get("meta", {})
+    assert calls[0]["mode"] == "replace"
+    assert calls[0]["path"] == "notes.txt"
+    assert calls[0]["old_string"] == "old"
+    assert calls[0]["new_string"] == "new"
+    assert calls[0]["replace_all"] is False
+    assert calls[0]["patch"] is None
+    assert calls[0]["task_id"] == hermes_task_id_from_thread_id("toolnode-patch-thread")
