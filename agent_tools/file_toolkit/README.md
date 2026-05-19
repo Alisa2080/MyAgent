@@ -19,12 +19,20 @@ defined only in the outer `agent_tools/file_tools.py` adapter.
 LangChain-facing wrappers live in `agent_tools/file_tools.py`. Keep this
 subpackage focused on file operation mechanics and JSON-returning primitives.
 
+## Runtime model
+
+File operations are backed by shared Hermes active envs created through
+`agent_tools.hermes_terminal_toolkit.terminal_tool.get_or_create_active_env()`.
+The wrappers follow the live env cwd, refresh activity on access, and clear
+cached wrappers when Hermes cleans up a task.
+
 ## Environment
 
 Useful environment variables:
 
 - `TERMINAL_CWD`: base directory for relative paths.
 - `AGENT_WRITE_SAFE_ROOT`: if set, writes and patches are constrained to this directory tree.
+- `TERMINAL_ENV`: backend used by the shared Hermes env.
 - `AGENT_FILE_READ_MAX_CHARS`: max characters returned by a single `read_file`.
 - `AGENT_FILE_MAX_LINES`: max lines returned by `read_file`.
 - `AGENT_FILE_MAX_LINE_LENGTH`: max characters per returned line.

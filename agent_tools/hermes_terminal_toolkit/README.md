@@ -43,6 +43,12 @@ tools = build_langchain_tools(
 )
 ```
 
+## Shared envs
+
+`get_or_create_active_env(task_id)` is the shared env entry point used by the
+terminal tools and the file toolkit. Cached envs are refreshed on access and
+cleared through the terminal cleanup paths.
+
 ## Supported env vars
 
 - `TERMINAL_ENV`: `local`, `docker`, `singularity`, `ssh`
