@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 _recovery_attempted = False
 _recovery_lock = threading.Lock()
 _active_execution_threads: dict[str, set[int]] = {}
-_active_execution_lock = threading.Lock()
+_active_execution_lock = threading.RLock()
 
 
 def recover_terminal_processes() -> int:

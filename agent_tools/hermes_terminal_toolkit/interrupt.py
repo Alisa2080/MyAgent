@@ -33,7 +33,7 @@ if _DEBUG_INTERRUPT:
 
 # Set of thread idents that have been interrupted.
 _interrupted_threads: set[int] = set()
-_lock = threading.Lock()
+_lock = threading.RLock()
 
 
 def set_interrupt(active: bool, thread_id: int | None = None) -> None:

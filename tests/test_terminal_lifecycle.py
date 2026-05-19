@@ -361,6 +361,34 @@ def test_interrupt_all_terminal_waits_is_noop_without_active_threads(monkeypatch
     assert calls == []
 
 
+def test_active_execution_lock_allows_signal_handler_reentry():
+    import agent_core.terminal_lifecycle as lifecycle
+
+    lifecycle._active_execution_lock.acquire()
+    reacquired = False
+    try:
+        reacquired = lifecycle._active_execution_lock.acquire(blocking=False)
+        assert reacquired is True
+    finally:
+        if reacquired:
+            lifecycle._active_execution_lock.release()
+        lifecycle._active_execution_lock.release()
+
+
+def test_interrupt_lock_allows_signal_handler_reentry():
+    from agent_tools.hermes_terminal_toolkit import interrupt
+
+    interrupt._lock.acquire()
+    reacquired = False
+    try:
+        reacquired = interrupt._lock.acquire(blocking=False)
+        assert reacquired is True
+    finally:
+        if reacquired:
+            interrupt._lock.release()
+        interrupt._lock.release()
+
+
 def test_build_agent_recovers_terminal_processes_after_loading_memory(monkeypatch):
     import agent_core.builders as builders
 
