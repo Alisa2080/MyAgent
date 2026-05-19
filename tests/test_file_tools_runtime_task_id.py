@@ -211,6 +211,48 @@ def test_write_file_rejects_live_cwd_outside_workspace(monkeypatch, tmp_path):
     assert resolve_calls == [("leak.txt", expected_task_id)]
 
 
+def test_write_file_rejects_local_backend_live_cwd_outside_workspace(
+    monkeypatch, tmp_path
+):
+    import agent_tools.public.files as file_tools
+    from agent_core.session_context import hermes_task_id_from_thread_id
+    from agent_tools.hermes_terminal_toolkit import terminal_tool
+
+    calls = []
+    resolve_calls = []
+    outside_path = tmp_path / "local-live-cwd" / "leak.txt"
+    runtime = SimpleNamespace(execution_info=SimpleNamespace(thread_id="local-outside"))
+    expected_task_id = hermes_task_id_from_thread_id("local-outside")
+
+    def fake_resolve_path_for_task(path, task_id):
+        resolve_calls.append((path, task_id))
+        return outside_path
+
+    monkeypatch.setattr(
+        terminal_tool,
+        "_get_env_config",
+        lambda: {"env_type": "local", "cwd": str(outside_path.parent)},
+    )
+    monkeypatch.setattr(
+        file_tools,
+        "_resolve_path_for_task",
+        fake_resolve_path_for_task,
+    )
+    monkeypatch.setattr(
+        file_tools,
+        "write_file_tool",
+        lambda **kwargs: calls.append(kwargs) or json.dumps({"bytes_written": 4}),
+    )
+
+    raw = file_tools._write_file_impl(path="leak.txt", content="leak", runtime=runtime)
+    payload = json.loads(raw)
+
+    assert payload["ok"] is False
+    assert payload["error"]["code"] == "invalid_path"
+    assert calls == []
+    assert resolve_calls == [("leak.txt", expected_task_id)]
+
+
 def test_write_file_allows_live_cwd_inside_workspace_and_forwards_original_path(
     monkeypatch,
 ):
@@ -240,6 +282,84 @@ def test_write_file_allows_live_cwd_inside_workspace_and_forwards_original_path(
     assert resolve_calls == [("notes.txt", expected_task_id)]
     assert calls == [
         {"path": "notes.txt", "content": "hello", "task_id": expected_task_id}
+    ]
+
+
+def test_write_file_allows_docker_workspace_resolved_path_and_forwards_original_path(
+    monkeypatch,
+):
+    import agent_tools.public.files as file_tools
+    from agent_core.session_context import hermes_task_id_from_thread_id
+    from agent_tools.hermes_terminal_toolkit import terminal_tool
+
+    calls = []
+    resolve_calls = []
+    runtime = SimpleNamespace(execution_info=SimpleNamespace(thread_id="docker-write"))
+    expected_task_id = hermes_task_id_from_thread_id("docker-write")
+
+    monkeypatch.setattr(
+        terminal_tool,
+        "_get_env_config",
+        lambda: {"env_type": "docker", "cwd": "/root"},
+    )
+
+    def fake_resolve_path_for_task(path, task_id):
+        resolve_calls.append((path, task_id))
+        return f"/workspace/project/{path}"
+
+    def fake_write_file_tool(**kwargs):
+        calls.append(kwargs)
+        return json.dumps({"path": "notes.txt", "bytes_written": 5})
+
+    monkeypatch.setattr(file_tools, "_resolve_path_for_task", fake_resolve_path_for_task)
+    monkeypatch.setattr(file_tools, "write_file_tool", fake_write_file_tool)
+
+    raw = file_tools._write_file_impl(path="notes.txt", content="hello", runtime=runtime)
+    payload = json.loads(raw)
+
+    assert payload["ok"] is True
+    assert resolve_calls == [("notes.txt", expected_task_id)]
+    assert calls == [
+        {"path": "notes.txt", "content": "hello", "task_id": expected_task_id}
+    ]
+
+
+def test_read_file_allows_docker_workspace_resolved_path_and_forwards_original_path(
+    monkeypatch,
+):
+    import agent_tools.public.files as file_tools
+    from agent_core.session_context import hermes_task_id_from_thread_id
+    from agent_tools.hermes_terminal_toolkit import terminal_tool
+
+    calls = []
+    resolve_calls = []
+    runtime = SimpleNamespace(execution_info=SimpleNamespace(thread_id="docker-read"))
+    expected_task_id = hermes_task_id_from_thread_id("docker-read")
+
+    monkeypatch.setattr(
+        terminal_tool,
+        "_get_env_config",
+        lambda: {"env_type": "docker", "cwd": "/root"},
+    )
+
+    def fake_resolve_path_for_task(path, task_id):
+        resolve_calls.append((path, task_id))
+        return f"/workspace/project/{path}"
+
+    def fake_read_file_tool(**kwargs):
+        calls.append(kwargs)
+        return json.dumps({"path": "notes.txt", "content": "hello\n"})
+
+    monkeypatch.setattr(file_tools, "_resolve_path_for_task", fake_resolve_path_for_task)
+    monkeypatch.setattr(file_tools, "read_file_tool", fake_read_file_tool)
+
+    raw = file_tools._read_file_impl(path="notes.txt", offset=1, limit=20, runtime=runtime)
+    payload = json.loads(raw)
+
+    assert payload["ok"] is True
+    assert resolve_calls == [("notes.txt", expected_task_id)]
+    assert calls == [
+        {"path": "notes.txt", "offset": 1, "limit": 20, "task_id": expected_task_id}
     ]
 
 

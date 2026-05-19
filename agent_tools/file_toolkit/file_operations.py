@@ -36,7 +36,6 @@ from agent_tools.file_toolkit.file_safety import (
     build_write_denied_paths,
     build_write_denied_prefixes,
     get_safe_write_root as _shared_get_safe_write_root,
-    is_write_denied as _shared_is_write_denied,
 )
 from agent_tools.file_toolkit.result_models import (
     ExecuteResult,
@@ -71,9 +70,34 @@ def _get_safe_write_root() -> Optional[str]:
     return _shared_get_safe_write_root()
 
 
-def _is_write_denied(path: str) -> bool:
-    """Return True if path is on the write deny list."""
-    return _shared_is_write_denied(path)
+def _is_under_root(path: str, root: str) -> bool:
+    """Return True if *path* is equal to or contained by *root*."""
+    return path == root or path.startswith(root + os.sep)
+
+
+def _is_write_denied(path: str, extra_allowed_roots: Optional[List[str]] = None) -> bool:
+    """Return True if path is blocked by the denylist or safe-root policy."""
+    resolved = os.path.realpath(os.path.expanduser(str(path)))
+
+    if resolved in WRITE_DENIED_PATHS:
+        return True
+    for prefix in WRITE_DENIED_PREFIXES:
+        if resolved.startswith(prefix):
+            return True
+
+    safe_root = _get_safe_write_root()
+    if not safe_root or _is_under_root(resolved, safe_root):
+        return False
+
+    for root in extra_allowed_roots or []:
+        try:
+            allowed_root = os.path.realpath(os.path.expanduser(str(root)))
+        except Exception:
+            continue
+        if _is_under_root(resolved, allowed_root):
+            return False
+
+    return True
 
 
 # =============================================================================
@@ -266,6 +290,58 @@ class ShellFileOperations(FileOperations):
         return ExecuteResult(
             stdout=result.get("output", ""),
             exit_code=result.get("returncode", 0)
+        )
+
+    def _effective_cwd(self) -> str:
+        """Return the cwd that relative file operations execute against."""
+        return getattr(self.env, 'cwd', None) or self.cwd or "/"
+
+    def _is_workspace_backend(self) -> bool:
+        env_type = (
+            getattr(self.env, "_hermes_env_type", None)
+            or getattr(self.env, "env_type", None)
+            or type(self.env).__name__
+        )
+        env_type = str(env_type).lower()
+        return env_type in {"docker", "singularity"} or any(
+            marker in env_type for marker in ("docker", "singularity")
+        )
+
+    def _extra_safe_write_roots(self) -> List[str]:
+        """Return backend roots that map to isolated non-local workspaces."""
+        if not self._is_workspace_backend():
+            return []
+
+        roots: List[str] = ["/workspace"]
+        configured_cwd = (
+            getattr(self.env, "_hermes_configured_cwd", None)
+            or getattr(getattr(self.env, "config", None), "cwd", None)
+        )
+        if configured_cwd:
+            configured_cwd = os.path.expanduser(str(configured_cwd))
+            if os.path.isabs(configured_cwd):
+                roots.append(os.path.normpath(configured_cwd))
+
+        deduped: List[str] = []
+        seen = set()
+        for root in roots:
+            normalized = os.path.normpath(root)
+            if normalized not in seen:
+                deduped.append(normalized)
+                seen.add(normalized)
+        return deduped
+
+    def _resolve_write_safety_path(self, path: str) -> str:
+        """Resolve a write target the same way shell execution will."""
+        expanded = os.path.expanduser(str(path))
+        if not os.path.isabs(expanded):
+            expanded = os.path.join(self._effective_cwd(), expanded)
+        return os.path.normpath(expanded)
+
+    def _is_write_denied_for_path(self, path: str) -> bool:
+        return _is_write_denied(
+            self._resolve_write_safety_path(path),
+            extra_allowed_roots=self._extra_safe_write_roots(),
         )
     
     def _has_command(self, cmd: str) -> bool:
@@ -539,7 +615,7 @@ class ShellFileOperations(FileOperations):
     def delete_file(self, path: str) -> WriteResult:
         """Delete a file via rm."""
         path = self._expand_path(path)
-        if _is_write_denied(path):
+        if self._is_write_denied_for_path(path):
             return WriteResult(error=f"Delete denied: {path} is a protected path")
         result = self._exec(f"rm -f {self._escape_shell_arg(path)}")
         if result.exit_code != 0:
@@ -551,7 +627,7 @@ class ShellFileOperations(FileOperations):
         src = self._expand_path(src)
         dst = self._expand_path(dst)
         for p in (src, dst):
-            if _is_write_denied(p):
+            if self._is_write_denied_for_path(p):
                 return WriteResult(error=f"Move denied: {p} is a protected path")
         result = self._exec(
             f"mv {self._escape_shell_arg(src)} {self._escape_shell_arg(dst)}"
@@ -583,7 +659,7 @@ class ShellFileOperations(FileOperations):
         path = self._expand_path(path)
 
         # Block writes to sensitive paths
-        if _is_write_denied(path):
+        if self._is_write_denied_for_path(path):
             return WriteResult(error=f"Write denied: '{path}' is a protected system/credential file.")
 
         # Create parent directories
@@ -640,7 +716,7 @@ class ShellFileOperations(FileOperations):
         path = self._expand_path(path)
 
         # Block writes to sensitive paths
-        if _is_write_denied(path):
+        if self._is_write_denied_for_path(path):
             return PatchResult(error=f"Write denied: '{path}' is a protected system/credential file.")
 
         # Read current content
@@ -727,6 +803,18 @@ class ShellFileOperations(FileOperations):
         operations, parse_error = parse_v4a_patch(patch_content)
         if parse_error:
             return PatchResult(error=f"Failed to parse patch: {parse_error}")
+
+        for operation in operations:
+            for candidate in (operation.file_path, operation.new_path):
+                if candidate and self._is_write_denied_for_path(
+                    self._expand_path(candidate)
+                ):
+                    return PatchResult(
+                        error=(
+                            f"Write denied: '{candidate}' is a protected "
+                            "system/credential file."
+                        )
+                    )
         
         # Apply operations
         result = apply_v4a_operations(operations, self)

@@ -15,6 +15,7 @@ from agent_tools.file_toolkit.file_operations import (
     normalize_search_pagination,
 )
 from agent_tools.file_toolkit import file_state
+from agent_tools.file_toolkit.patch_parser import parse_v4a_patch
 from agent_tools.file_toolkit.redact import redact_sensitive_text
 from agent_tools.hermes_terminal_toolkit.terminal_tool import (
     get_active_env,
@@ -97,13 +98,6 @@ def _resolve_path(filepath: str, task_id: str = "default") -> Path:
 def _get_live_tracking_cwd(task_id: str = "default") -> str | None:
     """Return the task's live terminal cwd for bookkeeping when available."""
     effective_task_id = task_id or "default"
-    with _file_ops_lock:
-        cached = _file_ops_cache.get(effective_task_id)
-    if cached is not None:
-        live_cwd = getattr(getattr(cached, "env", None), "cwd", None)
-        if live_cwd:
-            return live_cwd
-
     active_env = get_active_env(effective_task_id)
     live_cwd = getattr(active_env, "cwd", None)
     return live_cwd or None
@@ -299,15 +293,16 @@ def _get_file_ops(task_id: str = "default") -> ShellFileOperations:
     effective_task_id = task_id or "default"
     with _file_ops_lock:
         cached = _file_ops_cache.get(effective_task_id)
-        if cached is not None:
-            return cached
 
     env = get_or_create_active_env(effective_task_id)
+    if cached is not None and getattr(cached, "env", None) is env:
+        return cached
+
     file_ops = ShellFileOperations(env)
 
     with _file_ops_lock:
         cached = _file_ops_cache.get(effective_task_id)
-        if cached is not None:
+        if cached is not None and getattr(cached, "env", None) is env:
             return cached
         _file_ops_cache[effective_task_id] = file_ops
         return file_ops
@@ -659,6 +654,58 @@ def _check_file_staleness(filepath: str, task_id: str) -> str | None:
     return None
 
 
+def _append_unique_path(paths: list[str], seen: set[str], path: str | None) -> None:
+    if path and path not in seen:
+        paths.append(path)
+        seen.add(path)
+
+
+def _extract_patch_paths_for_safety(patch_content: str) -> list[str]:
+    """Return V4A operation paths for safety, locking, and write tracking."""
+    paths: list[str] = []
+    seen: set[str] = set()
+    operations = []
+    parse_error = None
+    try:
+        operations, parse_error = parse_v4a_patch(patch_content)
+    except Exception as exc:
+        parse_error = str(exc)
+
+    import re as _re
+    if not parse_error and operations:
+        for operation in operations:
+            _append_unique_path(paths, seen, operation.file_path)
+            _append_unique_path(paths, seen, operation.new_path)
+        for _m in _re.finditer(
+            r"^\*\*\*\s+Move to:\s*(.+)$",
+            patch_content,
+            _re.MULTILINE,
+        ):
+            _append_unique_path(paths, seen, _m.group(1).strip())
+        return paths
+
+    for _m in _re.finditer(
+        r"^\*\*\*\s+(?:Update|Add|Delete)\s+File:\s*(.+)$",
+        patch_content,
+        _re.MULTILINE,
+    ):
+        _append_unique_path(paths, seen, _m.group(1).strip())
+    for _m in _re.finditer(
+        r"^\*\*\*\s+Move\s+File:\s*(.+?)\s*->\s*(.+)$",
+        patch_content,
+        _re.MULTILINE,
+    ):
+        _append_unique_path(paths, seen, _m.group(1).strip())
+        _append_unique_path(paths, seen, _m.group(2).strip())
+    for _m in _re.finditer(
+        r"^\*\*\*\s+Move to:\s*(.+)$",
+        patch_content,
+        _re.MULTILINE,
+    ):
+        _append_unique_path(paths, seen, _m.group(1).strip())
+    return paths
+
+
 def write_file_tool(path: str, content: str, task_id: str = "default") -> str:
     """Write content to a file."""
     sensitive_err = _check_sensitive_path(path, task_id)
@@ -725,9 +772,9 @@ def patch_tool(mode: str = "replace", path: str = None, old_string: str = None,
     if path:
         _paths_to_check.append(path)
     if mode == "patch" and patch:
-        import re as _re
-        for _m in _re.finditer(r'^\*\*\*\s+(?:Update|Add|Delete)\s+File:\s*(.+)$', patch, _re.MULTILINE):
-            _paths_to_check.append(_m.group(1).strip())
+        for _p in _extract_patch_paths_for_safety(patch):
+            if _p not in _paths_to_check:
+                _paths_to_check.append(_p)
     for _p in _paths_to_check:
         sensitive_err = _check_sensitive_path(_p, task_id)
         if sensitive_err:

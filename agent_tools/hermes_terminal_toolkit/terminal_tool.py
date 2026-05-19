@@ -97,6 +97,19 @@ def set_approval_callback(cb):
     _callback_tls.approval = cb
 
 
+def _clear_file_ops_cache_for_task(task_id: str):
+    try:
+        from agent_tools.file_toolkit.file_tools import clear_file_ops_cache
+
+        clear_file_ops_cache(task_id)
+    except Exception:
+        logger.debug(
+            "Failed to clear file operations cache for task %s",
+            task_id,
+            exc_info=True,
+        )
+
+
 def _check_disk_usage_warning():
     try:
         scratch_dir = _get_scratch_dir()
@@ -388,6 +401,7 @@ def _cleanup_inactive_envs(lifetime_seconds: int = 300):
                 _creation_locks.pop(task_id, None)
 
     for task_id, env in envs_to_stop:
+        _clear_file_ops_cache_for_task(task_id)
         try:
             if hasattr(env, "cleanup"):
                 env.cleanup()
@@ -556,12 +570,14 @@ def is_persistent_env(task_id: str) -> bool:
 
 
 def cleanup_vm(task_id: str):
+    effective_task_id = _resolve_container_task_id(task_id)
     env = None
     with _env_lock:
-        env = _active_environments.pop(task_id, None)
-        _last_activity.pop(task_id, None)
+        env = _active_environments.pop(effective_task_id, None)
+        _last_activity.pop(effective_task_id, None)
     with _creation_locks_lock:
-        _creation_locks.pop(task_id, None)
+        _creation_locks.pop(effective_task_id, None)
+    _clear_file_ops_cache_for_task(effective_task_id)
     if env is None:
         return
     if hasattr(env, "cleanup"):

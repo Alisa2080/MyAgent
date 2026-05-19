@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 from agent_tools.file_toolkit import file_tools
@@ -52,7 +54,29 @@ def test_get_file_ops_reuses_cached_wrapper_for_same_env(monkeypatch):
     second = file_tools._get_file_ops("task-a")
 
     assert first is second
-    assert calls == ["task-a"]
+    assert calls == ["task-a", "task-a"]
+
+
+def test_get_file_ops_replaces_cached_wrapper_when_active_env_changes(monkeypatch):
+    first_env = FakeEnv()
+    second_env = FakeEnv()
+    envs = [first_env, second_env]
+
+    def fake_get_or_create_active_env(task_id):
+        assert task_id == "task-a"
+        return envs.pop(0)
+
+    monkeypatch.setattr(
+        file_tools, "get_or_create_active_env", fake_get_or_create_active_env
+    )
+
+    first = file_tools._get_file_ops("task-a")
+    second = file_tools._get_file_ops("task-a")
+
+    assert first is not second
+    assert first.env is first_env
+    assert second.env is second_env
+    assert file_tools._file_ops_cache["task-a"] is second
 
 
 def test_get_file_ops_uses_default_for_falsy_task_id(monkeypatch):
@@ -70,9 +94,28 @@ def test_get_file_ops_uses_default_for_falsy_task_id(monkeypatch):
     file_ops = file_tools._get_file_ops("")
     default_file_ops = file_tools._get_file_ops("default")
 
-    assert calls == ["default"]
+    assert calls == ["default", "default"]
     assert file_ops.env is fake_env
     assert default_file_ops is file_ops
+
+
+def test_get_live_tracking_cwd_ignores_stale_cached_wrapper_without_active_env(
+    tmp_path, monkeypatch
+):
+    cached_env = FakeEnv()
+    cached_env.cwd = str(tmp_path)
+    file_tools._file_ops_cache["task-a"] = file_tools.ShellFileOperations(cached_env)
+
+    active_calls = []
+
+    def fake_get_active_env(task_id):
+        active_calls.append(task_id)
+        return None
+
+    monkeypatch.setattr(file_tools, "get_active_env", fake_get_active_env, raising=False)
+
+    assert file_tools._get_live_tracking_cwd("task-a") is None
+    assert active_calls == ["task-a"]
 
 
 def test_resolve_path_uses_active_hermes_env_cwd_without_cached_wrapper(
@@ -101,3 +144,163 @@ def test_resolve_path_uses_active_hermes_env_cwd_without_cached_wrapper(
     assert resolved == tmp_path / "notes.txt"
     assert active_calls == ["task-a"]
     assert create_calls == []
+
+
+def test_write_file_tool_denies_relative_path_when_local_env_cwd_outside_safe_root(
+    tmp_path, monkeypatch
+):
+    safe_root = tmp_path / "safe-root"
+    outside_root = tmp_path / "outside-root"
+    safe_root.mkdir()
+    outside_root.mkdir()
+    monkeypatch.setenv("AGENT_WRITE_SAFE_ROOT", str(safe_root))
+    monkeypatch.chdir(safe_root)
+
+    class RecordingEnv:
+        cwd = str(outside_root)
+
+        def __init__(self):
+            self.commands = []
+
+        def execute(self, command, **kwargs):
+            self.commands.append((command, kwargs))
+            return {"output": "4\n", "returncode": 0}
+
+    env = RecordingEnv()
+    file_ops = file_tools.ShellFileOperations(env)
+    monkeypatch.setattr(file_tools, "get_active_env", lambda task_id: env)
+    monkeypatch.setattr(file_tools, "_get_file_ops", lambda task_id: file_ops)
+
+    raw = file_tools.write_file_tool("notes.txt", "leak", task_id="task-safe")
+    payload = json.loads(raw)
+
+    assert "Write denied" in payload["error"]
+    assert env.commands == []
+
+
+def test_shell_file_operations_allows_workspace_writes_for_docker_safe_root(
+    tmp_path, monkeypatch
+):
+    safe_root = tmp_path / "host-workdir"
+    safe_root.mkdir()
+    monkeypatch.setenv("AGENT_WRITE_SAFE_ROOT", str(safe_root))
+    monkeypatch.chdir(tmp_path)
+
+    class DockerEnvironment:
+        cwd = "/workspace"
+
+        def __init__(self):
+            self.commands = []
+
+        def execute(self, command, **kwargs):
+            self.commands.append((command, kwargs))
+            if command.startswith("wc -c"):
+                return {"output": "5\n", "returncode": 0}
+            return {"output": "", "returncode": 0}
+
+    env = DockerEnvironment()
+    file_ops = file_tools.ShellFileOperations(env)
+
+    result = file_ops.write_file("notes.txt", "hello")
+
+    assert result.error is None
+    assert result.bytes_written == 5
+    assert [kwargs["cwd"] for _, kwargs in env.commands] == ["/workspace", "/workspace"]
+
+
+def test_patch_tool_move_file_tracks_source_and_destination(monkeypatch):
+    class PatchResult:
+        def to_dict(self):
+            return {"status": "success"}
+
+    class FakeFileOps:
+        def __init__(self):
+            self.patches = []
+
+        def patch_v4a(self, patch):
+            self.patches.append(patch)
+            return PatchResult()
+
+    class RecordingLock:
+        def __init__(self, path, entered):
+            self.path = path
+            self.entered = entered
+
+        def __enter__(self):
+            self.entered.append(self.path)
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    fake_ops = FakeFileOps()
+    checked_sensitive = []
+    resolved_paths = []
+    stale_checked = []
+    timestamp_updates = []
+    note_writes = []
+    lock_entries = []
+    patch_content = "\n".join(
+        [
+            "*** Begin Patch",
+            "*** Move File: source.txt -> dest.txt",
+            "*** End Patch",
+        ]
+    )
+
+    def fake_resolve(path, task_id):
+        resolved_paths.append((path, task_id))
+        return f"/workspace/{path}"
+
+    def fake_sensitive(path, task_id):
+        checked_sensitive.append((path, task_id))
+        return None
+
+    monkeypatch.setattr(file_tools, "_get_file_ops", lambda task_id: fake_ops)
+    monkeypatch.setattr(file_tools, "_resolve_path_for_task", fake_resolve)
+    monkeypatch.setattr(file_tools, "_check_sensitive_path", fake_sensitive)
+    monkeypatch.setattr(
+        file_tools.file_state,
+        "lock_path",
+        lambda path: RecordingLock(path, lock_entries),
+    )
+    monkeypatch.setattr(
+        file_tools.file_state,
+        "check_stale",
+        lambda task_id, path: stale_checked.append((task_id, path)) or None,
+    )
+    monkeypatch.setattr(
+        file_tools,
+        "_update_read_timestamp",
+        lambda path, task_id: timestamp_updates.append((path, task_id)),
+    )
+    monkeypatch.setattr(
+        file_tools.file_state,
+        "note_write",
+        lambda task_id, path: note_writes.append((task_id, path)),
+    )
+
+    raw = file_tools.patch_tool(
+        mode="patch",
+        patch=patch_content,
+        task_id="task-move",
+    )
+
+    assert raw == '{"status": "success"}'
+    assert checked_sensitive == [
+        ("source.txt", "task-move"),
+        ("dest.txt", "task-move"),
+    ]
+    assert set(lock_entries) == {"/workspace/source.txt", "/workspace/dest.txt"}
+    assert stale_checked == [
+        ("task-move", "/workspace/source.txt"),
+        ("task-move", "/workspace/dest.txt"),
+    ]
+    assert timestamp_updates == [
+        ("source.txt", "task-move"),
+        ("dest.txt", "task-move"),
+    ]
+    assert note_writes == [
+        ("task-move", "/workspace/source.txt"),
+        ("task-move", "/workspace/dest.txt"),
+    ]
+    assert fake_ops.patches == [patch_content]

@@ -188,6 +188,88 @@ def test_get_or_create_active_env_builds_docker_config(monkeypatch):
     assert created[0]["container_config"]["docker_run_as_host_user"] is True
 
 
+def test_cleanup_vm_clears_file_ops_cache_when_env_exists(monkeypatch):
+    from agent_tools.hermes_terminal_toolkit import terminal_tool
+
+    _reset_terminal_env_state(monkeypatch, terminal_tool)
+    env = FakeEnv()
+    cleared = []
+    terminal_tool._active_environments["task-clean"] = env
+    terminal_tool._last_activity["task-clean"] = 123.0
+    terminal_tool._creation_locks["task-clean"] = object()
+
+    monkeypatch.setattr(
+        terminal_tool,
+        "_clear_file_ops_cache_for_task",
+        lambda task_id: cleared.append(task_id),
+        raising=False,
+    )
+
+    terminal_tool.cleanup_vm("task-clean")
+
+    assert cleared == ["task-clean"]
+    assert env.cleaned is True
+    assert "task-clean" not in terminal_tool._active_environments
+    assert "task-clean" not in terminal_tool._last_activity
+    assert "task-clean" not in terminal_tool._creation_locks
+
+
+def test_cleanup_vm_clears_file_ops_cache_without_env(monkeypatch):
+    from agent_tools.hermes_terminal_toolkit import terminal_tool
+
+    _reset_terminal_env_state(monkeypatch, terminal_tool)
+    cleared = []
+
+    monkeypatch.setattr(
+        terminal_tool,
+        "_clear_file_ops_cache_for_task",
+        lambda task_id: cleared.append(task_id),
+        raising=False,
+    )
+
+    terminal_tool.cleanup_vm("missing-task")
+
+    assert cleared == ["missing-task"]
+
+
+def test_cleanup_inactive_envs_clears_file_ops_cache_for_reaped_env(monkeypatch):
+    from agent_tools.hermes_terminal_toolkit import terminal_tool
+
+    _reset_terminal_env_state(monkeypatch, terminal_tool)
+    stale_env = FakeEnv()
+    fresh_env = FakeEnv()
+    terminal_tool._active_environments["stale-task"] = stale_env
+    terminal_tool._active_environments["fresh-task"] = fresh_env
+    terminal_tool._last_activity["stale-task"] = 100.0
+    terminal_tool._last_activity["fresh-task"] = 395.0
+    terminal_tool._creation_locks["stale-task"] = object()
+    terminal_tool._creation_locks["fresh-task"] = object()
+    cleared = []
+
+    monkeypatch.setattr(terminal_tool.time, "time", lambda: 500.0)
+    monkeypatch.setattr(
+        terminal_tool.process_registry,
+        "has_active_processes",
+        lambda task_id: False,
+    )
+    monkeypatch.setattr(
+        terminal_tool,
+        "_clear_file_ops_cache_for_task",
+        lambda task_id: cleared.append(task_id),
+        raising=False,
+    )
+
+    terminal_tool._cleanup_inactive_envs(lifetime_seconds=300)
+
+    assert cleared == ["stale-task"]
+    assert stale_env.cleaned is True
+    assert fresh_env.cleaned is False
+    assert "stale-task" not in terminal_tool._active_environments
+    assert "fresh-task" in terminal_tool._active_environments
+    assert "stale-task" not in terminal_tool._creation_locks
+    assert "fresh-task" in terminal_tool._creation_locks
+
+
 def test_terminal_tool_uses_get_or_create_active_env(monkeypatch):
     from agent_tools.hermes_terminal_toolkit import terminal_tool
 

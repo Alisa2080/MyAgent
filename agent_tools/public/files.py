@@ -127,12 +127,44 @@ def _task_id_from_runtime(runtime: ToolRuntime | None) -> str:
     return hermes_task_id_from_runtime(runtime)
 
 
+def _allowed_workspace_roots_for_task(task_id: str) -> list[Path]:
+    roots = [WORKDIR.resolve()]
+    try:
+        from agent_tools.hermes_terminal_toolkit import terminal_tool
+
+        config = terminal_tool._get_env_config()
+    except Exception:
+        config = {}
+
+    env_type = config.get("env_type", "local")
+    if env_type != "local":
+        cwd = config.get("cwd")
+        if cwd:
+            expanded = Path(os.path.expanduser(str(cwd)))
+            if expanded.is_absolute():
+                roots.append(expanded.resolve())
+        if env_type in ("docker", "singularity"):
+            roots.append(Path("/workspace"))
+
+    deduped: list[Path] = []
+    seen: set[Path] = set()
+    for root in roots:
+        if root not in seen:
+            deduped.append(root)
+            seen.add(root)
+    return deduped
+
+
+def _is_under_allowed_workspace_root(resolved: Path, task_id: str) -> bool:
+    return any(resolved.is_relative_to(root) for root in _allowed_workspace_roots_for_task(task_id))
+
+
 def _ensure_workspace_path_for_task(path: str | None, task_id: str) -> str | None:
     try:
         resolved = Path(_resolve_path_for_task(path or ".", task_id))
     except Exception as exc:
         return str(exc)
-    if not resolved.is_relative_to(WORKDIR):
+    if not _is_under_allowed_workspace_root(resolved, task_id):
         return f"Path escapes workspace: {path}"
     return None
 
@@ -142,7 +174,7 @@ def _ensure_read_allowed_for_task(path: str | None, task_id: str) -> str | None:
         resolved = Path(_resolve_path_for_task(path or ".", task_id))
     except Exception as exc:
         return str(exc)
-    if not resolved.is_relative_to(WORKDIR):
+    if not _is_under_allowed_workspace_root(resolved, task_id):
         return f"Path escapes workspace: {path}"
 
     blocked_dirs = [
