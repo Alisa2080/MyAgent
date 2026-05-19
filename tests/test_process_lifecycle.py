@@ -259,19 +259,24 @@ def test_signal_handler_grace_window_allows_foreground_wait_to_kill_process(monk
     def run_command():
         with terminal_execution_scope("signal-thread"):
             ready.set()
-            result_holder["result"] = env.execute("sleep 30", timeout=60)
+            result_holder["result"] = env.execute("sleep 30", timeout=5)
 
     worker = threading.Thread(target=run_command)
-    worker.start()
-    assert ready.wait(timeout=5)
-    time.sleep(0.3)
+    try:
+        worker.start()
+        assert ready.wait(timeout=5)
+        time.sleep(0.3)
 
-    monkeypatch.setattr(process_lifecycle, "signal_grace_seconds", lambda: 0.8)
+        monkeypatch.setattr(process_lifecycle, "signal_grace_seconds", lambda: 0.8)
 
-    with pytest.raises(KeyboardInterrupt):
-        process_lifecycle._signal_handler(15, None)
+        with pytest.raises(KeyboardInterrupt):
+            process_lifecycle._signal_handler(15, None)
 
-    worker.join(timeout=5)
-    assert not worker.is_alive()
-    assert result_holder["result"]["returncode"] == 130
-    assert "[Command interrupted]" in result_holder["result"]["output"]
+        worker.join(timeout=5)
+        assert not worker.is_alive()
+        assert result_holder["result"]["returncode"] == 130
+        assert "[Command interrupted]" in result_holder["result"]["output"]
+    finally:
+        if worker.is_alive():
+            process_lifecycle.interrupt_all_terminal_waits(reason="test_cleanup")
+            worker.join(timeout=2)
