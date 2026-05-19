@@ -63,6 +63,11 @@ Lifecycle policy:
 - Explicit user-session shutdown should call `end_terminal_session(thread_id)`. Lower-level cleanup helpers remain available as `cleanup_terminal_session_for_thread_id(thread_id)` and `cleanup_terminal_session_for_runtime(runtime)`.
 - Explicit cleanup kills running processes for the session task id and cleans the active Hermes environment.
 - Parent agent startup calls `recover_terminal_processes()`. Hermes can recover host-backed background processes as detached sessions after restart; sandbox-backed processes are skipped by Hermes because their in-sandbox PIDs are not meaningful after restart.
+- Parent agent startup installs process-level SIGTERM and SIGHUP handlers once per Python process.
+- On SIGTERM or SIGHUP, the handler marks every active `terminal_execution_scope(thread_id)` thread as interrupted, sleeps for `HERMES_SIGTERM_GRACE` seconds, then raises `KeyboardInterrupt` so the hosting runtime can terminate the run.
+- `HERMES_SIGTERM_GRACE` defaults to `1.5`. Set it to `0` to skip the grace window, or increase it if the host routinely runs terminal commands with slow shutdown behavior.
+- The grace window is intentionally present so foreground terminal poll loops can observe the interrupt and kill their subprocess groups before Python exits.
+- At Python process exit, project shutdown cleanup calls `process_registry.kill_all()` before `cleanup_all_environments()`. This covers background Hermes sessions in addition to active terminal environments.
 
 Background process governance:
 
@@ -80,6 +85,7 @@ Embedding applications are responsible for terminal lifecycle events:
 - Wrap agent execution in `terminal_execution_scope(thread_id)` when new-message interrupt behavior is required. Multiple active executions for the same `thread_id` are tracked and interrupted together.
 - When a new user message arrives for the same `thread_id`, call `interrupt_terminal_wait_for_thread_id(thread_id)` before replacing or resuming the run. Blocking `process(action="wait")` calls will then return early with Hermes interrupt status.
 - When the user session is actually closed, call `end_terminal_session(thread_id)` to kill scoped background processes and clean the Hermes environment.
+- Direct `agent.invoke(...)` callers still get process signal cleanup after `build_agent()` installs handlers, but they do not get per-turn cleanup, notification resume, or new-user-message interrupt unless they use the runner/helper APIs above.
 
 Background completion notifications:
 
