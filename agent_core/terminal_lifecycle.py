@@ -148,8 +148,8 @@ def terminal_execution_scope(thread_id: str | None):
         return
 
     with _active_execution_lock:
-        _active_execution_threads.setdefault(key, set()).add(python_thread_id)
         set_interrupt(False, thread_id=python_thread_id)
+        _active_execution_threads.setdefault(key, set()).add(python_thread_id)
 
     try:
         yield

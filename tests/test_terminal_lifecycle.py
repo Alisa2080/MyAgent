@@ -287,6 +287,27 @@ def test_terminal_execution_scope_registers_and_clears_interrupt(monkeypatch):
     assert calls == [(False, current_thread_id), (True, current_thread_id), (False, current_thread_id)]
 
 
+def test_terminal_execution_scope_preserves_reentrant_broadcast_after_registration(monkeypatch):
+    import threading
+
+    import agent_core.terminal_lifecycle as lifecycle
+
+    class BroadcastAfterAddSet(set):
+        def add(self, value):
+            super().add(value)
+            lifecycle.interrupt_all_terminal_waits(reason="received_signal_15")
+
+    states = {}
+    current_thread_id = threading.current_thread().ident
+    monkeypatch.setattr(lifecycle, "_active_execution_threads", {"thread-1": BroadcastAfterAddSet()})
+    monkeypatch.setattr(lifecycle, "set_interrupt", lambda active, thread_id=None: states.__setitem__(thread_id, active))
+
+    with lifecycle.terminal_execution_scope("thread-1"):
+        assert states[current_thread_id] is True
+
+    assert states[current_thread_id] is False
+
+
 def test_terminal_execution_scope_ignores_missing_thread_id(monkeypatch):
     import agent_core.terminal_lifecycle as lifecycle
 
