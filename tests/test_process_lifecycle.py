@@ -1,4 +1,6 @@
 import pytest
+import threading
+import time
 
 
 @pytest.fixture(autouse=True)
@@ -243,3 +245,33 @@ def test_install_process_signal_handlers_is_idempotent(monkeypatch):
     assert len([call for call in signal_calls if call[0] == lifecycle.signal.SIGTERM]) == 1
     if hasattr(lifecycle.signal, "SIGHUP"):
         assert len([call for call in signal_calls if call[0] == lifecycle.signal.SIGHUP]) == 1
+
+
+def test_signal_handler_grace_window_allows_foreground_wait_to_kill_process(monkeypatch):
+    import agent_core.process_lifecycle as process_lifecycle
+    from agent_core.terminal_lifecycle import terminal_execution_scope
+    from agent_tools.hermes_terminal_toolkit.environments.local import LocalEnvironment
+
+    env = LocalEnvironment()
+    result_holder = {}
+    ready = threading.Event()
+
+    def run_command():
+        with terminal_execution_scope("signal-thread"):
+            ready.set()
+            result_holder["result"] = env.execute("sleep 30", timeout=60)
+
+    worker = threading.Thread(target=run_command)
+    worker.start()
+    assert ready.wait(timeout=5)
+    time.sleep(0.3)
+
+    monkeypatch.setattr(process_lifecycle, "signal_grace_seconds", lambda: 0.8)
+
+    with pytest.raises(KeyboardInterrupt):
+        process_lifecycle._signal_handler(15, None)
+
+    worker.join(timeout=5)
+    assert not worker.is_alive()
+    assert result_holder["result"]["returncode"] == 130
+    assert "[Command interrupted]" in result_holder["result"]["output"]
