@@ -163,6 +163,35 @@ def terminal_execution_scope(thread_id: str | None):
             set_interrupt(False, thread_id=python_thread_id)
 
 
+def snapshot_active_terminal_execution_threads() -> dict[str, set[int]]:
+    """Return a copy of active LangGraph thread ids to Python execution thread ids."""
+    with _active_execution_lock:
+        return {
+            thread_id: set(python_thread_ids)
+            for thread_id, python_thread_ids in _active_execution_threads.items()
+        }
+
+
+def interrupt_all_terminal_waits(*, reason: str = "process_signal") -> dict:
+    """Signal every active terminal/process wait in this Python process."""
+    snapshot = snapshot_active_terminal_execution_threads()
+    python_thread_ids = sorted(
+        python_thread_id
+        for thread_ids in snapshot.values()
+        for python_thread_id in thread_ids
+    )
+
+    for python_thread_id in python_thread_ids:
+        set_interrupt(True, thread_id=python_thread_id)
+
+    return {
+        "interrupted": bool(python_thread_ids),
+        "reason": reason,
+        "python_thread_ids": python_thread_ids,
+        "thread_ids": sorted(snapshot),
+    }
+
+
 def interrupt_terminal_wait_for_thread_id(
     thread_id: str | None, *, reason: str = "new_user_message"
 ) -> dict:

@@ -313,6 +313,54 @@ def test_interrupt_signals_all_active_executions_for_thread(monkeypatch):
     assert calls == [(True, 11), (True, 22)]
 
 
+def test_snapshot_active_terminal_execution_threads_returns_copy(monkeypatch):
+    import agent_core.terminal_lifecycle as lifecycle
+
+    monkeypatch.setattr(lifecycle, "_active_execution_threads", {"thread-1": {11, 22}})
+
+    snapshot = lifecycle.snapshot_active_terminal_execution_threads()
+    snapshot["thread-1"].add(33)
+
+    assert snapshot == {"thread-1": {11, 22, 33}}
+    assert lifecycle._active_execution_threads == {"thread-1": {11, 22}}
+
+
+def test_interrupt_all_terminal_waits_signals_every_active_python_thread(monkeypatch):
+    import agent_core.terminal_lifecycle as lifecycle
+
+    calls = []
+    monkeypatch.setattr(lifecycle, "_active_execution_threads", {"thread-1": {11, 22}, "thread-2": {33}})
+    monkeypatch.setattr(lifecycle, "set_interrupt", lambda active, thread_id=None: calls.append((active, thread_id)))
+
+    result = lifecycle.interrupt_all_terminal_waits(reason="received_signal_15")
+
+    assert result == {
+        "interrupted": True,
+        "reason": "received_signal_15",
+        "python_thread_ids": [11, 22, 33],
+        "thread_ids": ["thread-1", "thread-2"],
+    }
+    assert calls == [(True, 11), (True, 22), (True, 33)]
+
+
+def test_interrupt_all_terminal_waits_is_noop_without_active_threads(monkeypatch):
+    import agent_core.terminal_lifecycle as lifecycle
+
+    calls = []
+    monkeypatch.setattr(lifecycle, "_active_execution_threads", {})
+    monkeypatch.setattr(lifecycle, "set_interrupt", lambda active, thread_id=None: calls.append((active, thread_id)))
+
+    result = lifecycle.interrupt_all_terminal_waits(reason="received_signal_1")
+
+    assert result == {
+        "interrupted": False,
+        "reason": "received_signal_1",
+        "python_thread_ids": [],
+        "thread_ids": [],
+    }
+    assert calls == []
+
+
 def test_build_agent_recovers_terminal_processes_after_loading_memory(monkeypatch):
     import agent_core.builders as builders
 
