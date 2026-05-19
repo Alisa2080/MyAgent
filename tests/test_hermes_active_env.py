@@ -186,3 +186,75 @@ def test_get_or_create_active_env_builds_docker_config(monkeypatch):
     assert created[0]["container_config"]["docker_volumes"] == ["/tmp/cache:/cache"]
     assert created[0]["container_config"]["docker_forward_env"] == ["CUSTOM_ENV"]
     assert created[0]["container_config"]["docker_run_as_host_user"] is True
+
+
+def test_terminal_tool_uses_get_or_create_active_env(monkeypatch):
+    from agent_tools.hermes_terminal_toolkit import terminal_tool
+
+    fake_env = FakeEnv(cwd="/workspace")
+    helper_calls = []
+
+    def fake_get_or_create_active_env(task_id, workdir=None, timeout=None):
+        helper_calls.append({"task_id": task_id, "workdir": workdir, "timeout": timeout})
+        return fake_env
+
+    monkeypatch.setattr(terminal_tool, "_get_env_config", lambda: _fake_config())
+    monkeypatch.setattr(terminal_tool, "get_or_create_active_env", fake_get_or_create_active_env)
+    monkeypatch.setattr(
+        terminal_tool,
+        "_check_all_guards",
+        lambda command, env_type: {"approved": True},
+    )
+
+    raw = terminal_tool.terminal_tool(
+        command="printf ok",
+        background=False,
+        timeout=7,
+        task_id="task-terminal",
+        force=False,
+        workdir="/workspace/subdir",
+    )
+    payload = json.loads(raw)
+
+    assert payload["exit_code"] == 0
+    assert helper_calls == [
+        {"task_id": "task-terminal", "workdir": "/workspace/subdir", "timeout": 7}
+    ]
+    assert fake_env.execute_calls == [
+        ("printf ok", {"timeout": 7, "cwd": "/workspace/subdir"})
+    ]
+
+
+def test_terminal_tool_acquires_env_before_approval_guard(monkeypatch):
+    from agent_tools.hermes_terminal_toolkit import terminal_tool
+
+    call_order = []
+
+    def fake_get_or_create_active_env(task_id, workdir=None, timeout=None):
+        call_order.append("helper")
+        return FakeEnv(cwd="/workspace")
+
+    def fake_check_all_guards(command, env_type):
+        call_order.append("guard")
+        return {
+            "approved": False,
+            "description": "blocked for test",
+            "message": "denied for test",
+        }
+
+    monkeypatch.setattr(terminal_tool, "_get_env_config", lambda: _fake_config())
+    monkeypatch.setattr(terminal_tool, "get_or_create_active_env", fake_get_or_create_active_env)
+    monkeypatch.setattr(terminal_tool, "_check_all_guards", fake_check_all_guards)
+
+    raw = terminal_tool.terminal_tool(
+        command="printf blocked",
+        background=False,
+        timeout=7,
+        task_id="task-terminal-guard",
+        force=False,
+    )
+    payload = json.loads(raw)
+
+    assert payload["status"] == "blocked"
+    assert payload["error"] == "denied for test"
+    assert call_order == ["helper", "guard"]

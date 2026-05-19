@@ -625,13 +625,6 @@ def terminal_tool(
         env_type = config["env_type"]
         effective_task_id = _resolve_container_task_id(task_id)
 
-        if env_type == "docker":
-            image = config["docker_image"]
-        elif env_type == "singularity":
-            image = config["singularity_image"]
-        else:
-            image = ""
-
         cwd = config["cwd"]
         default_timeout = config["timeout"]
         effective_timeout = timeout or default_timeout
@@ -653,65 +646,11 @@ def terminal_tool(
             if guidance:
                 return json.dumps({"output": "", "exit_code": -1, "error": guidance, "status": "error"}, ensure_ascii=False)
 
-        _start_cleanup_thread()
-
-        with _env_lock:
-            if effective_task_id in _active_environments:
-                _last_activity[effective_task_id] = time.time()
-                env = _active_environments[effective_task_id]
-                needs_creation = False
-            else:
-                needs_creation = True
-
-        if needs_creation:
-            with _creation_locks_lock:
-                if effective_task_id not in _creation_locks:
-                    _creation_locks[effective_task_id] = threading.Lock()
-                task_lock = _creation_locks[effective_task_id]
-            with task_lock:
-                with _env_lock:
-                    if effective_task_id in _active_environments:
-                        _last_activity[effective_task_id] = time.time()
-                        env = _active_environments[effective_task_id]
-                        needs_creation = False
-                if needs_creation:
-                    if env_type == "singularity":
-                        _check_disk_usage_warning()
-                    ssh_config = None
-                    if env_type == "ssh":
-                        ssh_config = {
-                            "host": config.get("ssh_host", ""),
-                            "user": config.get("ssh_user", ""),
-                            "port": config.get("ssh_port", 22),
-                            "key": config.get("ssh_key", ""),
-                        }
-                    container_config = None
-                    if env_type in ("docker", "singularity"):
-                        container_config = {
-                            "container_cpu": config.get("container_cpu", 1),
-                            "container_memory": config.get("container_memory", 5120),
-                            "container_disk": config.get("container_disk", 51200),
-                            "container_persistent": config.get("container_persistent", True),
-                            "docker_volumes": config.get("docker_volumes", []),
-                            "docker_mount_cwd_to_workspace": config.get("docker_mount_cwd_to_workspace", False),
-                            "docker_forward_env": config.get("docker_forward_env", []),
-                            "docker_env": config.get("docker_env", {}),
-                            "docker_run_as_host_user": config.get("docker_run_as_host_user", False),
-                        }
-                    new_env = _create_environment(
-                        env_type=env_type,
-                        image=image,
-                        cwd=cwd,
-                        timeout=effective_timeout,
-                        ssh_config=ssh_config,
-                        container_config=container_config,
-                        task_id=effective_task_id,
-                        host_cwd=config.get("host_cwd"),
-                    )
-                    with _env_lock:
-                        _active_environments[effective_task_id] = new_env
-                        _last_activity[effective_task_id] = time.time()
-                        env = new_env
+        env = get_or_create_active_env(
+            effective_task_id,
+            workdir=workdir,
+            timeout=effective_timeout,
+        )
 
         approval_note = None
         if not force:
