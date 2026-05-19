@@ -22,6 +22,7 @@ _install_lock = threading.Lock()
 _installed = False
 _cleanup_lock = threading.Lock()
 _cleanup_done = False
+_previous_signal_handlers: dict[int, Any] = {}
 
 
 def signal_grace_seconds() -> float:
@@ -42,7 +43,22 @@ def _signal_handler(signum: int, frame: FrameType | None) -> None:
             time.sleep(grace)
     except Exception:
         logger.exception("Failed while handling process signal %s.", signum)
+    _call_previous_signal_handler(signum, frame)
     raise KeyboardInterrupt()
+
+
+def _call_previous_signal_handler(signum: int, frame: FrameType | None) -> None:
+    previous_handler = _previous_signal_handlers.get(signum)
+    if previous_handler in (signal.SIG_DFL, signal.SIG_IGN, None, _signal_handler):
+        return
+    if not callable(previous_handler):
+        return
+
+    try:
+        previous_handler(signum, frame)
+    except Exception:
+        logger.exception("Previous signal handler failed for signal %s.", signum)
+        raise
 
 
 def run_process_shutdown_cleanup(*, reason: str = "process_exit") -> dict[str, Any]:
@@ -87,9 +103,13 @@ def install_process_signal_handlers() -> bool:
         if _installed:
             return False
 
-        signal.signal(signal.SIGTERM, _signal_handler)
+        _previous_signal_handlers[signal.SIGTERM] = signal.signal(signal.SIGTERM, _signal_handler)
         if hasattr(signal, "SIGHUP"):
-            signal.signal(signal.SIGHUP, _signal_handler)
+            _previous_signal_handlers[signal.SIGHUP] = signal.signal(signal.SIGHUP, _signal_handler)
+        try:
+            atexit.unregister(cleanup_all_environments)
+        except (AttributeError, ValueError):
+            pass
         atexit.register(_atexit_cleanup)
         _installed = True
         return True
