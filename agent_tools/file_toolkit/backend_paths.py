@@ -55,7 +55,6 @@ def allowed_workspace_roots_for_task(task_id: str = "default") -> list[str]:
 
     candidates: list[str | Path | None] = [
         str(WORKDIR.resolve()),
-        ctx.host_cwd,
         *safe_write_roots_for_env(ctx, fallback_cwd=ctx.cwd),
     ]
     return _dedupe(_backend_root(candidate) for candidate in candidates)
@@ -145,7 +144,7 @@ def _select_configured_cwd(
     env_type: str, *, config_value: str | None, metadata_value: str | None
 ) -> str | None:
     if env_type == "local":
-        return config_value or metadata_value
+        return metadata_value or config_value
     return _backend_configured_root(
         metadata_value, env_type
     ) or _backend_configured_root(config_value, env_type)
