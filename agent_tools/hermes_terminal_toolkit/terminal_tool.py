@@ -319,6 +319,17 @@ def _get_env_config() -> Dict[str, Any]:
     }
 
 
+def _tag_environment(env, *, env_type: str, configured_cwd: str, host_cwd: str | None = None):
+    """Attach Hermes backend metadata used by file-tool path policy."""
+    try:
+        setattr(env, "_hermes_env_type", env_type)
+        setattr(env, "_hermes_configured_cwd", configured_cwd)
+        setattr(env, "_hermes_host_cwd", host_cwd)
+    except Exception:
+        logger.debug("Failed to tag environment metadata", exc_info=True)
+    return env
+
+
 def _create_environment(
     env_type: str,
     image: str,
@@ -339,45 +350,65 @@ def _create_environment(
     docker_env = cc.get("docker_env", {})
 
     if env_type == "local":
-        return LocalEnvironment(cwd=cwd, timeout=timeout)
-    if env_type == "docker":
-        return DockerEnvironment(
-            image=image,
-            cwd=cwd,
-            timeout=timeout,
-            cpu=cpu,
-            memory=memory,
-            disk=disk,
-            persistent_filesystem=persistent,
-            task_id=task_id,
-            volumes=volumes,
+        return _tag_environment(
+            LocalEnvironment(cwd=cwd, timeout=timeout),
+            env_type=env_type,
+            configured_cwd=cwd,
             host_cwd=host_cwd,
-            auto_mount_cwd=cc.get("docker_mount_cwd_to_workspace", False),
-            forward_env=docker_forward_env,
-            env=docker_env,
-            run_as_host_user=cc.get("docker_run_as_host_user", False),
+        )
+    if env_type == "docker":
+        return _tag_environment(
+            DockerEnvironment(
+                image=image,
+                cwd=cwd,
+                timeout=timeout,
+                cpu=cpu,
+                memory=memory,
+                disk=disk,
+                persistent_filesystem=persistent,
+                task_id=task_id,
+                volumes=volumes,
+                host_cwd=host_cwd,
+                auto_mount_cwd=cc.get("docker_mount_cwd_to_workspace", False),
+                forward_env=docker_forward_env,
+                env=docker_env,
+                run_as_host_user=cc.get("docker_run_as_host_user", False),
+            ),
+            env_type=env_type,
+            configured_cwd=cwd,
+            host_cwd=host_cwd,
         )
     if env_type == "singularity":
-        return SingularityEnvironment(
-            image=image,
-            cwd=cwd,
-            timeout=timeout,
-            cpu=cpu,
-            memory=memory,
-            disk=disk,
-            persistent_filesystem=persistent,
-            task_id=task_id,
+        return _tag_environment(
+            SingularityEnvironment(
+                image=image,
+                cwd=cwd,
+                timeout=timeout,
+                cpu=cpu,
+                memory=memory,
+                disk=disk,
+                persistent_filesystem=persistent,
+                task_id=task_id,
+            ),
+            env_type=env_type,
+            configured_cwd=cwd,
+            host_cwd=host_cwd,
         )
     if env_type == "ssh":
         if not ssh_config or not ssh_config.get("host") or not ssh_config.get("user"):
             raise ValueError("SSH environment requires ssh_host and ssh_user to be configured")
-        return SSHEnvironment(
-            host=ssh_config["host"],
-            user=ssh_config["user"],
-            port=ssh_config.get("port", 22),
-            key_path=ssh_config.get("key", ""),
-            cwd=cwd,
-            timeout=timeout,
+        return _tag_environment(
+            SSHEnvironment(
+                host=ssh_config["host"],
+                user=ssh_config["user"],
+                port=ssh_config.get("port", 22),
+                key_path=ssh_config.get("key", ""),
+                cwd=cwd,
+                timeout=timeout,
+            ),
+            env_type=env_type,
+            configured_cwd=cwd,
+            host_cwd=host_cwd,
         )
     raise ValueError(f"Unknown environment type: {env_type}. Use 'local', 'docker', 'singularity', or 'ssh'")
 

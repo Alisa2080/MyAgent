@@ -340,3 +340,58 @@ def test_terminal_tool_acquires_env_before_approval_guard(monkeypatch):
     assert payload["status"] == "blocked"
     assert payload["error"] == "denied for test"
     assert call_order == ["helper", "guard"]
+
+
+def test_create_environment_tags_local_env_metadata(monkeypatch):
+    from agent_tools.hermes_terminal_toolkit import terminal_tool
+
+    class FakeLocalEnv(FakeEnv):
+        def __init__(self, cwd, timeout):
+            super().__init__(cwd=cwd)
+            self.timeout = timeout
+
+    monkeypatch.setattr(
+        terminal_tool,
+        "LocalEnvironment",
+        lambda cwd, timeout: FakeLocalEnv(cwd=cwd, timeout=timeout),
+    )
+
+    env = terminal_tool._create_environment(
+        env_type="local",
+        image="",
+        cwd="/repo",
+        timeout=33,
+    )
+
+    assert env._hermes_env_type == "local"
+    assert env._hermes_configured_cwd == "/repo"
+    assert env._hermes_host_cwd is None
+
+
+def test_create_environment_tags_docker_env_metadata(monkeypatch):
+    from agent_tools.hermes_terminal_toolkit import terminal_tool
+
+    class FakeDockerEnv(FakeEnv):
+        def __init__(self, **kwargs):
+            super().__init__(cwd=kwargs["cwd"])
+            self.kwargs = kwargs
+
+    monkeypatch.setattr(
+        terminal_tool,
+        "DockerEnvironment",
+        lambda **kwargs: FakeDockerEnv(**kwargs),
+    )
+
+    env = terminal_tool._create_environment(
+        env_type="docker",
+        image="fake-image",
+        cwd="/workspace",
+        timeout=44,
+        container_config={"container_persistent": True},
+        task_id="task-docker",
+        host_cwd="/home/miku/projects/langchain",
+    )
+
+    assert env._hermes_env_type == "docker"
+    assert env._hermes_configured_cwd == "/workspace"
+    assert env._hermes_host_cwd == "/home/miku/projects/langchain"
