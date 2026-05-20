@@ -371,6 +371,31 @@ class ShellFileOperations(FileOperations):
         """Escape a string for safe use in shell commands."""
         # Use single quotes and escape any single quotes in the string
         return "'" + arg.replace("'", "'\"'\"'") + "'"
+
+    def stat_mtime(self, path: str) -> float | None:
+        """Return file mtime from the terminal backend, or None if unavailable.
+
+        GNU stat (`stat -c %Y`) covers Linux containers and most SSH hosts.
+        BSD stat (`stat -f %m`) keeps the method useful for macOS SSH hosts.
+        The caller decides how to degrade when no mtime can be sampled.
+        """
+        path = self._expand_path(path)
+        quoted = self._escape_shell_arg(path)
+        result = self._exec(
+            f"stat -c '%Y' {quoted} 2>/dev/null || stat -f '%m' {quoted} 2>/dev/null",
+            timeout=10,
+        )
+        if result.exit_code != 0:
+            return None
+        for line in result.stdout.splitlines():
+            value = line.strip()
+            if not value:
+                continue
+            try:
+                return float(value)
+            except ValueError:
+                return None
+        return None
     
     def _unified_diff(self, old_content: str, new_content: str, filename: str) -> str:
         """Generate unified diff between old and new content."""
