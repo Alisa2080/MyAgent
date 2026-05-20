@@ -23,6 +23,15 @@ class SSHEnvironment:
         self.cwd = cwd
 
 
+class ConfigOnlySSHEnvironment:
+    class Config:
+        def __init__(self, cwd):
+            self.cwd = cwd
+
+    def __init__(self, cwd):
+        self.config = self.Config(cwd)
+
+
 def test_safe_write_roots_for_untagged_docker_environment_uses_class_name_fallback():
     from agent_tools.file_toolkit import backend_paths
 
@@ -38,6 +47,49 @@ def test_safe_write_roots_for_untagged_ssh_environment_uses_class_name_fallback(
 
     assert "/home/remote/project" in roots
     assert "/workspace" not in roots
+
+
+def test_safe_write_roots_for_class_name_ssh_fallback_excludes_host_safe_root(
+    tmp_path, monkeypatch
+):
+    from agent_tools.file_toolkit import backend_paths
+
+    host_safe_root = tmp_path / "host-safe-root"
+    host_safe_root.mkdir()
+    monkeypatch.setenv("AGENT_WRITE_SAFE_ROOT", str(host_safe_root))
+
+    roots = backend_paths.safe_write_roots_for_env(
+        SSHEnvironment(str(host_safe_root))
+    )
+
+    assert str(host_safe_root) not in roots
+
+
+def test_safe_write_roots_for_class_name_ssh_fallback_excludes_config_host_safe_root(
+    tmp_path, monkeypatch
+):
+    from agent_tools.file_toolkit import backend_paths
+
+    host_safe_root = tmp_path / "host-safe-root"
+    host_safe_root.mkdir()
+    monkeypatch.setenv("AGENT_WRITE_SAFE_ROOT", str(host_safe_root))
+
+    roots = backend_paths.safe_write_roots_for_env(
+        ConfigOnlySSHEnvironment(str(host_safe_root)),
+        fallback_cwd=str(host_safe_root),
+    )
+
+    assert str(host_safe_root) not in roots
+
+
+def test_safe_write_roots_for_class_name_ssh_fallback_keeps_remote_home_cwd():
+    from agent_tools.file_toolkit import backend_paths
+
+    roots = backend_paths.safe_write_roots_for_env(
+        SSHEnvironment("/home/remote/project")
+    )
+
+    assert "/home/remote/project" in roots
 
 
 def test_policy_uses_active_ssh_cwd_without_host_expanding_tilde(monkeypatch):

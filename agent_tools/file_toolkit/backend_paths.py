@@ -64,15 +64,17 @@ def safe_write_roots_for_env(env, fallback_cwd=None) -> list[str]:
         getattr(env, "env_type", None)
         or getattr(env, "_hermes_env_type", None)
     )
-    env_type = str(
-        explicit_env_type
-        or _env_type_from_class_name(env)
-        or "local"
-    )
+    class_name_env_type = _env_type_from_class_name(env)
+    env_type = str(explicit_env_type or class_name_env_type or "local")
+    class_name_fallback = explicit_env_type is None and class_name_env_type is not None
     cwd = getattr(env, "cwd", None) or fallback_cwd
     configured_cwd = getattr(env, "configured_cwd", None) or getattr(
         env, "_hermes_configured_cwd", None
     )
+    if configured_cwd is None and class_name_fallback:
+        configured_cwd = getattr(getattr(env, "config", None), "cwd", None)
+    if configured_cwd is None and class_name_fallback:
+        configured_cwd = fallback_cwd
     host_cwd = getattr(env, "host_cwd", None) or getattr(env, "_hermes_host_cwd", None)
 
     if env_type == "local":
@@ -81,8 +83,16 @@ def safe_write_roots_for_env(env, fallback_cwd=None) -> list[str]:
     candidates: list[str | Path | None] = []
     if env_type == "docker":
         candidates.append("/workspace")
-    configured_root = _backend_configured_root(configured_cwd, env_type)
-    candidates.extend([cwd, configured_root])
+    if class_name_fallback:
+        candidates.extend(
+            [
+                _class_name_fallback_backend_root(cwd),
+                _class_name_fallback_backend_root(configured_cwd),
+            ]
+        )
+    else:
+        configured_root = _backend_configured_root(configured_cwd, env_type)
+        candidates.extend([cwd, configured_root])
     return _dedupe(_backend_root(candidate) for candidate in candidates)
 
 
@@ -161,6 +171,32 @@ def _backend_configured_root(path, env_type: str) -> str | None:
     if _is_host_home_or_descendant(root):
         return None
     return root
+
+
+def _class_name_fallback_backend_root(path) -> str | None:
+    root = _backend_root(path)
+    if _is_host_safe_root_or_descendant(root):
+        return None
+    if _is_host_workspace_or_descendant(root):
+        return None
+    if _is_host_home_or_descendant(root):
+        return None
+    return root
+
+
+def _is_host_safe_root_or_descendant(path: str | None) -> bool:
+    if not path:
+        return False
+    safe_root = os.environ.get("AGENT_WRITE_SAFE_ROOT")
+    if not safe_root:
+        return False
+    normalized_safe_root = _normalize_backend_path(
+        str(Path(safe_root).expanduser().resolve())
+    )
+    try:
+        return posixpath.commonpath([path, normalized_safe_root]) == normalized_safe_root
+    except ValueError:
+        return False
 
 
 def _is_host_home_or_descendant(path: str | None) -> bool:

@@ -28,7 +28,7 @@ cached wrappers when Hermes cleans up a task.
 
 Low-level safe write roots are backend-aware:
 
-- Local file tools are constrained to the host workspace and
+- Local low-level write safety enforces the shared denylist and, when set,
   `AGENT_WRITE_SAFE_ROOT`.
 - Docker file tools also allow backend paths under `/workspace` and the
   container active or configured cwd.
@@ -40,7 +40,9 @@ Low-level safe write roots are backend-aware:
 Public read/search admission in `agent_tools/public/files.py` additionally
 blocks internal skill cache paths such as `skills/.hub/index-cache` under each
 allowed workspace root. That block is not a general low-level file toolkit
-policy and does not apply to public write/patch admission.
+policy and does not apply to public write/patch admission. Public write/patch
+admission still enforces allowed workspace roots before calling the low-level
+file toolkit.
 
 ## Environment
 
