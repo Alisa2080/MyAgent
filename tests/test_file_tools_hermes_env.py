@@ -238,6 +238,64 @@ def test_shell_file_operations_allows_effective_docker_cwd_writes(
     assert [kwargs["cwd"] for _, kwargs in env.commands] == ["/root", "/root"]
 
 
+def test_shell_file_operations_allows_effective_ssh_cwd_writes(
+    tmp_path, monkeypatch
+):
+    safe_root = tmp_path / "host-workdir"
+    safe_root.mkdir()
+    monkeypatch.setenv("AGENT_WRITE_SAFE_ROOT", str(safe_root))
+
+    class SSHEnvironment:
+        cwd = "/home/remote/project"
+
+        def __init__(self):
+            self.commands = []
+
+        def execute(self, command, **kwargs):
+            self.commands.append((command, kwargs))
+            if command.startswith("wc -c"):
+                return {"output": "5\n", "returncode": 0}
+            return {"output": "", "returncode": 0}
+
+    env = SSHEnvironment()
+    file_ops = file_tools.ShellFileOperations(env)
+
+    result = file_ops.write_file("notes.txt", "hello")
+
+    assert result.error is None
+    assert result.bytes_written == 5
+    assert [kwargs["cwd"] for _, kwargs in env.commands] == [
+        "/home/remote/project",
+        "/home/remote/project",
+    ]
+
+
+def test_shell_file_operations_keeps_workspace_root_denied_for_ssh(
+    tmp_path, monkeypatch
+):
+    safe_root = tmp_path / "host-workdir"
+    safe_root.mkdir()
+    monkeypatch.setenv("AGENT_WRITE_SAFE_ROOT", str(safe_root))
+
+    class SSHEnvironment:
+        cwd = "/home/remote/project"
+
+        def __init__(self):
+            self.commands = []
+
+        def execute(self, command, **kwargs):
+            self.commands.append((command, kwargs))
+            return {"output": "", "returncode": 0}
+
+    env = SSHEnvironment()
+    file_ops = file_tools.ShellFileOperations(env)
+
+    result = file_ops.write_file("/workspace/notes.txt", "hello")
+
+    assert "Write denied" in result.error
+    assert env.commands == []
+
+
 def test_patch_tool_move_file_tracks_source_and_destination(monkeypatch):
     class PatchResult:
         def to_dict(self):

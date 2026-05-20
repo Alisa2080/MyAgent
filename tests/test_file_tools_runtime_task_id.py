@@ -363,6 +363,53 @@ def test_read_file_allows_docker_workspace_resolved_path_and_forwards_original_p
     ]
 
 
+def test_read_file_rejects_docker_skill_cache_path(monkeypatch):
+    import agent_tools.public.files as file_tools
+    from agent_core.session_context import hermes_task_id_from_thread_id
+    from agent_tools.hermes_terminal_toolkit import terminal_tool
+
+    calls = []
+    resolve_calls = []
+    runtime = SimpleNamespace(execution_info=SimpleNamespace(thread_id="docker-cache-read"))
+    expected_task_id = hermes_task_id_from_thread_id("docker-cache-read")
+
+    monkeypatch.setattr(
+        terminal_tool,
+        "_get_env_config",
+        lambda: {"env_type": "docker", "cwd": "/root"},
+    )
+
+    def fake_resolve_path_for_task(path, task_id):
+        resolve_calls.append((path, task_id))
+        return "/workspace/skills/.hub/index-cache/prompt.md"
+
+    monkeypatch.setattr(
+        file_tools,
+        "_resolve_path_for_task",
+        fake_resolve_path_for_task,
+    )
+    monkeypatch.setattr(
+        file_tools,
+        "read_file_tool",
+        lambda **kwargs: calls.append(kwargs) or json.dumps({"content": "blocked\n"}),
+    )
+
+    raw = file_tools._read_file_impl(
+        path="skills/.hub/index-cache/prompt.md",
+        offset=1,
+        limit=20,
+        runtime=runtime,
+    )
+    payload = json.loads(raw)
+
+    assert payload["ok"] is False
+    assert payload["error"]["code"] == "access_denied"
+    assert calls == []
+    assert resolve_calls == [
+        ("skills/.hub/index-cache/prompt.md", expected_task_id)
+    ]
+
+
 def test_write_file_toolnode_injects_runtime_thread(monkeypatch):
     import agent_tools.public.files as file_tools
     from agent_core.session_context import hermes_task_id_from_thread_id
@@ -429,6 +476,47 @@ def test_search_files_injects_runtime_thread_as_task_id(monkeypatch):
     assert calls[0]["output_mode"] == "content"
     assert calls[0]["context"] == 0
     assert calls[0]["task_id"] == hermes_task_id_from_thread_id("file-search-thread")
+
+
+def test_search_files_rejects_internal_skill_cache_path(monkeypatch):
+    import agent_tools.public.files as file_tools
+    from agent_tools.hermes_terminal_toolkit import terminal_tool
+
+    calls = []
+    runtime = SimpleNamespace(execution_info=SimpleNamespace(thread_id="cache-search"))
+
+    monkeypatch.setattr(
+        terminal_tool,
+        "_get_env_config",
+        lambda: {"env_type": "docker", "cwd": "/root"},
+    )
+    monkeypatch.setattr(
+        file_tools,
+        "_resolve_path_for_task",
+        lambda path, task_id: "/workspace/skills/.hub/index-cache",
+    )
+    monkeypatch.setattr(
+        file_tools,
+        "search_tool",
+        lambda **kwargs: calls.append(kwargs) or json.dumps({"matches": []}),
+    )
+
+    raw = file_tools._search_files_impl(
+        pattern="system",
+        target="content",
+        path="skills/.hub/index-cache",
+        file_glob=None,
+        limit=10,
+        offset=0,
+        output_mode="content",
+        context=0,
+        runtime=runtime,
+    )
+    payload = json.loads(raw)
+
+    assert payload["ok"] is False
+    assert payload["error"]["code"] == "access_denied"
+    assert calls == []
 
 
 def test_search_files_toolnode_injects_runtime_thread(monkeypatch):

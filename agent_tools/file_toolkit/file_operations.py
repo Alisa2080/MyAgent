@@ -296,23 +296,33 @@ class ShellFileOperations(FileOperations):
         """Return the cwd that relative file operations execute against."""
         return getattr(self.env, 'cwd', None) or self.cwd or "/"
 
-    def _is_workspace_backend(self) -> bool:
+    def _backend_env_type(self) -> str:
         env_type = (
             getattr(self.env, "_hermes_env_type", None)
             or getattr(self.env, "env_type", None)
             or type(self.env).__name__
         )
-        env_type = str(env_type).lower()
+        return str(env_type).lower()
+
+    def _is_workspace_backend(self) -> bool:
+        env_type = self._backend_env_type()
         return env_type in {"docker", "singularity"} or any(
             marker in env_type for marker in ("docker", "singularity")
         )
 
+    def _is_ssh_backend(self) -> bool:
+        env_type = self._backend_env_type()
+        return env_type == "ssh" or "ssh" in env_type
+
     def _extra_safe_write_roots(self) -> List[str]:
-        """Return backend roots that map to isolated non-local workspaces."""
-        if not self._is_workspace_backend():
+        """Return backend roots allowed in addition to the host safe root."""
+        if self._is_workspace_backend():
+            roots: List[str] = [self._effective_cwd(), "/workspace"]
+        elif self._is_ssh_backend():
+            roots = [self._effective_cwd()]
+        else:
             return []
 
-        roots: List[str] = [self._effective_cwd(), "/workspace"]
         configured_cwd = (
             getattr(self.env, "_hermes_configured_cwd", None)
             or getattr(getattr(self.env, "config", None), "cwd", None)

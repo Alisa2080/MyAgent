@@ -159,6 +159,21 @@ def _is_under_allowed_workspace_root(resolved: Path, task_id: str) -> bool:
     return any(resolved.is_relative_to(root) for root in _allowed_workspace_roots_for_task(task_id))
 
 
+def _blocked_read_dirs_for_task(task_id: str) -> list[Path]:
+    blocked_dirs: list[Path] = []
+    seen: set[Path] = set()
+    for root in _allowed_workspace_roots_for_task(task_id):
+        for blocked_dir in (
+            root / "skills" / ".hub",
+            root / "skills" / ".hub" / "index-cache",
+        ):
+            resolved = blocked_dir.resolve()
+            if resolved not in seen:
+                blocked_dirs.append(resolved)
+                seen.add(resolved)
+    return blocked_dirs
+
+
 def _ensure_workspace_path_for_task(path: str | None, task_id: str) -> str | None:
     try:
         resolved = Path(_resolve_path_for_task(path or ".", task_id))
@@ -177,13 +192,9 @@ def _ensure_read_allowed_for_task(path: str | None, task_id: str) -> str | None:
     if not _is_under_allowed_workspace_root(resolved, task_id):
         return f"Path escapes workspace: {path}"
 
-    blocked_dirs = [
-        WORKDIR / "skills" / ".hub",
-        WORKDIR / "skills" / ".hub" / "index-cache",
-    ]
-    for blocked_dir in blocked_dirs:
+    for blocked_dir in _blocked_read_dirs_for_task(task_id):
         try:
-            resolved.relative_to(blocked_dir.resolve())
+            resolved.relative_to(blocked_dir)
         except ValueError:
             continue
         return (
@@ -374,9 +385,10 @@ def _search_files_impl(
     runtime: ToolRuntime | None = None,
 ) -> str:
     task_id = _task_id_from_runtime(runtime)
-    path_error = _ensure_workspace_path_for_task(path, task_id)
-    if path_error:
-        return tool_error("search_files", path_error, code="invalid_path")
+    read_error = _ensure_read_allowed_for_task(path, task_id)
+    if read_error:
+        code = "access_denied" if read_error.startswith("Access denied:") else "invalid_path"
+        return tool_error("search_files", read_error, code=code)
     raw = search_tool(
         pattern=pattern,
         target=target,
