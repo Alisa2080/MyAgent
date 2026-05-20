@@ -78,7 +78,7 @@ def safe_write_roots_for_env(env, fallback_cwd=None) -> list[str]:
     candidates: list[str | Path | None] = [str(WORKDIR.resolve())]
     if env_type == "docker":
         candidates.append("/workspace")
-    configured_root = _backend_configured_root(configured_cwd)
+    configured_root = _backend_configured_root(configured_cwd, env_type)
     candidates.extend([cwd, configured_root, host_cwd])
     return _dedupe(_backend_root(candidate) for candidate in candidates)
 
@@ -134,14 +134,14 @@ def _select_configured_cwd(
 ) -> str | None:
     if env_type == "local":
         return config_value or metadata_value
-    return _backend_configured_root(config_value) or _backend_configured_root(
-        metadata_value
+    return _backend_configured_root(config_value, env_type) or _backend_configured_root(
+        metadata_value, env_type
     )
 
 
-def _backend_configured_root(path) -> str | None:
+def _backend_configured_root(path, env_type: str) -> str | None:
     root = _backend_root(path)
-    if root == _host_home_root():
+    if env_type == "ssh" and root == _host_home_root():
         return None
     return root
 

@@ -81,6 +81,25 @@ def test_policy_rejects_host_expanded_home_as_ssh_configured_root(monkeypatch):
     assert str(Path.home()) not in roots
 
 
+def test_policy_keeps_docker_configured_cwd_matching_host_home(monkeypatch):
+    from agent_tools.file_toolkit import backend_paths
+    from agent_tools.hermes_terminal_toolkit import terminal_tool
+
+    active = FakeEnv("/root", "docker", configured_cwd=None)
+    monkeypatch.setattr(terminal_tool, "get_active_env", lambda task_id: active)
+    monkeypatch.setattr(
+        terminal_tool,
+        "_get_env_config",
+        lambda: {"env_type": "docker", "cwd": str(Path.home()), "host_cwd": None},
+    )
+
+    roots = backend_paths.allowed_workspace_roots_for_task("task-docker-home")
+
+    assert "/workspace" in roots
+    assert "/root" in roots
+    assert str(Path.home()) in roots
+
+
 def test_policy_uses_singularity_active_cwd_without_global_workspace_root(monkeypatch):
     from agent_tools.file_toolkit import backend_paths
     from agent_tools.hermes_terminal_toolkit import terminal_tool
