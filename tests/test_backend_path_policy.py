@@ -2,10 +2,12 @@ from pathlib import Path
 
 
 class FakeEnv:
-    def __init__(self, cwd, env_type):
+    def __init__(self, cwd, env_type, configured_cwd=None):
         self.cwd = cwd
         self._hermes_env_type = env_type
-        self._hermes_configured_cwd = cwd
+        self._hermes_configured_cwd = (
+            configured_cwd if configured_cwd is not None else cwd
+        )
         self._hermes_host_cwd = None
 
 
@@ -59,6 +61,24 @@ def test_policy_allows_docker_workspace_even_when_cwd_is_root(monkeypatch):
         backend_paths.resolve_path_for_policy("/workspace/app.py", "task-docker")
         == "/workspace/app.py"
     )
+
+
+def test_policy_rejects_host_expanded_home_as_ssh_configured_root(monkeypatch):
+    from agent_tools.file_toolkit import backend_paths
+    from agent_tools.hermes_terminal_toolkit import terminal_tool
+
+    active = FakeEnv("/home/remote/project", "ssh", configured_cwd="~")
+    monkeypatch.setattr(terminal_tool, "get_active_env", lambda task_id: active)
+    monkeypatch.setattr(
+        terminal_tool,
+        "_get_env_config",
+        lambda: {"env_type": "ssh", "cwd": str(Path.home()), "host_cwd": None},
+    )
+
+    roots = backend_paths.allowed_workspace_roots_for_task("task-ssh-expanded")
+
+    assert "/home/remote/project" in roots
+    assert str(Path.home()) not in roots
 
 
 def test_policy_uses_singularity_active_cwd_without_global_workspace_root(monkeypatch):

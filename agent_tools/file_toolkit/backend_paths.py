@@ -24,7 +24,11 @@ def get_backend_path_context(task_id: str = "default") -> BackendPathContext:
 
     active_env = terminal_tool.get_active_env(task_id or "default")
     env_type = str(getattr(active_env, "_hermes_env_type", env_type) or env_type)
-    configured_cwd = configured_cwd or getattr(active_env, "_hermes_configured_cwd", None)
+    configured_cwd = _select_configured_cwd(
+        env_type,
+        config_value=configured_cwd,
+        metadata_value=getattr(active_env, "_hermes_configured_cwd", None),
+    )
     host_cwd = host_cwd or getattr(active_env, "_hermes_host_cwd", None)
 
     if env_type == "local":
@@ -74,7 +78,8 @@ def safe_write_roots_for_env(env, fallback_cwd=None) -> list[str]:
     candidates: list[str | Path | None] = [str(WORKDIR.resolve())]
     if env_type == "docker":
         candidates.append("/workspace")
-    candidates.extend([cwd, configured_cwd, host_cwd])
+    configured_root = _backend_configured_root(configured_cwd)
+    candidates.extend([cwd, configured_root, host_cwd])
     return _dedupe(_backend_root(candidate) for candidate in candidates)
 
 
@@ -122,6 +127,27 @@ def _backend_root(path) -> str | None:
     if not posixpath.isabs(normalized):
         return None
     return normalized
+
+
+def _select_configured_cwd(
+    env_type: str, *, config_value: str | None, metadata_value: str | None
+) -> str | None:
+    if env_type == "local":
+        return config_value or metadata_value
+    return _backend_configured_root(config_value) or _backend_configured_root(
+        metadata_value
+    )
+
+
+def _backend_configured_root(path) -> str | None:
+    root = _backend_root(path)
+    if root == _host_home_root():
+        return None
+    return root
+
+
+def _host_home_root() -> str:
+    return _normalize_backend_path(str(Path.home()))
 
 
 def _normalize_backend_path(path: str) -> str:
