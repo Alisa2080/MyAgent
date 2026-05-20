@@ -83,6 +83,54 @@ def test_policy_rejects_host_expanded_home_as_ssh_configured_root(monkeypatch):
     assert str(Path.home()) not in roots
 
 
+def test_policy_rejects_host_home_descendant_as_ssh_configured_root(monkeypatch):
+    from agent_tools.file_toolkit import backend_paths
+    from agent_tools.hermes_terminal_toolkit import terminal_tool
+
+    host_repo = str(Path.home() / "repo")
+    active = FakeEnv("/remote/project", "ssh", configured_cwd="~")
+    active._hermes_configured_cwd = None
+    monkeypatch.setattr(terminal_tool, "get_active_env", lambda task_id: active)
+    monkeypatch.setattr(
+        terminal_tool,
+        "_get_env_config",
+        lambda: {"env_type": "ssh", "cwd": host_repo, "host_cwd": None},
+    )
+
+    allowed_roots = backend_paths.allowed_workspace_roots_for_task(
+        "task-ssh-home-descendant"
+    )
+    safe_roots = backend_paths.safe_write_roots_for_env(
+        backend_paths.get_backend_path_context("task-ssh-home-descendant")
+    )
+
+    assert "/remote/project" in allowed_roots
+    assert "/remote/project" in safe_roots
+    assert host_repo not in allowed_roots
+    assert host_repo not in safe_roots
+
+
+def test_policy_keeps_docker_configured_cwd_under_host_home(monkeypatch):
+    from agent_tools.file_toolkit import backend_paths
+    from agent_tools.hermes_terminal_toolkit import terminal_tool
+
+    host_repo = str(Path.home() / "repo")
+    active = FakeEnv("/root/project", "docker", configured_cwd="/root/project")
+    active._hermes_configured_cwd = None
+    monkeypatch.setattr(terminal_tool, "get_active_env", lambda task_id: active)
+    monkeypatch.setattr(
+        terminal_tool,
+        "_get_env_config",
+        lambda: {"env_type": "docker", "cwd": host_repo, "host_cwd": None},
+    )
+
+    roots = backend_paths.allowed_workspace_roots_for_task("task-docker-host-repo")
+
+    assert "/workspace" in roots
+    assert "/root/project" in roots
+    assert host_repo in roots
+
+
 def test_policy_excludes_stale_docker_configured_cwd_matching_host_home(monkeypatch):
     from agent_tools.file_toolkit import backend_paths
     from agent_tools.hermes_terminal_toolkit import terminal_tool
@@ -192,6 +240,31 @@ def test_policy_prefers_local_active_configured_cwd_over_stale_global_config(
     assert ctx.configured_cwd == "/active-local"
     assert "/active-local" in roots
     assert "/stale-local" not in roots
+
+
+def test_policy_prefers_active_host_cwd_over_stale_global_config(monkeypatch):
+    from agent_tools.file_toolkit import backend_paths
+    from agent_tools.hermes_terminal_toolkit import terminal_tool
+
+    active = FakeEnv("/runtime-local", "local", configured_cwd="/active-local")
+    active._hermes_host_cwd = "/active-host"
+    monkeypatch.setattr(terminal_tool, "get_active_env", lambda task_id: active)
+    monkeypatch.setattr(
+        terminal_tool,
+        "_get_env_config",
+        lambda: {
+            "env_type": "local",
+            "cwd": "/stale-local",
+            "host_cwd": "/stale-host",
+        },
+    )
+
+    ctx = backend_paths.get_backend_path_context("task-local-host-cwd")
+    roots = backend_paths.allowed_workspace_roots_for_task("task-local-host-cwd")
+
+    assert ctx.host_cwd == "/active-host"
+    assert "/active-host" in roots
+    assert "/stale-host" not in roots
 
 
 def test_policy_uses_singularity_active_cwd_without_stale_config_root(monkeypatch):

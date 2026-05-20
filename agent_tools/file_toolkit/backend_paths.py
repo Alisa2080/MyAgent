@@ -29,7 +29,7 @@ def get_backend_path_context(task_id: str = "default") -> BackendPathContext:
         config_value=configured_cwd,
         metadata_value=getattr(active_env, "_hermes_configured_cwd", None),
     )
-    host_cwd = host_cwd or getattr(active_env, "_hermes_host_cwd", None)
+    host_cwd = getattr(active_env, "_hermes_host_cwd", None) or host_cwd
 
     if env_type == "local":
         cwd = _resolve_local_cwd(getattr(active_env, "cwd", None))
@@ -152,9 +152,19 @@ def _select_configured_cwd(
 
 def _backend_configured_root(path, env_type: str) -> str | None:
     root = _backend_root(path)
-    if env_type == "ssh" and root == _host_home_root():
+    if env_type == "ssh" and _is_host_home_or_descendant(root):
         return None
     return root
+
+
+def _is_host_home_or_descendant(path: str | None) -> bool:
+    if not path:
+        return False
+    host_home = _host_home_root()
+    try:
+        return posixpath.commonpath([path, host_home]) == host_home
+    except ValueError:
+        return False
 
 
 def _host_home_root() -> str:
