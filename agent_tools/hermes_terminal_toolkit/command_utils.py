@@ -5,7 +5,6 @@ from __future__ import annotations
 import logging
 import os
 import platform
-import re
 import threading
 import time
 from typing import Any
@@ -202,22 +201,131 @@ def _rewrite_real_sudo_invocations(command: str) -> tuple[str, bool]:
 
 
 def rewrite_compound_background(command: str) -> str:
-    """Rewrite `A && B &` into `A && { B & }` to avoid bash subshell waits."""
-    if "&" not in command:
+    """Wrap `A && B &` (or `A || B &`) to `A && { B & }` at depth 0.
+
+    Bash parses ``A && B &`` with `&&` tighter than `&`, so it forks a
+    subshell for the whole `A && B` compound and backgrounds it. Inside the
+    subshell, `B` runs foreground, so the subshell waits for `B` to finish.
+    Rewriting the tail preserves chain semantics while avoiding that wait.
+    """
+    n = len(command)
+    i = 0
+    paren_depth = 0
+    brace_depth = 0
+    last_chain_op_end = -1
+    rewrites: list[tuple[int, int]] = []
+
+    def ampersand_ends_statement(pos: int) -> bool:
+        j = pos + 1
+        while j < n and command[j] in " \t\r":
+            j += 1
+        return j >= n or command[j] == "\n" or command[j] == "#"
+
+    while i < n:
+        ch = command[i]
+
+        if ch == "\n" and paren_depth == 0 and brace_depth == 0:
+            last_chain_op_end = -1
+            i += 1
+            continue
+
+        if ch.isspace():
+            i += 1
+            continue
+
+        if ch == "#":
+            nl = command.find("\n", i)
+            if nl == -1:
+                break
+            i = nl
+            continue
+
+        if ch == "\\" and i + 1 < n:
+            i += 2
+            continue
+
+        if ch in ("'", '"'):
+            _, next_i = _read_shell_token(command, i)
+            i = max(next_i, i + 1)
+            continue
+
+        if ch == "(":
+            paren_depth += 1
+            i += 1
+            continue
+
+        if ch == ")":
+            paren_depth = max(0, paren_depth - 1)
+            i += 1
+            continue
+
+        if ch == "{" and i + 1 < n and (command[i + 1].isspace() or command[i + 1] == "\n"):
+            brace_depth += 1
+            i += 1
+            continue
+
+        if ch == "}" and brace_depth > 0:
+            brace_depth -= 1
+            last_chain_op_end = -1
+            i += 1
+            continue
+
+        if paren_depth > 0 or brace_depth > 0:
+            i += 1
+            continue
+
+        if command.startswith("&&", i) or command.startswith("||", i):
+            last_chain_op_end = i + 2
+            i += 2
+            continue
+
+        if ch == ";":
+            last_chain_op_end = -1
+            i += 1
+            continue
+
+        if ch == "|":
+            last_chain_op_end = -1
+            i += 1
+            continue
+
+        if ch == "&":
+            if i + 1 < n and command[i + 1] == ">":
+                i += 2
+                continue
+
+            j = i - 1
+            while j >= 0 and command[j].isspace():
+                j -= 1
+            if j >= 0 and command[j] in "<>":
+                i += 1
+                continue
+
+            if last_chain_op_end >= 0 and ampersand_ends_statement(i):
+                rewrites.append((last_chain_op_end, i))
+            last_chain_op_end = -1
+            i += 1
+            continue
+
+        _, next_i = _read_shell_token(command, i)
+        i = max(next_i, i + 1)
+
+    if not rewrites:
         return command
-    lines = command.splitlines()
-    rewritten = []
-    pattern = re.compile(r"^(?P<prefix>.*(?:&&|\|\||;))\s*(?P<tail>[^#].*?)\s*&\s*(?P<comment>#.*)?$")
-    for line in lines:
-        match = pattern.match(line)
-        if match:
-            prefix = match.group("prefix").rstrip()
-            tail = match.group("tail").strip()
-            comment = match.group("comment") or ""
-            rewritten.append(f"{prefix} {{ {tail} & }}{(' ' + comment) if comment else ''}")
-        else:
-            rewritten.append(line)
-    return "\n".join(rewritten)
+
+    result = command
+    for chain_end, amp_pos in reversed(rewrites):
+        insert_pos = chain_end
+        while insert_pos < amp_pos and result[insert_pos].isspace():
+            insert_pos += 1
+        prefix = result[:insert_pos]
+        middle = result[insert_pos:amp_pos]
+        suffix = result[amp_pos + 1 :]
+        if suffix.startswith("#"):
+            suffix = " " + suffix
+        result = prefix + "{ " + middle + "& }" + suffix
+
+    return result
 
 
 def transform_sudo_command(command: str | None) -> tuple[str | None, str | None]:

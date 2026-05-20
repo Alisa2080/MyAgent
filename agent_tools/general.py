@@ -2,9 +2,9 @@
 
 New code should import from the responsibility-specific modules:
 
-- `agent_tools.file_tools`
-- `agent_tools.web`
-- `agent_tools.memory_tools`
+- `agent_tools.public.files`
+- `agent_tools.public.web`
+- `agent_tools.public.memory`
 """
 
 from agent_tools.file_tools import file_info, list_directory
