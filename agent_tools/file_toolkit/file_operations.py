@@ -375,14 +375,14 @@ class ShellFileOperations(FileOperations):
     def stat_mtime(self, path: str) -> float | None:
         """Return file mtime from the terminal backend, or None if unavailable.
 
-        GNU stat (`stat -c %Y`) covers Linux containers and most SSH hosts.
+        GNU stat (`stat -c %Y %y`) covers Linux containers and most SSH hosts.
         BSD stat (`stat -f %m`) keeps the method useful for macOS SSH hosts.
         The caller decides how to degrade when no mtime can be sampled.
         """
         path = self._expand_path(path)
         quoted = self._escape_shell_arg(path)
         result = self._exec(
-            f"stat -c '%Y' {quoted} 2>/dev/null || stat -f '%m' {quoted} 2>/dev/null",
+            f"stat -c '%Y %y' {quoted} 2>/dev/null || stat -f '%m' {quoted} 2>/dev/null",
             timeout=10,
         )
         if result.exit_code != 0:
@@ -391,10 +391,17 @@ class ShellFileOperations(FileOperations):
             value = line.strip()
             if not value:
                 continue
+            parts = value.split(maxsplit=1)
             try:
-                return float(value)
+                seconds = float(parts[0])
             except ValueError:
                 return None
+            if len(parts) == 1:
+                return seconds
+            fraction_match = re.search(r"\.(\d+)", parts[1])
+            if fraction_match:
+                return float(int(seconds)) + float(f"0.{fraction_match.group(1)}")
+            return seconds
         return None
     
     def _unified_diff(self, old_content: str, new_content: str, filename: str) -> str:

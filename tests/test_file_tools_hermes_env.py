@@ -16,7 +16,11 @@ class FakeEnv:
 @pytest.fixture(autouse=True)
 def clear_file_ops_cache():
     file_tools.clear_file_ops_cache()
+    with file_tools._read_tracker_lock:
+        file_tools._read_tracker.clear()
     yield
+    with file_tools._read_tracker_lock:
+        file_tools._read_tracker.clear()
     file_tools.clear_file_ops_cache()
 
 
@@ -586,17 +590,22 @@ def test_patch_tool_move_file_tracks_source_and_destination(monkeypatch):
     monkeypatch.setattr(
         file_tools.file_state,
         "check_stale",
-        lambda task_id, path: stale_checked.append((task_id, path)) or None,
+        lambda task_id, path, *, current_mtime=None: stale_checked.append(
+            (task_id, path, current_mtime)
+        )
+        or None,
     )
     monkeypatch.setattr(
         file_tools,
         "_update_read_timestamp",
-        lambda path, task_id: timestamp_updates.append((path, task_id)),
+        lambda path, task_id: timestamp_updates.append((path, task_id)) or None,
     )
     monkeypatch.setattr(
         file_tools.file_state,
         "note_write",
-        lambda task_id, path: note_writes.append((task_id, path)),
+        lambda task_id, path, *, mtime=None: note_writes.append(
+            (task_id, path, mtime)
+        ),
     )
 
     raw = file_tools.patch_tool(
@@ -612,18 +621,242 @@ def test_patch_tool_move_file_tracks_source_and_destination(monkeypatch):
     ]
     assert set(lock_entries) == {"/workspace/source.txt", "/workspace/dest.txt"}
     assert stale_checked == [
-        ("task-move", "/workspace/source.txt"),
-        ("task-move", "/workspace/dest.txt"),
+        ("task-move", "/workspace/source.txt", None),
+        ("task-move", "/workspace/dest.txt", None),
     ]
     assert timestamp_updates == [
         ("source.txt", "task-move"),
         ("dest.txt", "task-move"),
     ]
     assert note_writes == [
-        ("task-move", "/workspace/source.txt"),
-        ("task-move", "/workspace/dest.txt"),
+        ("task-move", "/workspace/source.txt", None),
+        ("task-move", "/workspace/dest.txt", None),
     ]
     assert fake_ops.patches == [patch_content]
+
+
+def test_sample_mtime_degrades_when_backend_context_lookup_fails_without_host_stat(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        file_tools,
+        "get_backend_path_context",
+        lambda task_id: (_ for _ in ()).throw(RuntimeError("context unavailable")),
+    )
+    monkeypatch.setattr(
+        file_tools.os.path,
+        "getmtime",
+        lambda path: (_ for _ in ()).throw(AssertionError("host getmtime used")),
+    )
+
+    assert file_tools._sample_mtime_for_task(
+        "/workspace/notes.txt",
+        "docker-task",
+    ) is None
+
+
+def test_read_file_tool_uses_backend_mtime_for_non_local_dedup(monkeypatch):
+    from agent_tools.file_toolkit.result_models import ReadResult
+    from agent_tools.hermes_terminal_toolkit import terminal_tool
+
+    class DockerEnv:
+        cwd = "/workspace"
+        _hermes_env_type = "docker"
+        _hermes_configured_cwd = "/workspace"
+
+    class FakeFileOps:
+        def __init__(self):
+            self.reads = 0
+            self.stats = []
+
+        def stat_mtime(self, path):
+            self.stats.append(path)
+            return 1716200000.0
+
+        def read_file(self, path, offset=1, limit=500):
+            self.reads += 1
+            return ReadResult(
+                content="     1|hello",
+                total_lines=1,
+            )
+
+    fake_ops = FakeFileOps()
+    monkeypatch.setattr(
+        terminal_tool,
+        "_get_env_config",
+        lambda: {"env_type": "docker", "cwd": "/workspace", "host_cwd": None},
+    )
+    monkeypatch.setattr(terminal_tool, "get_active_env", lambda task_id: DockerEnv())
+    monkeypatch.setattr(file_tools, "_get_file_ops", lambda task_id: fake_ops)
+    monkeypatch.setattr(
+        file_tools.os.path,
+        "getmtime",
+        lambda path: (_ for _ in ()).throw(AssertionError("host getmtime used")),
+    )
+
+    first = json.loads(file_tools.read_file_tool("notes.txt", task_id="docker-task"))
+    second = json.loads(file_tools.read_file_tool("notes.txt", task_id="docker-task"))
+
+    assert "error" not in first
+    assert second["message"].startswith("File unchanged since last read")
+    assert fake_ops.reads == 1
+    assert fake_ops.stats == ["/workspace/notes.txt", "/workspace/notes.txt"]
+
+
+def test_read_file_tool_records_unknown_backend_mtime_explicitly(monkeypatch):
+    from agent_tools.file_toolkit.result_models import ReadResult
+    from agent_tools.hermes_terminal_toolkit import terminal_tool
+
+    class SSHEnv:
+        cwd = "/home/remote/project"
+        _hermes_env_type = "ssh"
+        _hermes_configured_cwd = "/home/remote/project"
+
+    class FakeFileOps:
+        def stat_mtime(self, path):
+            return None
+
+        def read_file(self, path, offset=1, limit=500):
+            return ReadResult(content="     1|hello", total_lines=1)
+
+    recorded = []
+    monkeypatch.setattr(
+        terminal_tool,
+        "_get_env_config",
+        lambda: {"env_type": "ssh", "cwd": "/home/remote/project", "host_cwd": None},
+    )
+    monkeypatch.setattr(terminal_tool, "get_active_env", lambda task_id: SSHEnv())
+    monkeypatch.setattr(file_tools, "_get_file_ops", lambda task_id: FakeFileOps())
+    monkeypatch.setattr(
+        file_tools.file_state,
+        "record_read",
+        lambda task_id, path, *, partial=False, mtime=None: recorded.append(
+            (task_id, path, partial, mtime)
+        ),
+    )
+    monkeypatch.setattr(
+        file_tools.os.path,
+        "getmtime",
+        lambda path: (_ for _ in ()).throw(AssertionError("host getmtime used")),
+    )
+
+    payload = json.loads(file_tools.read_file_tool("notes.txt", task_id="ssh-task"))
+
+    assert "error" not in payload
+    assert recorded == [("ssh-task", "/home/remote/project/notes.txt", False, None)]
+
+
+def test_read_file_tool_repeats_full_read_when_backend_mtime_unknown(monkeypatch):
+    from agent_tools.file_toolkit.result_models import ReadResult
+    from agent_tools.hermes_terminal_toolkit import terminal_tool
+
+    class SSHEnv:
+        cwd = "/home/remote/project"
+        _hermes_env_type = "ssh"
+        _hermes_configured_cwd = "/home/remote/project"
+
+    class FakeFileOps:
+        def __init__(self):
+            self.reads = 0
+
+        def stat_mtime(self, path):
+            return None
+
+        def read_file(self, path, offset=1, limit=500):
+            self.reads += 1
+            return ReadResult(
+                content=f"     1|hello {self.reads}",
+                total_lines=1,
+            )
+
+    fake_ops = FakeFileOps()
+    monkeypatch.setattr(
+        terminal_tool,
+        "_get_env_config",
+        lambda: {"env_type": "ssh", "cwd": "/home/remote/project", "host_cwd": None},
+    )
+    monkeypatch.setattr(terminal_tool, "get_active_env", lambda task_id: SSHEnv())
+    monkeypatch.setattr(file_tools, "_get_file_ops", lambda task_id: fake_ops)
+    monkeypatch.setattr(
+        file_tools.os.path,
+        "getmtime",
+        lambda path: (_ for _ in ()).throw(AssertionError("host getmtime used")),
+    )
+
+    first = json.loads(file_tools.read_file_tool("notes.txt", task_id="ssh-task"))
+    second = json.loads(file_tools.read_file_tool("notes.txt", task_id="ssh-task"))
+
+    assert first["content"] == "     1|hello 1"
+    assert second["content"] == "     1|hello 2"
+    assert "dedup" not in second
+    assert fake_ops.reads == 2
+
+
+def test_write_file_tool_passes_backend_mtime_to_stale_and_note_write(monkeypatch):
+    from agent_tools.file_toolkit.result_models import WriteResult
+    from agent_tools.hermes_terminal_toolkit import terminal_tool
+
+    class DockerEnv:
+        cwd = "/workspace"
+        _hermes_env_type = "docker"
+        _hermes_configured_cwd = "/workspace"
+
+    class FakeFileOps:
+        def __init__(self):
+            self.stats = []
+
+        def stat_mtime(self, path):
+            self.stats.append(path)
+            return 1716200300.0
+
+        def write_file(self, path, content):
+            return WriteResult(bytes_written=len(content))
+
+    class NoopLock:
+        def __enter__(self):
+            return None
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    fake_ops = FakeFileOps()
+    stale_checks = []
+    note_writes = []
+    monkeypatch.setattr(
+        terminal_tool,
+        "_get_env_config",
+        lambda: {"env_type": "docker", "cwd": "/workspace", "host_cwd": None},
+    )
+    monkeypatch.setattr(terminal_tool, "get_active_env", lambda task_id: DockerEnv())
+    monkeypatch.setattr(file_tools, "_get_file_ops", lambda task_id: fake_ops)
+    monkeypatch.setattr(file_tools.file_state, "lock_path", lambda path: NoopLock())
+    monkeypatch.setattr(
+        file_tools.file_state,
+        "check_stale",
+        lambda task_id, path, *, current_mtime=None: stale_checks.append(
+            (task_id, path, current_mtime)
+        )
+        or None,
+    )
+    monkeypatch.setattr(
+        file_tools.file_state,
+        "note_write",
+        lambda task_id, path, *, mtime=None: note_writes.append((task_id, path, mtime)),
+    )
+    monkeypatch.setattr(
+        file_tools.os.path,
+        "getmtime",
+        lambda path: (_ for _ in ()).throw(AssertionError("host getmtime used")),
+    )
+
+    payload = json.loads(
+        file_tools.write_file_tool("notes.txt", "hello", task_id="docker-task")
+    )
+
+    assert "error" not in payload
+    assert stale_checks == [("docker-task", "/workspace/notes.txt", 1716200300.0)]
+    assert note_writes == [("docker-task", "/workspace/notes.txt", 1716200300.0)]
+    assert fake_ops.stats == ["/workspace/notes.txt", "/workspace/notes.txt"]
 
 
 def test_write_file_tool_smokes_real_local_hermes_env(tmp_path, monkeypatch):

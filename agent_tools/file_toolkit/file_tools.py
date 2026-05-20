@@ -8,7 +8,10 @@ import os
 import threading
 from pathlib import Path
 
-from agent_tools.file_toolkit.backend_paths import resolve_path_for_policy
+from agent_tools.file_toolkit.backend_paths import (
+    get_backend_path_context,
+    resolve_path_for_policy,
+)
 from agent_tools.file_toolkit.binary_extensions import has_binary_extension
 from agent_tools.file_toolkit.file_operations import (
     ShellFileOperations,
@@ -106,6 +109,43 @@ def _get_live_tracking_cwd(task_id: str = "default") -> str | None:
 def _resolve_path_for_task(filepath: str, task_id: str = "default") -> Path:
     """Resolve *filepath* against backend-aware live cwd when possible."""
     return Path(resolve_path_for_policy(filepath, task_id))
+
+
+def _sample_mtime_for_task(resolved_path: str, task_id: str = "default") -> float | None:
+    """Sample mtime from the correct filesystem for this task.
+
+    Local environments use host os.path.getmtime. Docker, Singularity, and SSH
+    use the active Hermes backend shell. A None result is an explicit
+    degradation: dedup and external-drift checks are skipped, but file_state
+    still records reads/writes for sibling-writer coordination.
+    """
+    effective_task_id = task_id or "default"
+    try:
+        ctx = get_backend_path_context(effective_task_id)
+    except Exception:
+        logger.debug("Failed to resolve backend context for mtime sampling", exc_info=True)
+        return None
+
+    if ctx is not None and ctx.env_type != "local":
+        try:
+            file_ops = _get_file_ops(effective_task_id)
+            stat_mtime = getattr(file_ops, "stat_mtime", None)
+            if stat_mtime is None:
+                return None
+            return stat_mtime(str(resolved_path))
+        except Exception:
+            logger.debug(
+                "Failed to sample backend mtime for %s in task %s",
+                resolved_path,
+                effective_task_id,
+                exc_info=True,
+            )
+            return None
+
+    try:
+        return os.path.getmtime(str(resolved_path))
+    except OSError:
+        return None
 
 
 def _is_blocked_device(filepath: str) -> bool:
@@ -360,43 +400,40 @@ def read_file_tool(path: str, offset: int = 1, limit: int = 500, task_id: str = 
             cached_mtime = task_data.get("dedup", {}).get(dedup_key)
 
         if cached_mtime is not None:
-            try:
-                current_mtime = os.path.getmtime(resolved_str)
-                if current_mtime == cached_mtime:
-                    # Count repeated stub returns so weak tool-followers that
-                    # ignore the "refer to earlier result" hint don't burn
-                    # their iteration budget in an infinite read loop.  After
-                    # 2 stubs for the same key we escalate to a hard block
-                    # mirroring the count>=4 path on real reads.
-                    with _read_tracker_lock:
-                        hits = task_data["dedup_hits"].get(dedup_key, 0) + 1
-                        task_data["dedup_hits"][dedup_key] = hits
-                        _cap_read_tracker_data(task_data)
+            current_mtime = _sample_mtime_for_task(resolved_str, task_id)
+            if current_mtime is not None and current_mtime == cached_mtime:
+                # Count repeated stub returns so weak tool-followers that
+                # ignore the "refer to earlier result" hint don't burn
+                # their iteration budget in an infinite read loop.  After
+                # 2 stubs for the same key we escalate to a hard block
+                # mirroring the count>=4 path on real reads.
+                with _read_tracker_lock:
+                    hits = task_data["dedup_hits"].get(dedup_key, 0) + 1
+                    task_data["dedup_hits"][dedup_key] = hits
+                    _cap_read_tracker_data(task_data)
 
-                    if hits >= 2:
-                        return json.dumps({
-                            "error": (
-                                f"BLOCKED: You have called read_file on this "
-                                f"exact region {hits + 1} times and the file "
-                                "has NOT changed. STOP calling read_file for "
-                                "this path — the content from your earlier "
-                                "read_file result in this conversation is "
-                                "still current. Proceed with your task using "
-                                "the information you already have."
-                            ),
-                            "path": path,
-                            "already_read": hits + 1,
-                        }, ensure_ascii=False)
-
+                if hits >= 2:
                     return json.dumps({
-                        "status": "unchanged",
-                        "message": _READ_DEDUP_STATUS_MESSAGE,
+                        "error": (
+                            f"BLOCKED: You have called read_file on this "
+                            f"exact region {hits + 1} times and the file "
+                            "has NOT changed. STOP calling read_file for "
+                            "this path — the content from your earlier "
+                            "read_file result in this conversation is "
+                            "still current. Proceed with your task using "
+                            "the information you already have."
+                        ),
                         "path": path,
-                        "dedup": True,
-                        "content_returned": False,
+                        "already_read": hits + 1,
                     }, ensure_ascii=False)
-            except OSError:
-                pass  # stat failed — fall through to full read
+
+                return json.dumps({
+                    "status": "unchanged",
+                    "message": _READ_DEDUP_STATUS_MESSAGE,
+                    "path": path,
+                    "dedup": True,
+                    "content_returned": False,
+                }, ensure_ascii=False)
 
         # ── Perform the read ──────────────────────────────────────────
         file_ops = _get_file_ops(task_id)
@@ -443,6 +480,9 @@ def read_file_tool(path: str, offset: int = 1, limit: int = 500, task_id: str = 
                 "to keep context usage efficient."
             ))
 
+        # Sample outside _read_tracker_lock. Non-local backends may shell out.
+        _mtime_now = _sample_mtime_for_task(resolved_str, task_id)
+
         # ── Track for consecutive-loop detection ──────────────────────
         read_key = ("read", path, offset, limit)
         with _read_tracker_lock:
@@ -468,12 +508,12 @@ def read_file_tool(path: str, offset: int = 1, limit: int = 500, task_id: str = 
             # 1. Dedup: skip identical re-reads of unchanged files.
             # 2. Staleness: warn on write/patch if the file changed since
             #    the agent last read it (external edit, concurrent agent, etc.).
-            try:
-                _mtime_now = os.path.getmtime(resolved_str)
+            if _mtime_now is None:
+                task_data["dedup"].pop(dedup_key, None)
+                task_data.setdefault("read_timestamps", {}).pop(resolved_str, None)
+            else:
                 task_data["dedup"][dedup_key] = _mtime_now
                 task_data.setdefault("read_timestamps", {})[resolved_str] = _mtime_now
-            except OSError:
-                pass  # Can't stat — skip tracking for this entry
 
             # Bound the per-task containers so a long CLI session doesn't
             # accumulate megabytes of dict/set state.  See _cap_read_tracker_data.
@@ -488,7 +528,12 @@ def read_file_tool(path: str, offset: int = 1, limit: int = 500, task_id: str = 
         # isn't nested under ours.
         try:
             _partial = (offset > 1) or bool(result_dict.get("truncated"))
-            file_state.record_read(task_id, resolved_str, partial=_partial)
+            file_state.record_read(
+                task_id,
+                resolved_str,
+                partial=_partial,
+                mtime=_mtime_now,
+            )
         except Exception:
             logger.debug("file_state.record_read failed", exc_info=True)
 
@@ -594,7 +639,7 @@ def _invalidate_dedup_for_path(filepath: str, task_id: str) -> None:
             del dedup[k]
 
 
-def _update_read_timestamp(filepath: str, task_id: str) -> None:
+def _update_read_timestamp(filepath: str, task_id: str = "default") -> float | None:
     """Record the file's current modification time after a successful write.
 
     Called after write_file and patch so that consecutive edits by the
@@ -602,20 +647,24 @@ def _update_read_timestamp(filepath: str, task_id: str) -> None:
     refreshes the stored timestamp to match the file's new state.
 
     Also invalidates the dedup cache for the written path so that
-    subsequent reads return fresh content (fixes #13144).
+    subsequent reads return fresh content (fixes #13144). Returns the
+    sampled mtime, or None when the active backend cannot provide one.
     """
     # Invalidate dedup first (before acquiring lock for timestamp update).
     _invalidate_dedup_for_path(filepath, task_id)
     try:
         resolved = str(_resolve_path_for_task(filepath, task_id))
-        current_mtime = os.path.getmtime(resolved)
     except (OSError, ValueError):
-        return
+        return None
+    current_mtime = _sample_mtime_for_task(resolved, task_id)
+    if current_mtime is None:
+        return None
     with _read_tracker_lock:
         task_data = _read_tracker.get(task_id)
         if task_data is not None:
             task_data.setdefault("read_timestamps", {})[resolved] = current_mtime
             _cap_read_tracker_data(task_data)
+    return current_mtime
 
 
 def _check_file_staleness(filepath: str, task_id: str) -> str | None:
@@ -636,9 +685,8 @@ def _check_file_staleness(filepath: str, task_id: str) -> str | None:
         read_mtime = task_data.get("read_timestamps", {}).get(resolved)
     if read_mtime is None:
         return None  # File was never read — nothing to compare against
-    try:
-        current_mtime = os.path.getmtime(resolved)
-    except OSError:
+    current_mtime = _sample_mtime_for_task(resolved, task_id)
+    if current_mtime is None:
         return None  # Can't stat — file may have been deleted, let write handle it
     if current_mtime != read_mtime:
         return (
@@ -736,7 +784,12 @@ def write_file_tool(path: str, content: str, task_id: str = "default") -> str:
         with file_state.lock_path(_resolved):
             # Cross-agent staleness wins over per-task warning when both
             # fire — its message names the sibling subagent.
-            cross_warning = file_state.check_stale(task_id, _resolved)
+            current_mtime = _sample_mtime_for_task(_resolved, task_id)
+            cross_warning = file_state.check_stale(
+                task_id,
+                _resolved,
+                current_mtime=current_mtime,
+            )
             stale_warning = _check_file_staleness(path, task_id)
             file_ops = _get_file_ops(task_id)
             result = file_ops.write_file(path, content)
@@ -746,9 +799,9 @@ def write_file_tool(path: str, content: str, task_id: str = "default") -> str:
                 result_dict["_warning"] = effective_warning
             # Refresh stamps after the successful write so consecutive
             # writes by this task don't trigger false staleness warnings.
-            _update_read_timestamp(path, task_id)
             if not result_dict.get("error"):
-                file_state.note_write(task_id, _resolved)
+                write_mtime = _update_read_timestamp(path, task_id)
+                file_state.note_write(task_id, _resolved, mtime=write_mtime)
         return json.dumps(result_dict, ensure_ascii=False)
     except Exception as e:
         if _is_expected_write_exception(e):
@@ -808,7 +861,16 @@ def patch_tool(mode: str = "replace", path: str = None, old_string: str = None,
                 except Exception:
                     _r = None
                 _path_to_resolved[_p] = _r
-                _cross = file_state.check_stale(task_id, _r) if _r else None
+                _current_mtime = _sample_mtime_for_task(_r, task_id) if _r else None
+                _cross = (
+                    file_state.check_stale(
+                        task_id,
+                        _r,
+                        current_mtime=_current_mtime,
+                    )
+                    if _r
+                    else None
+                )
                 _sw = _cross or _check_file_staleness(_p, task_id)
                 if _sw:
                     stale_warnings.append(_sw)
@@ -835,10 +897,10 @@ def patch_tool(mode: str = "replace", path: str = None, old_string: str = None,
             # consecutive edits by this task don't trigger false warnings.
             if not result_dict.get("error"):
                 for _p in _paths_to_check:
-                    _update_read_timestamp(_p, task_id)
+                    _write_mtime = _update_read_timestamp(_p, task_id)
                     _r = _path_to_resolved.get(_p)
                     if _r:
-                        file_state.note_write(task_id, _r)
+                        file_state.note_write(task_id, _r, mtime=_write_mtime)
         # Hint when old_string not found — saves iterations where the agent
         # retries with stale content instead of re-reading the file.
         # Suppressed when patch_replace already attached a rich "Did you mean?"

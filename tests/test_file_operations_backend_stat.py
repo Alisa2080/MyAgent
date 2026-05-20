@@ -20,11 +20,25 @@ def test_stat_mtime_uses_backend_shell_and_parses_epoch_seconds():
     assert file_ops.stat_mtime("/workspace/notes.txt") == 1716200000.0
 
     command, cwd, kwargs = env.commands[0]
-    assert "stat -c '%Y'" in command
+    assert "stat -c '%Y %y'" in command
     assert "stat -f '%m'" in command
     assert "'/workspace/notes.txt'" in command
     assert cwd == "/workspace"
     assert kwargs == {"timeout": 10}
+
+
+def test_stat_mtime_parses_fractional_gnu_output():
+    env = RecordingEnv(
+        [
+            {
+                "output": "1716200000 2024-05-20 12:26:40.123456789 +0000\n",
+                "returncode": 0,
+            }
+        ]
+    )
+    file_ops = ShellFileOperations(env)
+
+    assert file_ops.stat_mtime("/workspace/notes.txt") == 1716200000.123456789
 
 
 def test_stat_mtime_returns_none_when_backend_stat_fails():
