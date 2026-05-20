@@ -60,9 +60,13 @@ def allowed_workspace_roots_for_task(task_id: str = "default") -> list[str]:
 
 
 def safe_write_roots_for_env(env, fallback_cwd=None) -> list[str]:
-    env_type = str(
+    explicit_env_type = (
         getattr(env, "env_type", None)
         or getattr(env, "_hermes_env_type", None)
+    )
+    env_type = str(
+        explicit_env_type
+        or _env_type_from_class_name(env)
         or "local"
     )
     cwd = getattr(env, "cwd", None) or fallback_cwd
@@ -80,6 +84,14 @@ def safe_write_roots_for_env(env, fallback_cwd=None) -> list[str]:
     configured_root = _backend_configured_root(configured_cwd, env_type)
     candidates.extend([cwd, configured_root])
     return _dedupe(_backend_root(candidate) for candidate in candidates)
+
+
+def _env_type_from_class_name(env) -> str | None:
+    class_name = env.__class__.__name__.lower()
+    for env_type in ("docker", "ssh", "singularity"):
+        if env_type in class_name:
+            return env_type
+    return None
 
 
 def resolve_path_for_policy(path, task_id: str = "default") -> str:

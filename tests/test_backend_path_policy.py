@@ -13,6 +13,33 @@ class FakeEnv:
         self._hermes_host_cwd = None
 
 
+class DockerEnvironment:
+    def __init__(self, cwd):
+        self.cwd = cwd
+
+
+class SSHEnvironment:
+    def __init__(self, cwd):
+        self.cwd = cwd
+
+
+def test_safe_write_roots_for_untagged_docker_environment_uses_class_name_fallback():
+    from agent_tools.file_toolkit import backend_paths
+
+    roots = backend_paths.safe_write_roots_for_env(DockerEnvironment("/workspace"))
+
+    assert "/workspace" in roots
+
+
+def test_safe_write_roots_for_untagged_ssh_environment_uses_class_name_fallback():
+    from agent_tools.file_toolkit import backend_paths
+
+    roots = backend_paths.safe_write_roots_for_env(SSHEnvironment("/home/remote/project"))
+
+    assert "/home/remote/project" in roots
+    assert "/workspace" not in roots
+
+
 def test_policy_uses_active_ssh_cwd_without_host_expanding_tilde(monkeypatch):
     from agent_tools.file_toolkit import backend_paths
     from agent_tools.hermes_terminal_toolkit import terminal_tool

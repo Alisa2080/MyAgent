@@ -45,21 +45,34 @@ def _invoke_toolnode(tool, tool_name, args, thread_id):
 
 
 def test_file_tool_schemas_do_not_expose_task_id():
-    from agent_tools.public.files import patch, read_file, search_files, write_file
+    from agent_tools.public.files import (
+        file_info,
+        list_directory,
+        patch,
+        read_file,
+        search_files,
+        write_file,
+    )
 
+    assert "task_id" not in list_directory.args
     assert "task_id" not in read_file.args
     assert "task_id" not in write_file.args
     assert "task_id" not in patch.args
     assert "task_id" not in search_files.args
+    assert "task_id" not in file_info.args
+    assert "runtime" not in list_directory.args
     assert "runtime" not in read_file.args
     assert "runtime" not in write_file.args
     assert "runtime" not in patch.args
     assert "runtime" not in search_files.args
+    assert "runtime" not in file_info.args
 
+    assert "path" in list_directory.args
     assert "path" in read_file.args
     assert "path" in write_file.args
     assert "mode" in patch.args
     assert "pattern" in search_files.args
+    assert "path" in file_info.args
 
 
 def test_read_file_injects_runtime_thread_as_task_id(monkeypatch):
@@ -561,6 +574,131 @@ def test_read_file_rejects_docker_skill_cache_path(monkeypatch):
     assert resolve_calls == [
         ("skills/.hub/index-cache/prompt.md", expected_task_id)
     ]
+
+
+def test_list_directory_uses_active_docker_backend_not_host_safe_path(monkeypatch):
+    import agent_tools.public.files as file_tools
+    from agent_tools.hermes_terminal_toolkit import terminal_tool
+
+    runtime = SimpleNamespace(execution_info=SimpleNamespace(thread_id="docker-list"))
+    active = FakeEnv("/workspace", "docker")
+    commands = []
+
+    class FakeFileOps:
+        @staticmethod
+        def _escape_shell_arg(value):
+            return "'" + str(value).replace("'", "'\"'\"'") + "'"
+
+        def _exec(self, command, timeout=None):
+            commands.append(command)
+            if "[ ! -e" in command:
+                return SimpleNamespace(exit_code=0, stdout="")
+            if "[ ! -d" in command:
+                return SimpleNamespace(exit_code=0, stdout="")
+            return SimpleNamespace(
+                exit_code=0,
+                stdout="/workspace/src\n/workspace/README.md\n/workspace/.hidden\n/workspace/node_modules\n",
+            )
+
+    monkeypatch.setattr(terminal_tool, "get_active_env", lambda task_id: active)
+    monkeypatch.setattr(
+        terminal_tool,
+        "_get_env_config",
+        lambda: {"env_type": "docker", "cwd": "/workspace", "host_cwd": None},
+    )
+    monkeypatch.setattr(
+        file_tools,
+        "safe_path",
+        lambda path: (_ for _ in ()).throw(AssertionError("host safe_path used")),
+    )
+    monkeypatch.setattr(file_tools, "_get_file_ops", lambda task_id: FakeFileOps(), raising=False)
+
+    raw = file_tools._list_directory_impl(path=".", recursive=False, include_hidden=False, limit=10, runtime=runtime)
+    payload = json.loads(raw)
+
+    assert payload["ok"] is True
+    assert payload["data"] == {
+        "path": ".",
+        "entries": [
+            {"type": "directory", "path": "/workspace/src"},
+            {"type": "file", "path": "/workspace/README.md"},
+        ],
+        "total": 2,
+    }
+    assert commands
+
+
+def test_file_info_uses_active_ssh_backend_not_host_path_info(monkeypatch):
+    import agent_tools.public.files as file_tools
+    from agent_tools.hermes_terminal_toolkit import terminal_tool
+
+    runtime = SimpleNamespace(execution_info=SimpleNamespace(thread_id="ssh-info"))
+    active = FakeEnv("/home/remote/project", "ssh", configured_cwd="~")
+    commands = []
+
+    class FakeFileOps:
+        @staticmethod
+        def _escape_shell_arg(value):
+            return "'" + str(value).replace("'", "'\"'\"'") + "'"
+
+        def _exec(self, command, timeout=None):
+            commands.append(command)
+            if "[ ! -e" in command:
+                return SimpleNamespace(exit_code=0, stdout="")
+            if "stat -c" in command:
+                return SimpleNamespace(
+                    exit_code=0,
+                    stdout="/home/remote/project/notes.txt\tfile\t12\t1716200000\t1716200001\n",
+                )
+            raise AssertionError(command)
+
+    monkeypatch.setattr(terminal_tool, "get_active_env", lambda task_id: active)
+    monkeypatch.setattr(
+        terminal_tool,
+        "_get_env_config",
+        lambda: {"env_type": "ssh", "cwd": "~", "host_cwd": None},
+    )
+    monkeypatch.setattr(
+        file_tools,
+        "path_info",
+        lambda path: (_ for _ in ()).throw(AssertionError("host path_info used")),
+    )
+    monkeypatch.setattr(file_tools, "_get_file_ops", lambda task_id: FakeFileOps(), raising=False)
+
+    raw = file_tools._file_info_impl(path="notes.txt", runtime=runtime)
+    payload = json.loads(raw)
+
+    assert payload["ok"] is True
+    assert payload["data"]["path"] == "/home/remote/project/notes.txt"
+    assert payload["data"]["type"] == "file"
+    assert payload["data"]["size_bytes"] == 12
+    assert "modified_utc" in payload["data"]
+    assert "created_utc" in payload["data"]
+    assert commands
+
+
+def test_list_directory_rejects_ssh_path_outside_active_cwd_without_backend_exec(monkeypatch):
+    import agent_tools.public.files as file_tools
+    from agent_tools.hermes_terminal_toolkit import terminal_tool
+
+    runtime = SimpleNamespace(execution_info=SimpleNamespace(thread_id="ssh-list-reject"))
+    active = FakeEnv("/home/remote/project", "ssh", configured_cwd="~")
+    calls = []
+
+    monkeypatch.setattr(terminal_tool, "get_active_env", lambda task_id: active)
+    monkeypatch.setattr(
+        terminal_tool,
+        "_get_env_config",
+        lambda: {"env_type": "ssh", "cwd": "~", "host_cwd": None},
+    )
+    monkeypatch.setattr(file_tools, "_get_file_ops", lambda task_id: calls.append(task_id), raising=False)
+
+    raw = file_tools._list_directory_impl(path="/etc", recursive=False, include_hidden=False, limit=10, runtime=runtime)
+    payload = json.loads(raw)
+
+    assert payload["ok"] is False
+    assert payload["error"]["code"] == "invalid_path"
+    assert calls == []
 
 
 def test_write_file_toolnode_injects_runtime_thread(monkeypatch):

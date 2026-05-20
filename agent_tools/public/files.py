@@ -2,6 +2,7 @@ import json
 import os
 import posixpath
 import re
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
 
@@ -12,10 +13,12 @@ from agent_core.session_context import hermes_task_id_from_runtime
 from agent_core.workspace import WORKDIR, safe_path
 from agent_tools.file_toolkit.backend_paths import (
     allowed_workspace_roots_for_task,
+    get_backend_path_context,
     path_is_under_any_root,
     resolve_path_for_policy,
 )
 from agent_tools.file_toolkit.file_tools import (
+    _get_file_ops,
     patch_tool,
     read_file_tool,
     search_tool,
@@ -23,7 +26,6 @@ from agent_tools.file_toolkit.file_tools import (
 )
 from agent_tools.file_toolkit.patch_parser import parse_v4a_patch
 from agent_tools.shared.common import DEFAULT_EXCLUDE_DIRS, path_info, relative_path
-from agent_tools.shared.file_policy import ensure_workspace_path
 from agent_tools.shared.tool_output import tool_error, tool_ok
 
 
@@ -208,12 +210,102 @@ def _ensure_patch_paths_for_task(patch_content: str | None, task_id: str) -> str
     return None
 
 
-@tool("list_directory", args_schema=ListDirectoryInput)
-def list_directory(path: str = ".", recursive: bool = False, include_hidden: bool = False, limit: int = 200) -> str:
-    """List files and directories inside the workspace."""
-    path_error = ensure_workspace_path(path)
-    if path_error:
-        return tool_error("list_directory", path_error, code="invalid_path")
+def _utc_iso(timestamp: str) -> str:
+    return datetime.fromtimestamp(float(timestamp), tz=timezone.utc).isoformat()
+
+
+def _backend_entry_is_visible(path: str, include_hidden: bool) -> bool:
+    parts = [part for part in posixpath.normpath(path).split("/") if part]
+    if any(part in DEFAULT_EXCLUDE_DIRS for part in parts):
+        return False
+    if not include_hidden and any(part.startswith(".") for part in parts):
+        return False
+    if posixpath.basename(path).endswith(".bak"):
+        return False
+    return True
+
+
+def _parse_find_entry(line: str) -> tuple[str, str]:
+    if "\t" in line:
+        type_char, entry_path = line.split("\t", 1)
+        return ("directory" if type_char == "d" else "file", entry_path)
+    entry_path = line.strip()
+    basename = posixpath.basename(entry_path)
+    return ("file" if "." in basename else "directory", entry_path)
+
+
+def _list_directory_backend(
+    path: str,
+    resolved_path: str,
+    *,
+    recursive: bool,
+    include_hidden: bool,
+    limit: int,
+    task_id: str,
+) -> str:
+    file_ops = _get_file_ops(task_id)
+    quoted = file_ops._escape_shell_arg(resolved_path)
+    if file_ops._exec(f"if [ ! -e {quoted} ]; then exit 1; fi", timeout=10).exit_code != 0:
+        return tool_error("list_directory", f"Directory not found: {path}", code="not_found")
+    if file_ops._exec(f"if [ ! -d {quoted} ]; then exit 1; fi", timeout=10).exit_code != 0:
+        return tool_error("list_directory", f"Not a directory: {path}", code="not_directory")
+
+    depth_arg = "" if recursive else "-maxdepth 1"
+    result = file_ops._exec(
+        f"find {quoted} -mindepth 1 {depth_arg} -printf '%y\\t%p\\n' 2>/dev/null",
+        timeout=30,
+    )
+    if result.exit_code != 0:
+        return tool_error("list_directory", "Failed to list directory.", code="tool_error")
+
+    entries: list[tuple[str, str]] = []
+    for line in result.stdout.splitlines():
+        if not line.strip():
+            continue
+        entry_type, entry_path = _parse_find_entry(line)
+        if _backend_entry_is_visible(entry_path, include_hidden):
+            entries.append((entry_type, entry_path))
+
+    entries.sort(key=lambda item: (item[0] == "file", item[1].lower()))
+    max_entries = max(limit, 0)
+    items = [
+        {"type": entry_type, "path": entry_path}
+        for entry_type, entry_path in entries[:max_entries]
+    ]
+    total = len(entries)
+    return tool_ok(
+        "list_directory",
+        data={"path": path, "entries": items, "total": total},
+        message="Directory listed.",
+        meta={"truncated": total > len(items)},
+    )
+
+
+def _list_directory_impl(
+    path: str = ".",
+    recursive: bool = False,
+    include_hidden: bool = False,
+    limit: int = 200,
+    runtime: ToolRuntime | None = None,
+) -> str:
+    task_id = _task_id_from_runtime(runtime)
+    read_error = _ensure_read_allowed_for_task(path, task_id)
+    if read_error:
+        code = "access_denied" if read_error.startswith("Access denied:") else "invalid_path"
+        return tool_error("list_directory", read_error, code=code)
+
+    ctx = get_backend_path_context(task_id)
+    resolved_path = resolve_path_for_policy(path, task_id)
+    if ctx.env_type != "local":
+        return _list_directory_backend(
+            path,
+            resolved_path,
+            recursive=recursive,
+            include_hidden=include_hidden,
+            limit=limit,
+            task_id=task_id,
+        )
+
     try:
         dir_path = safe_path(path)
         if not dir_path.exists():
@@ -258,6 +350,24 @@ def list_directory(path: str = ".", recursive: bool = False, include_hidden: boo
         )
     except Exception as exc:
         return tool_error("list_directory", str(exc))
+
+
+@tool("list_directory", args_schema=ListDirectoryInput)
+def list_directory(
+    runtime: ToolRuntime,
+    path: str = ".",
+    recursive: bool = False,
+    include_hidden: bool = False,
+    limit: int = 200,
+) -> str:
+    """List files and directories inside the workspace."""
+    return _list_directory_impl(
+        path=path,
+        recursive=recursive,
+        include_hidden=include_hidden,
+        limit=limit,
+        runtime=runtime,
+    )
 
 
 def _read_file_impl(path: str, offset: int = 1, limit: int = 500, runtime: ToolRuntime | None = None) -> str:
@@ -411,12 +521,57 @@ def search_files(
     )
 
 
-@tool("file_info", args_schema=FileInfoInput)
-def file_info(path: str) -> str:
-    """Return metadata for a workspace file or directory."""
-    path_error = ensure_workspace_path(path)
-    if path_error:
-        return tool_error("file_info", path_error, code="invalid_path", data={"path": path})
+def _file_info_backend(path: str, resolved_path: str, *, task_id: str) -> str:
+    file_ops = _get_file_ops(task_id)
+    quoted = file_ops._escape_shell_arg(resolved_path)
+    if file_ops._exec(f"if [ ! -e {quoted} ]; then exit 1; fi", timeout=10).exit_code != 0:
+        return tool_error("file_info", f"Path not found: {path}", code="not_found", data={"path": path})
+
+    result = file_ops._exec(
+        f"stat -c '%n\\t%F\\t%s\\t%Y\\t%Z' {quoted}",
+        timeout=10,
+    )
+    if result.exit_code != 0 or not result.stdout.strip():
+        return tool_error("file_info", "Failed to inspect path.", code="tool_error", data={"path": path})
+
+    stat_line = result.stdout.splitlines()[0]
+    parts = stat_line.split("\t", 4)
+    if len(parts) != 5:
+        return tool_error("file_info", "Unexpected stat output.", code="tool_error", data={"path": path})
+
+    backend_path, type_text, size_text, modified, created = parts
+    info = {
+        "path": backend_path,
+        "type": "directory" if type_text == "directory" else "file",
+        "size_bytes": int(size_text),
+        "modified_utc": _utc_iso(modified),
+        "created_utc": _utc_iso(created),
+    }
+    if info["type"] == "directory":
+        entries_result = file_ops._exec(
+            f"find {quoted} -mindepth 1 -maxdepth 1 -printf '.\\n' 2>/dev/null | wc -l",
+            timeout=10,
+        )
+        if entries_result.exit_code == 0:
+            try:
+                info["entries"] = int(entries_result.stdout.strip() or "0")
+            except ValueError:
+                info["entries"] = 0
+    return tool_ok("file_info", data=info, message="Path inspected.")
+
+
+def _file_info_impl(path: str, runtime: ToolRuntime | None = None) -> str:
+    task_id = _task_id_from_runtime(runtime)
+    read_error = _ensure_read_allowed_for_task(path, task_id)
+    if read_error:
+        code = "access_denied" if read_error.startswith("Access denied:") else "invalid_path"
+        return tool_error("file_info", read_error, code=code, data={"path": path})
+
+    ctx = get_backend_path_context(task_id)
+    resolved_path = resolve_path_for_policy(path, task_id)
+    if ctx.env_type != "local":
+        return _file_info_backend(path, resolved_path, task_id=task_id)
+
     try:
         target = safe_path(path)
         if not target.exists():
@@ -424,3 +579,9 @@ def file_info(path: str) -> str:
         return tool_ok("file_info", data=path_info(target), message="Path inspected.")
     except Exception as exc:
         return tool_error("file_info", str(exc))
+
+
+@tool("file_info", args_schema=FileInfoInput)
+def file_info(path: str, runtime: ToolRuntime) -> str:
+    """Return metadata for a workspace file or directory."""
+    return _file_info_impl(path=path, runtime=runtime)
