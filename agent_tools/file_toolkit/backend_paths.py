@@ -50,7 +50,15 @@ def get_backend_path_context(task_id: str = "default") -> BackendPathContext:
 
 def allowed_workspace_roots_for_task(task_id: str = "default") -> list[str]:
     ctx = get_backend_path_context(task_id)
-    return safe_write_roots_for_env(ctx, fallback_cwd=ctx.cwd)
+    if ctx.env_type == "local":
+        return safe_write_roots_for_env(ctx, fallback_cwd=ctx.cwd)
+
+    candidates: list[str | Path | None] = [
+        str(WORKDIR.resolve()),
+        ctx.host_cwd,
+        *safe_write_roots_for_env(ctx, fallback_cwd=ctx.cwd),
+    ]
+    return _dedupe(_backend_root(candidate) for candidate in candidates)
 
 
 def safe_write_roots_for_env(env, fallback_cwd=None) -> list[str]:
@@ -75,7 +83,7 @@ def safe_write_roots_for_env(env, fallback_cwd=None) -> list[str]:
         ]
         return _dedupe(_local_root(candidate) for candidate in candidates)
 
-    candidates: list[str | Path | None] = [str(WORKDIR.resolve())]
+    candidates: list[str | Path | None] = []
     if env_type == "docker":
         candidates.append("/workspace")
     configured_root = _backend_configured_root(configured_cwd, env_type)
@@ -92,6 +100,10 @@ def resolve_path_for_policy(path, task_id: str = "default") -> str:
         return str(p.resolve())
 
     path_str = str(path)
+    if path_str.startswith("~"):
+        raise ValueError(
+            "Cannot resolve non-local policy paths starting with '~' without backend HOME"
+        )
     if posixpath.isabs(path_str):
         return _normalize_backend_path(path_str)
     return _normalize_backend_path(posixpath.join(ctx.cwd, path_str))
@@ -134,9 +146,9 @@ def _select_configured_cwd(
 ) -> str | None:
     if env_type == "local":
         return config_value or metadata_value
-    return _backend_configured_root(config_value, env_type) or _backend_configured_root(
+    return _backend_configured_root(
         metadata_value, env_type
-    )
+    ) or _backend_configured_root(config_value, env_type)
 
 
 def _backend_configured_root(path, env_type: str) -> str | None:
