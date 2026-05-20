@@ -257,6 +257,18 @@ class ShellFileOperations(FileOperations):
         """Return backend roots allowed in addition to the host safe root."""
         return safe_write_roots_for_env(self.env, fallback_cwd=self._effective_cwd())
 
+    def _host_safe_root_applies(self) -> bool:
+        """Return whether the host safe root should be used for this env."""
+        env_type = (
+            getattr(self.env, "env_type", None)
+            or getattr(self.env, "_hermes_env_type", None)
+        )
+        if env_type is not None:
+            return str(env_type) == "local"
+
+        class_name = self.env.__class__.__name__.lower()
+        return not any(env_type in class_name for env_type in ("docker", "ssh", "singularity"))
+
     def _resolve_write_safety_path(self, path: str) -> str:
         """Resolve a write target the same way shell execution will."""
         expanded = os.path.expanduser(str(path))
@@ -266,10 +278,13 @@ class ShellFileOperations(FileOperations):
 
     def _is_write_denied_for_path(self, path: str) -> bool:
         extra_roots = self._extra_safe_write_roots()
+        safe_root_applies = self._host_safe_root_applies()
+        if not safe_root_applies and not extra_roots:
+            return True
         return _is_write_denied(
             self._resolve_write_safety_path(path),
             extra_allowed_roots=extra_roots,
-            safe_root_applies=not extra_roots,
+            safe_root_applies=safe_root_applies,
         )
     
     def _has_command(self, cmd: str) -> bool:

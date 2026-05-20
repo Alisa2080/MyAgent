@@ -421,6 +421,32 @@ def test_shell_file_operations_keeps_workspace_root_denied_for_ssh(
     assert env.commands == []
 
 
+def test_shell_file_operations_denies_host_safe_root_for_untagged_ssh_without_backend_roots(
+    tmp_path, monkeypatch
+):
+    safe_root = tmp_path / "host-workdir"
+    safe_root.mkdir()
+    monkeypatch.setenv("AGENT_WRITE_SAFE_ROOT", str(safe_root))
+
+    class SSHEnvironment:
+        cwd = "~"
+
+        def __init__(self):
+            self.commands = []
+
+        def execute(self, command, **kwargs):
+            self.commands.append((command, kwargs))
+            return {"output": "", "returncode": 0}
+
+    env = SSHEnvironment()
+    file_ops = file_tools.ShellFileOperations(env)
+
+    result = file_ops.write_file(str(safe_root / "leak.txt"), "bad")
+
+    assert "Write denied" in result.error
+    assert env.commands == []
+
+
 @pytest.mark.parametrize("env_type", ["docker", "ssh"])
 def test_shell_file_operations_denies_host_safe_root_absolute_path_outside_backend_roots(
     tmp_path, monkeypatch, env_type
