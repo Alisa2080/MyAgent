@@ -8,6 +8,7 @@ import os
 import threading
 from pathlib import Path
 
+from agent_tools.file_toolkit.backend_paths import resolve_path_for_policy
 from agent_tools.file_toolkit.binary_extensions import has_binary_extension
 from agent_tools.file_toolkit.file_operations import (
     ShellFileOperations,
@@ -103,14 +104,8 @@ def _get_live_tracking_cwd(task_id: str = "default") -> str | None:
     return live_cwd or None
 
 def _resolve_path_for_task(filepath: str, task_id: str = "default") -> Path:
-    """Resolve *filepath* against the task's live terminal cwd when possible."""
-    p = Path(filepath).expanduser()
-    if not p.is_absolute():
-        base = _get_live_tracking_cwd(task_id) or os.environ.get(
-            "TERMINAL_CWD", os.getcwd()
-        )
-        p = Path(base) / p
-    return p.resolve()
+    """Resolve *filepath* against backend-aware live cwd when possible."""
+    return Path(resolve_path_for_policy(filepath, task_id))
 
 
 def _is_blocked_device(filepath: str) -> bool:

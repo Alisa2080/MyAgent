@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 import pytest
 
@@ -121,6 +122,8 @@ def test_get_live_tracking_cwd_ignores_stale_cached_wrapper_without_active_env(
 def test_resolve_path_uses_active_hermes_env_cwd_without_cached_wrapper(
     tmp_path, monkeypatch
 ):
+    from agent_tools.hermes_terminal_toolkit import terminal_tool
+
     fake_env = FakeEnv()
     fake_env.cwd = str(tmp_path)
     active_calls = []
@@ -134,7 +137,12 @@ def test_resolve_path_uses_active_hermes_env_cwd_without_cached_wrapper(
         create_calls.append(task_id)
         return fake_env
 
-    monkeypatch.setattr(file_tools, "get_active_env", fake_get_active_env, raising=False)
+    monkeypatch.setattr(
+        terminal_tool,
+        "_get_env_config",
+        lambda: {"env_type": "local", "cwd": str(tmp_path)},
+    )
+    monkeypatch.setattr(terminal_tool, "get_active_env", fake_get_active_env)
     monkeypatch.setattr(
         file_tools, "get_or_create_active_env", fake_get_or_create_active_env
     )
@@ -144,6 +152,30 @@ def test_resolve_path_uses_active_hermes_env_cwd_without_cached_wrapper(
     assert resolved == tmp_path / "notes.txt"
     assert active_calls == ["task-a"]
     assert create_calls == []
+
+
+def test_resolve_path_for_task_uses_backend_policy_for_ssh_active_cwd(monkeypatch):
+    from agent_tools.hermes_terminal_toolkit import terminal_tool
+
+    class SSHEnv:
+        cwd = "/home/remote/project"
+        _hermes_env_type = "ssh"
+        _hermes_configured_cwd = "~"
+
+    monkeypatch.setattr(
+        terminal_tool,
+        "_get_env_config",
+        lambda: {"env_type": "ssh", "cwd": "~"},
+    )
+    monkeypatch.setattr(
+        terminal_tool,
+        "get_active_env",
+        lambda task_id: SSHEnv(),
+    )
+
+    resolved = file_tools._resolve_path_for_task("notes.txt", "task-ssh")
+
+    assert resolved == Path("/home/remote/project/notes.txt")
 
 
 def test_write_file_tool_denies_relative_path_when_local_env_cwd_outside_safe_root(
