@@ -231,7 +231,7 @@ def test_write_file_rejects_live_cwd_outside_workspace(monkeypatch, tmp_path):
     assert resolve_calls == [("leak.txt", expected_task_id)]
 
 
-def test_write_file_allows_local_backend_configured_cwd_and_forwards_original_path(
+def test_write_file_denies_local_backend_configured_cwd_outside_workspace(
     monkeypatch, tmp_path
 ):
     import agent_tools.public.files as file_tools
@@ -268,10 +268,9 @@ def test_write_file_allows_local_backend_configured_cwd_and_forwards_original_pa
     raw = file_tools._write_file_impl(path="leak.txt", content="leak", runtime=runtime)
     payload = json.loads(raw)
 
-    assert payload["ok"] is True
-    assert calls == [
-        {"path": "leak.txt", "content": "leak", "task_id": expected_task_id}
-    ]
+    assert payload["ok"] is False
+    assert payload["error"]["code"] == "invalid_path"
+    assert calls == []
     assert resolve_calls == [("leak.txt", expected_task_id)]
 
 

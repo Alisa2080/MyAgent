@@ -128,7 +128,7 @@ def test_policy_keeps_docker_configured_cwd_under_host_home(monkeypatch):
 
     assert "/workspace" in roots
     assert "/root/project" in roots
-    assert host_repo in roots
+    assert host_repo not in roots
 
 
 def test_policy_excludes_stale_docker_configured_cwd_matching_host_home(monkeypatch):
@@ -166,7 +166,7 @@ def test_safe_write_roots_excludes_distinct_host_cwd_for_non_local_backend():
     assert "/host/project" not in roots
 
 
-def test_allowed_workspace_roots_keep_host_workspace_for_docker_task(monkeypatch):
+def test_allowed_workspace_roots_exclude_host_workspace_for_docker_task(monkeypatch):
     from agent_core.workspace import WORKDIR
     from agent_tools.file_toolkit import backend_paths
     from agent_tools.hermes_terminal_toolkit import terminal_tool
@@ -181,8 +181,10 @@ def test_allowed_workspace_roots_keep_host_workspace_for_docker_task(monkeypatch
 
     roots = backend_paths.allowed_workspace_roots_for_task("task-docker-public")
 
-    assert str(WORKDIR.resolve()) in roots
+    assert str(WORKDIR.resolve()) not in roots
     assert "/workspace" in roots
+    assert "/root/project" in roots
+    assert "/app" in roots
 
 
 @pytest.mark.parametrize("path", ["~", "~/outside.txt", "~user/file"])
@@ -236,10 +238,12 @@ def test_policy_prefers_local_active_configured_cwd_over_stale_global_config(
 
     ctx = backend_paths.get_backend_path_context("task-local-configured")
     roots = backend_paths.allowed_workspace_roots_for_task("task-local-configured")
+    safe_roots = backend_paths.safe_write_roots_for_env(ctx)
 
     assert ctx.configured_cwd == "/active-local"
-    assert "/active-local" in roots
+    assert "/active-local" not in roots
     assert "/stale-local" not in roots
+    assert safe_roots == []
 
 
 def test_policy_prefers_active_host_cwd_over_stale_global_config(monkeypatch):
@@ -261,10 +265,12 @@ def test_policy_prefers_active_host_cwd_over_stale_global_config(monkeypatch):
 
     ctx = backend_paths.get_backend_path_context("task-local-host-cwd")
     roots = backend_paths.allowed_workspace_roots_for_task("task-local-host-cwd")
+    safe_roots = backend_paths.safe_write_roots_for_env(ctx)
 
     assert ctx.host_cwd == "/active-host"
-    assert "/active-host" in roots
+    assert "/active-host" not in roots
     assert "/stale-host" not in roots
+    assert safe_roots == []
 
 
 def test_policy_uses_singularity_active_cwd_without_stale_config_root(monkeypatch):
@@ -306,7 +312,7 @@ def test_allowed_workspace_roots_exclude_non_local_active_host_cwd(monkeypatch):
 
     roots = backend_paths.allowed_workspace_roots_for_task("task-docker-host-cwd")
 
-    assert str(WORKDIR.resolve()) in roots
+    assert str(WORKDIR.resolve()) not in roots
     assert "/workspace" in roots
     assert "/root/project" in roots
     assert "/app" in roots

@@ -66,7 +66,10 @@ def _is_under_root(path: str, root: str) -> bool:
 
 
 def is_write_denied(
-    path: str, extra_allowed_roots: Optional[Iterable[str]] = None
+    path: str,
+    extra_allowed_roots: Optional[Iterable[str]] = None,
+    *,
+    safe_root_applies: bool = True,
 ) -> bool:
     """Return True if path is blocked by the write denylist or safe root."""
     home = os.path.realpath(os.path.expanduser("~"))
@@ -78,15 +81,25 @@ def is_write_denied(
         if resolved.startswith(prefix):
             return True
 
-    safe_root = get_safe_write_root()
-    if safe_root and not _is_under_root(resolved, safe_root):
-        for root in extra_allowed_roots or []:
-            try:
-                allowed_root = os.path.realpath(os.path.expanduser(str(root)))
-            except Exception:
-                continue
+    allowed_roots = []
+    for root in extra_allowed_roots or []:
+        try:
+            allowed_roots.append(os.path.realpath(os.path.expanduser(str(root))))
+        except Exception:
+            continue
+
+    safe_root = get_safe_write_root() if safe_root_applies else None
+    if safe_root and _is_under_root(resolved, safe_root):
+        return False
+
+    if allowed_roots:
+        for allowed_root in allowed_roots:
             if _is_under_root(resolved, allowed_root):
                 return False
+        if not safe_root_applies:
+            return True
+
+    if safe_root:
         return True
 
     return False

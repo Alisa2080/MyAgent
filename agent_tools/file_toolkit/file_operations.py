@@ -43,9 +43,18 @@ from agent_tools.file_toolkit.result_models import (
 )
 
 
-def _is_write_denied(path: str, extra_allowed_roots: Optional[List[str]] = None) -> bool:
+def _is_write_denied(
+    path: str,
+    extra_allowed_roots: Optional[List[str]] = None,
+    *,
+    safe_root_applies: bool = True,
+) -> bool:
     """Return True if path is blocked by the shared write safety policy."""
-    return _shared_is_write_denied(path, extra_allowed_roots=extra_allowed_roots)
+    return _shared_is_write_denied(
+        path,
+        extra_allowed_roots=extra_allowed_roots,
+        safe_root_applies=safe_root_applies,
+    )
 
 
 # =============================================================================
@@ -256,9 +265,11 @@ class ShellFileOperations(FileOperations):
         return os.path.normpath(expanded)
 
     def _is_write_denied_for_path(self, path: str) -> bool:
+        extra_roots = self._extra_safe_write_roots()
         return _is_write_denied(
             self._resolve_write_safety_path(path),
-            extra_allowed_roots=self._extra_safe_write_roots(),
+            extra_allowed_roots=extra_roots,
+            safe_root_applies=not extra_roots,
         )
     
     def _has_command(self, cmd: str) -> bool:

@@ -178,7 +178,7 @@ def test_resolve_path_for_task_uses_backend_policy_for_ssh_active_cwd(monkeypatc
     assert resolved == Path("/home/remote/project/notes.txt")
 
 
-def test_write_file_tool_allows_relative_path_in_active_local_env_cwd(
+def test_write_file_tool_denies_relative_path_in_active_local_env_cwd_outside_safe_root(
     tmp_path, monkeypatch
 ):
     safe_root = tmp_path / "safe-root"
@@ -206,12 +206,8 @@ def test_write_file_tool_allows_relative_path_in_active_local_env_cwd(
     raw = file_tools.write_file_tool("notes.txt", "leak", task_id="task-safe")
     payload = json.loads(raw)
 
-    assert "error" not in payload
-    assert payload["bytes_written"] == 4
-    assert [kwargs["cwd"] for _, kwargs in env.commands] == [
-        str(outside_root),
-        str(outside_root),
-    ]
+    assert "Write denied" in payload["error"]
+    assert env.commands == []
 
 
 def test_shell_file_operations_allows_workspace_writes_for_docker_safe_root(
@@ -423,6 +419,58 @@ def test_shell_file_operations_keeps_workspace_root_denied_for_ssh(
 
     assert "Write denied" in result.error
     assert env.commands == []
+
+
+@pytest.mark.parametrize("env_type", ["docker", "ssh"])
+def test_shell_file_operations_denies_host_safe_root_absolute_path_outside_backend_roots(
+    tmp_path, monkeypatch, env_type
+):
+    safe_root = tmp_path / "host-workdir"
+    safe_root.mkdir()
+    monkeypatch.setenv("AGENT_WRITE_SAFE_ROOT", str(safe_root))
+    target = safe_root / "outside-backend.txt"
+
+    class BackendEnvironment:
+        _hermes_env_type = env_type
+        cwd = "/workspace" if env_type == "docker" else "/home/remote/project"
+
+        def __init__(self):
+            self.commands = []
+
+        def execute(self, command, **kwargs):
+            self.commands.append((command, kwargs))
+            return {"output": "", "returncode": 0}
+
+    env = BackendEnvironment()
+    file_ops = file_tools.ShellFileOperations(env)
+
+    result = file_ops.write_file(str(target), "hello")
+
+    assert "Write denied" in result.error
+    assert env.commands == []
+
+
+def test_invalidate_dedup_for_path_resolves_with_supplied_task_id(monkeypatch):
+    resolved_for_task = "/task-a/notes.txt"
+    file_tools._read_tracker.clear()
+    file_tools._read_tracker["task-a"] = {
+        "dedup": {
+            (resolved_for_task, 1, 500): 123.0,
+            ("/task-a/other.txt", 1, 500): 456.0,
+        }
+    }
+
+    def fake_resolve_path_for_task(filepath, task_id):
+        return Path(f"/{task_id}/{filepath}")
+
+    monkeypatch.setattr(
+        file_tools, "_resolve_path_for_task", fake_resolve_path_for_task
+    )
+
+    file_tools._invalidate_dedup_for_path("notes.txt", "task-a")
+
+    assert (resolved_for_task, 1, 500) not in file_tools._read_tracker["task-a"]["dedup"]
+    assert ("/task-a/other.txt", 1, 500) in file_tools._read_tracker["task-a"]["dedup"]
 
 
 def test_patch_tool_move_file_tracks_source_and_destination(monkeypatch):

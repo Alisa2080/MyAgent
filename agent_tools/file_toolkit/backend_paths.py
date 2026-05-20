@@ -51,12 +51,11 @@ def get_backend_path_context(task_id: str = "default") -> BackendPathContext:
 def allowed_workspace_roots_for_task(task_id: str = "default") -> list[str]:
     ctx = get_backend_path_context(task_id)
     if ctx.env_type == "local":
-        return safe_write_roots_for_env(ctx, fallback_cwd=ctx.cwd)
+        return _dedupe(_local_root(candidate) for candidate in [WORKDIR])
 
-    candidates: list[str | Path | None] = [
-        str(WORKDIR.resolve()),
-        *safe_write_roots_for_env(ctx, fallback_cwd=ctx.cwd),
-    ]
+    candidates: list[str | Path | None] = safe_write_roots_for_env(
+        ctx, fallback_cwd=ctx.cwd
+    )
     return _dedupe(_backend_root(candidate) for candidate in candidates)
 
 
@@ -73,14 +72,7 @@ def safe_write_roots_for_env(env, fallback_cwd=None) -> list[str]:
     host_cwd = getattr(env, "host_cwd", None) or getattr(env, "_hermes_host_cwd", None)
 
     if env_type == "local":
-        candidates = [
-            WORKDIR,
-            os.environ.get("TERMINAL_CWD"),
-            cwd,
-            configured_cwd,
-            host_cwd,
-        ]
-        return _dedupe(_local_root(candidate) for candidate in candidates)
+        return []
 
     candidates: list[str | Path | None] = []
     if env_type == "docker":
@@ -152,7 +144,9 @@ def _select_configured_cwd(
 
 def _backend_configured_root(path, env_type: str) -> str | None:
     root = _backend_root(path)
-    if env_type == "ssh" and _is_host_home_or_descendant(root):
+    if _is_host_workspace_or_descendant(root):
+        return None
+    if _is_host_home_or_descendant(root):
         return None
     return root
 
@@ -163,6 +157,16 @@ def _is_host_home_or_descendant(path: str | None) -> bool:
     host_home = _host_home_root()
     try:
         return posixpath.commonpath([path, host_home]) == host_home
+    except ValueError:
+        return False
+
+
+def _is_host_workspace_or_descendant(path: str | None) -> bool:
+    if not path:
+        return False
+    host_workspace = _normalize_backend_path(str(WORKDIR.resolve()))
+    try:
+        return posixpath.commonpath([path, host_workspace]) == host_workspace
     except ValueError:
         return False
 
