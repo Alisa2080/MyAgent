@@ -2,6 +2,16 @@ import json
 from types import SimpleNamespace
 
 
+class FakeEnv:
+    def __init__(self, cwd, env_type, configured_cwd=None):
+        self.cwd = cwd
+        self._hermes_env_type = env_type
+        self._hermes_configured_cwd = (
+            configured_cwd if configured_cwd is not None else cwd
+        )
+        self._hermes_host_cwd = None
+
+
 def _invoke_toolnode(tool, tool_name, args, thread_id):
     from langchain_core.messages import AIMessage
     from langgraph.graph import MessagesState, StateGraph
@@ -137,7 +147,7 @@ def test_read_file_rejects_live_cwd_outside_workspace(monkeypatch, tmp_path):
     runtime = SimpleNamespace(execution_info=SimpleNamespace(thread_id="outside-read"))
     expected_task_id = hermes_task_id_from_thread_id("outside-read")
 
-    def fake_resolve_path_for_task(path, task_id):
+    def fake_resolve_path_for_policy(path, task_id):
         resolve_calls.append((path, task_id))
         return outside_path
 
@@ -145,7 +155,12 @@ def test_read_file_rejects_live_cwd_outside_workspace(monkeypatch, tmp_path):
         calls.append(kwargs)
         return json.dumps({"path": "leak.txt", "content": "secret\n"})
 
-    monkeypatch.setattr(file_tools, "_resolve_path_for_task", fake_resolve_path_for_task)
+    monkeypatch.setattr(
+        file_tools,
+        "resolve_path_for_policy",
+        fake_resolve_path_for_policy,
+        raising=False,
+    )
     monkeypatch.setattr(file_tools, "read_file_tool", fake_read_file_tool)
 
     raw = file_tools._read_file_impl(path="leak.txt", offset=1, limit=20, runtime=runtime)
@@ -191,7 +206,7 @@ def test_write_file_rejects_live_cwd_outside_workspace(monkeypatch, tmp_path):
     runtime = SimpleNamespace(execution_info=SimpleNamespace(thread_id="outside-write"))
     expected_task_id = hermes_task_id_from_thread_id("outside-write")
 
-    def fake_resolve_path_for_task(path, task_id):
+    def fake_resolve_path_for_policy(path, task_id):
         resolve_calls.append((path, task_id))
         return outside_path
 
@@ -199,7 +214,12 @@ def test_write_file_rejects_live_cwd_outside_workspace(monkeypatch, tmp_path):
         calls.append(kwargs)
         return json.dumps({"path": "leak.txt", "bytes_written": 4})
 
-    monkeypatch.setattr(file_tools, "_resolve_path_for_task", fake_resolve_path_for_task)
+    monkeypatch.setattr(
+        file_tools,
+        "resolve_path_for_policy",
+        fake_resolve_path_for_policy,
+        raising=False,
+    )
     monkeypatch.setattr(file_tools, "write_file_tool", fake_write_file_tool)
 
     raw = file_tools._write_file_impl(path="leak.txt", content="leak", runtime=runtime)
@@ -211,7 +231,7 @@ def test_write_file_rejects_live_cwd_outside_workspace(monkeypatch, tmp_path):
     assert resolve_calls == [("leak.txt", expected_task_id)]
 
 
-def test_write_file_rejects_local_backend_live_cwd_outside_workspace(
+def test_write_file_allows_local_backend_configured_cwd_and_forwards_original_path(
     monkeypatch, tmp_path
 ):
     import agent_tools.public.files as file_tools
@@ -224,7 +244,7 @@ def test_write_file_rejects_local_backend_live_cwd_outside_workspace(
     runtime = SimpleNamespace(execution_info=SimpleNamespace(thread_id="local-outside"))
     expected_task_id = hermes_task_id_from_thread_id("local-outside")
 
-    def fake_resolve_path_for_task(path, task_id):
+    def fake_resolve_path_for_policy(path, task_id):
         resolve_calls.append((path, task_id))
         return outside_path
 
@@ -235,8 +255,9 @@ def test_write_file_rejects_local_backend_live_cwd_outside_workspace(
     )
     monkeypatch.setattr(
         file_tools,
-        "_resolve_path_for_task",
-        fake_resolve_path_for_task,
+        "resolve_path_for_policy",
+        fake_resolve_path_for_policy,
+        raising=False,
     )
     monkeypatch.setattr(
         file_tools,
@@ -247,9 +268,10 @@ def test_write_file_rejects_local_backend_live_cwd_outside_workspace(
     raw = file_tools._write_file_impl(path="leak.txt", content="leak", runtime=runtime)
     payload = json.loads(raw)
 
-    assert payload["ok"] is False
-    assert payload["error"]["code"] == "invalid_path"
-    assert calls == []
+    assert payload["ok"] is True
+    assert calls == [
+        {"path": "leak.txt", "content": "leak", "task_id": expected_task_id}
+    ]
     assert resolve_calls == [("leak.txt", expected_task_id)]
 
 
@@ -264,7 +286,7 @@ def test_write_file_allows_live_cwd_inside_workspace_and_forwards_original_path(
     runtime = SimpleNamespace(execution_info=SimpleNamespace(thread_id="inside-write"))
     expected_task_id = hermes_task_id_from_thread_id("inside-write")
 
-    def fake_resolve_path_for_task(path, task_id):
+    def fake_resolve_path_for_policy(path, task_id):
         resolve_calls.append((path, task_id))
         return file_tools.WORKDIR / "subdir" / path
 
@@ -272,7 +294,12 @@ def test_write_file_allows_live_cwd_inside_workspace_and_forwards_original_path(
         calls.append(kwargs)
         return json.dumps({"path": "notes.txt", "bytes_written": 5})
 
-    monkeypatch.setattr(file_tools, "_resolve_path_for_task", fake_resolve_path_for_task)
+    monkeypatch.setattr(
+        file_tools,
+        "resolve_path_for_policy",
+        fake_resolve_path_for_policy,
+        raising=False,
+    )
     monkeypatch.setattr(file_tools, "write_file_tool", fake_write_file_tool)
 
     raw = file_tools._write_file_impl(path="notes.txt", content="hello", runtime=runtime)
@@ -303,7 +330,7 @@ def test_write_file_allows_docker_workspace_resolved_path_and_forwards_original_
         lambda: {"env_type": "docker", "cwd": "/root"},
     )
 
-    def fake_resolve_path_for_task(path, task_id):
+    def fake_resolve_path_for_policy(path, task_id):
         resolve_calls.append((path, task_id))
         return f"/workspace/project/{path}"
 
@@ -311,7 +338,12 @@ def test_write_file_allows_docker_workspace_resolved_path_and_forwards_original_
         calls.append(kwargs)
         return json.dumps({"path": "notes.txt", "bytes_written": 5})
 
-    monkeypatch.setattr(file_tools, "_resolve_path_for_task", fake_resolve_path_for_task)
+    monkeypatch.setattr(
+        file_tools,
+        "resolve_path_for_policy",
+        fake_resolve_path_for_policy,
+        raising=False,
+    )
     monkeypatch.setattr(file_tools, "write_file_tool", fake_write_file_tool)
 
     raw = file_tools._write_file_impl(path="notes.txt", content="hello", runtime=runtime)
@@ -322,6 +354,80 @@ def test_write_file_allows_docker_workspace_resolved_path_and_forwards_original_
     assert calls == [
         {"path": "notes.txt", "content": "hello", "task_id": expected_task_id}
     ]
+
+
+def test_write_file_allows_active_ssh_cwd_path_and_forwards_original_path(
+    monkeypatch,
+):
+    import agent_tools.public.files as file_tools
+    from agent_core.session_context import hermes_task_id_from_thread_id
+    from agent_tools.hermes_terminal_toolkit import terminal_tool
+
+    calls = []
+    runtime = SimpleNamespace(execution_info=SimpleNamespace(thread_id="ssh-write"))
+    expected_task_id = hermes_task_id_from_thread_id("ssh-write")
+    active = FakeEnv("/home/remote/project", "ssh", configured_cwd="~")
+
+    monkeypatch.setattr(terminal_tool, "get_active_env", lambda task_id: active)
+    monkeypatch.setattr(
+        terminal_tool,
+        "_get_env_config",
+        lambda: {"env_type": "ssh", "cwd": "~", "host_cwd": None},
+    )
+
+    def fake_write_file_tool(**kwargs):
+        calls.append(kwargs)
+        return json.dumps({"path": "/home/remote/project/notes.txt", "bytes_written": 5})
+
+    monkeypatch.setattr(file_tools, "write_file_tool", fake_write_file_tool)
+
+    raw = file_tools._write_file_impl(
+        path="/home/remote/project/notes.txt",
+        content="hello",
+        runtime=runtime,
+    )
+    payload = json.loads(raw)
+
+    assert payload["ok"] is True
+    assert calls == [
+        {
+            "path": "/home/remote/project/notes.txt",
+            "content": "hello",
+            "task_id": expected_task_id,
+        }
+    ]
+
+
+def test_write_file_rejects_ssh_absolute_path_outside_active_cwd(monkeypatch):
+    import agent_tools.public.files as file_tools
+    from agent_tools.hermes_terminal_toolkit import terminal_tool
+
+    calls = []
+    runtime = SimpleNamespace(execution_info=SimpleNamespace(thread_id="ssh-reject"))
+    active = FakeEnv("/home/remote/project", "ssh", configured_cwd="~")
+
+    monkeypatch.setattr(terminal_tool, "get_active_env", lambda task_id: active)
+    monkeypatch.setattr(
+        terminal_tool,
+        "_get_env_config",
+        lambda: {"env_type": "ssh", "cwd": "~", "host_cwd": None},
+    )
+    monkeypatch.setattr(
+        file_tools,
+        "write_file_tool",
+        lambda **kwargs: calls.append(kwargs) or json.dumps({"bytes_written": 4}),
+    )
+
+    raw = file_tools._write_file_impl(
+        path="/home/remote/other/leak.txt",
+        content="leak",
+        runtime=runtime,
+    )
+    payload = json.loads(raw)
+
+    assert payload["ok"] is False
+    assert payload["error"]["code"] == "invalid_path"
+    assert calls == []
 
 
 def test_read_file_allows_docker_workspace_resolved_path_and_forwards_original_path(
@@ -342,7 +448,7 @@ def test_read_file_allows_docker_workspace_resolved_path_and_forwards_original_p
         lambda: {"env_type": "docker", "cwd": "/root"},
     )
 
-    def fake_resolve_path_for_task(path, task_id):
+    def fake_resolve_path_for_policy(path, task_id):
         resolve_calls.append((path, task_id))
         return f"/workspace/project/{path}"
 
@@ -350,7 +456,12 @@ def test_read_file_allows_docker_workspace_resolved_path_and_forwards_original_p
         calls.append(kwargs)
         return json.dumps({"path": "notes.txt", "content": "hello\n"})
 
-    monkeypatch.setattr(file_tools, "_resolve_path_for_task", fake_resolve_path_for_task)
+    monkeypatch.setattr(
+        file_tools,
+        "resolve_path_for_policy",
+        fake_resolve_path_for_policy,
+        raising=False,
+    )
     monkeypatch.setattr(file_tools, "read_file_tool", fake_read_file_tool)
 
     raw = file_tools._read_file_impl(path="notes.txt", offset=1, limit=20, runtime=runtime)
@@ -360,6 +471,48 @@ def test_read_file_allows_docker_workspace_resolved_path_and_forwards_original_p
     assert resolve_calls == [("notes.txt", expected_task_id)]
     assert calls == [
         {"path": "notes.txt", "offset": 1, "limit": 20, "task_id": expected_task_id}
+    ]
+
+
+def test_read_file_allows_singularity_active_cwd_path(monkeypatch):
+    import agent_tools.public.files as file_tools
+    from agent_core.session_context import hermes_task_id_from_thread_id
+    from agent_tools.hermes_terminal_toolkit import terminal_tool
+
+    calls = []
+    runtime = SimpleNamespace(execution_info=SimpleNamespace(thread_id="singularity-read"))
+    expected_task_id = hermes_task_id_from_thread_id("singularity-read")
+    active = FakeEnv("/analysis/project", "singularity")
+
+    monkeypatch.setattr(terminal_tool, "get_active_env", lambda task_id: active)
+    monkeypatch.setattr(
+        terminal_tool,
+        "_get_env_config",
+        lambda: {"env_type": "singularity", "cwd": "/root", "host_cwd": None},
+    )
+
+    def fake_read_file_tool(**kwargs):
+        calls.append(kwargs)
+        return json.dumps({"path": "/analysis/project/notes.txt", "content": "hello\n"})
+
+    monkeypatch.setattr(file_tools, "read_file_tool", fake_read_file_tool)
+
+    raw = file_tools._read_file_impl(
+        path="/analysis/project/notes.txt",
+        offset=1,
+        limit=20,
+        runtime=runtime,
+    )
+    payload = json.loads(raw)
+
+    assert payload["ok"] is True
+    assert calls == [
+        {
+            "path": "/analysis/project/notes.txt",
+            "offset": 1,
+            "limit": 20,
+            "task_id": expected_task_id,
+        }
     ]
 
 
@@ -379,14 +532,15 @@ def test_read_file_rejects_docker_skill_cache_path(monkeypatch):
         lambda: {"env_type": "docker", "cwd": "/root"},
     )
 
-    def fake_resolve_path_for_task(path, task_id):
+    def fake_resolve_path_for_policy(path, task_id):
         resolve_calls.append((path, task_id))
         return "/workspace/skills/.hub/index-cache/prompt.md"
 
     monkeypatch.setattr(
         file_tools,
-        "_resolve_path_for_task",
-        fake_resolve_path_for_task,
+        "resolve_path_for_policy",
+        fake_resolve_path_for_policy,
+        raising=False,
     )
     monkeypatch.setattr(
         file_tools,
@@ -492,8 +646,9 @@ def test_search_files_rejects_internal_skill_cache_path(monkeypatch):
     )
     monkeypatch.setattr(
         file_tools,
-        "_resolve_path_for_task",
+        "resolve_path_for_policy",
         lambda path, task_id: "/workspace/skills/.hub/index-cache",
+        raising=False,
     )
     monkeypatch.setattr(
         file_tools,
@@ -617,7 +772,7 @@ def test_patch_move_file_rejects_live_cwd_outside_workspace_source(
         ]
     )
 
-    def fake_resolve_path_for_task(path, task_id):
+    def fake_resolve_path_for_policy(path, task_id):
         resolve_calls.append((path, task_id))
         if path == "source.txt":
             return outside_path
@@ -627,7 +782,12 @@ def test_patch_move_file_rejects_live_cwd_outside_workspace_source(
         calls.append(kwargs)
         return json.dumps({"status": "success"})
 
-    monkeypatch.setattr(file_tools, "_resolve_path_for_task", fake_resolve_path_for_task)
+    monkeypatch.setattr(
+        file_tools,
+        "resolve_path_for_policy",
+        fake_resolve_path_for_policy,
+        raising=False,
+    )
     monkeypatch.setattr(file_tools, "patch_tool", fake_patch_tool)
 
     raw = file_tools._patch_impl(mode="patch", patch=patch_content, runtime=runtime)
@@ -658,7 +818,7 @@ def test_patch_move_file_rejects_live_cwd_outside_workspace_destination(
         ]
     )
 
-    def fake_resolve_path_for_task(path, task_id):
+    def fake_resolve_path_for_policy(path, task_id):
         resolve_calls.append((path, task_id))
         if path == "dest.txt":
             return outside_path
@@ -668,7 +828,12 @@ def test_patch_move_file_rejects_live_cwd_outside_workspace_destination(
         calls.append(kwargs)
         return json.dumps({"status": "success"})
 
-    monkeypatch.setattr(file_tools, "_resolve_path_for_task", fake_resolve_path_for_task)
+    monkeypatch.setattr(
+        file_tools,
+        "resolve_path_for_policy",
+        fake_resolve_path_for_policy,
+        raising=False,
+    )
     monkeypatch.setattr(file_tools, "patch_tool", fake_patch_tool)
 
     raw = file_tools._patch_impl(mode="patch", patch=patch_content, runtime=runtime)

@@ -1,5 +1,6 @@
 import json
 import os
+import posixpath
 import re
 from pathlib import Path
 from typing import Literal
@@ -9,8 +10,12 @@ from pydantic import BaseModel, Field
 
 from agent_core.session_context import hermes_task_id_from_runtime
 from agent_core.workspace import WORKDIR, safe_path
+from agent_tools.file_toolkit.backend_paths import (
+    allowed_workspace_roots_for_task,
+    path_is_under_any_root,
+    resolve_path_for_policy,
+)
 from agent_tools.file_toolkit.file_tools import (
-    _resolve_path_for_task,
     patch_tool,
     read_file_tool,
     search_tool,
@@ -127,47 +132,23 @@ def _task_id_from_runtime(runtime: ToolRuntime | None) -> str:
     return hermes_task_id_from_runtime(runtime)
 
 
-def _allowed_workspace_roots_for_task(task_id: str) -> list[Path]:
-    roots = [WORKDIR.resolve()]
-    try:
-        from agent_tools.hermes_terminal_toolkit import terminal_tool
-
-        config = terminal_tool._get_env_config()
-    except Exception:
-        config = {}
-
-    env_type = config.get("env_type", "local")
-    if env_type != "local":
-        cwd = config.get("cwd")
-        if cwd:
-            expanded = Path(os.path.expanduser(str(cwd)))
-            if expanded.is_absolute():
-                roots.append(expanded.resolve())
-        if env_type in ("docker", "singularity"):
-            roots.append(Path("/workspace"))
-
-    deduped: list[Path] = []
-    seen: set[Path] = set()
-    for root in roots:
-        if root not in seen:
-            deduped.append(root)
-            seen.add(root)
-    return deduped
+def _allowed_workspace_roots_for_task(task_id: str) -> list[str]:
+    return allowed_workspace_roots_for_task(task_id)
 
 
-def _is_under_allowed_workspace_root(resolved: Path, task_id: str) -> bool:
-    return any(resolved.is_relative_to(root) for root in _allowed_workspace_roots_for_task(task_id))
+def _is_under_allowed_workspace_root(resolved: str, task_id: str) -> bool:
+    return path_is_under_any_root(resolved, _allowed_workspace_roots_for_task(task_id))
 
 
-def _blocked_read_dirs_for_task(task_id: str) -> list[Path]:
-    blocked_dirs: list[Path] = []
-    seen: set[Path] = set()
+def _blocked_read_dirs_for_task(task_id: str) -> list[str]:
+    blocked_dirs: list[str] = []
+    seen: set[str] = set()
     for root in _allowed_workspace_roots_for_task(task_id):
         for blocked_dir in (
-            root / "skills" / ".hub",
-            root / "skills" / ".hub" / "index-cache",
+            posixpath.join(str(root), "skills", ".hub"),
+            posixpath.join(str(root), "skills", ".hub", "index-cache"),
         ):
-            resolved = blocked_dir.resolve()
+            resolved = posixpath.normpath(blocked_dir)
             if resolved not in seen:
                 blocked_dirs.append(resolved)
                 seen.add(resolved)
@@ -176,7 +157,7 @@ def _blocked_read_dirs_for_task(task_id: str) -> list[Path]:
 
 def _ensure_workspace_path_for_task(path: str | None, task_id: str) -> str | None:
     try:
-        resolved = Path(_resolve_path_for_task(path or ".", task_id))
+        resolved = resolve_path_for_policy(path or ".", task_id)
     except Exception as exc:
         return str(exc)
     if not _is_under_allowed_workspace_root(resolved, task_id):
@@ -186,17 +167,13 @@ def _ensure_workspace_path_for_task(path: str | None, task_id: str) -> str | Non
 
 def _ensure_read_allowed_for_task(path: str | None, task_id: str) -> str | None:
     try:
-        resolved = Path(_resolve_path_for_task(path or ".", task_id))
+        resolved = resolve_path_for_policy(path or ".", task_id)
     except Exception as exc:
         return str(exc)
     if not _is_under_allowed_workspace_root(resolved, task_id):
         return f"Path escapes workspace: {path}"
 
-    for blocked_dir in _blocked_read_dirs_for_task(task_id):
-        try:
-            resolved.relative_to(blocked_dir)
-        except ValueError:
-            continue
+    if path_is_under_any_root(resolved, _blocked_read_dirs_for_task(task_id)):
         return (
             f"Access denied: {path} is an internal skill cache file "
             "and cannot be read directly to prevent prompt injection. "
