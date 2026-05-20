@@ -79,7 +79,7 @@ def safe_write_roots_for_env(env, fallback_cwd=None) -> list[str]:
     if env_type == "docker":
         candidates.append("/workspace")
     configured_root = _backend_configured_root(configured_cwd, env_type)
-    candidates.extend([cwd, configured_root, host_cwd])
+    candidates.extend([cwd, configured_root])
     return _dedupe(_backend_root(candidate) for candidate in candidates)
 
 

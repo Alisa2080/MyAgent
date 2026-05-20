@@ -100,6 +100,22 @@ def test_policy_keeps_docker_configured_cwd_matching_host_home(monkeypatch):
     assert str(Path.home()) in roots
 
 
+def test_safe_write_roots_excludes_distinct_host_cwd_for_non_local_backend():
+    from agent_core.workspace import WORKDIR
+    from agent_tools.file_toolkit import backend_paths
+
+    env = FakeEnv("/root/project", "docker", configured_cwd="/app")
+    env._hermes_host_cwd = "/host/project"
+
+    roots = backend_paths.safe_write_roots_for_env(env)
+
+    assert str(WORKDIR.resolve()) in roots
+    assert "/workspace" in roots
+    assert "/root/project" in roots
+    assert "/app" in roots
+    assert "/host/project" not in roots
+
+
 def test_policy_uses_singularity_active_cwd_without_global_workspace_root(monkeypatch):
     from agent_tools.file_toolkit import backend_paths
     from agent_tools.hermes_terminal_toolkit import terminal_tool
