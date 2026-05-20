@@ -26,6 +26,19 @@ File operations are backed by shared Hermes active envs created through
 The wrappers follow the live env cwd, refresh activity on access, and clear
 cached wrappers when Hermes cleans up a task.
 
+Path safety is backend-aware:
+
+- Local file tools are constrained to the host workspace and
+  `AGENT_WRITE_SAFE_ROOT`.
+- Docker file tools also allow backend paths under `/workspace` and the
+  container active or configured cwd.
+- Singularity file tools also allow only the active or configured container cwd;
+  `/workspace` is not automatically trusted unless it is that cwd.
+- SSH file tools also allow only the active or configured remote cwd;
+  `/workspace` remains denied for SSH.
+- Internal skill cache paths such as `skills/.hub/index-cache` are denied under
+  every allowed workspace root.
+
 ## Environment
 
 Useful environment variables:
