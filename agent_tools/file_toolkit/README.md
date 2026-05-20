@@ -37,6 +37,23 @@ Low-level safe write roots are backend-aware:
 - SSH file tools also allow only the active or configured remote cwd;
   `/workspace` remains denied for SSH.
 
+### Backend mtime sampling and stale detection
+
+Read deduplication and stale-write warnings sample file modification time from
+the filesystem that owns the path:
+
+- local backend: host `os.path.getmtime()`
+- Docker, Singularity, SSH: backend shell `stat` through `ShellFileOperations`
+
+GNU `stat` can provide fractional mtime; BSD fallback may return integer
+seconds.
+
+When backend `stat` is unavailable, the file tools explicitly store an unknown
+mtime (`None`). Unknown mtime disables exact external-drift comparison and
+read dedup for that path, but it does not disable cross-agent coordination:
+the file-state registry still records reads, successful writes, sibling-writer
+timestamps, and partial-read warnings.
+
 Public read/search admission in `agent_tools/public/files.py` additionally
 blocks internal skill cache paths such as `skills/.hub/index-cache` under each
 allowed workspace root. That block is not a general low-level file toolkit
