@@ -29,14 +29,9 @@ import re
 import difflib
 from abc import ABC, abstractmethod
 from typing import Optional, List, Dict, Any
-from pathlib import Path
 from agent_tools.file_toolkit.binary_extensions import BINARY_EXTENSIONS
-
-from agent_tools.file_toolkit.file_safety import (
-    build_write_denied_paths,
-    build_write_denied_prefixes,
-    get_safe_write_root as _shared_get_safe_write_root,
-)
+from agent_tools.file_toolkit.backend_paths import safe_write_roots_for_env
+from agent_tools.file_toolkit.file_safety import is_write_denied as _shared_is_write_denied
 from agent_tools.file_toolkit.result_models import (
     ExecuteResult,
     LintResult,
@@ -48,56 +43,9 @@ from agent_tools.file_toolkit.result_models import (
 )
 
 
-# ---------------------------------------------------------------------------
-# Write-path deny list — blocks writes to sensitive system/credential files
-# ---------------------------------------------------------------------------
-
-_HOME = str(Path.home())
-
-WRITE_DENIED_PATHS = build_write_denied_paths(_HOME)
-
-WRITE_DENIED_PREFIXES = build_write_denied_prefixes(_HOME)
-
-
-def _get_safe_write_root() -> Optional[str]:
-    """Return the resolved AGENT_WRITE_SAFE_ROOT path, or None if unset.
-
-    When set, all write_file/patch operations are constrained to this
-    directory tree.  Writes outside it are denied even if the target is
-    not on the static deny list.  Opt-in hardening for gateway/messaging
-    deployments that should only touch a workspace checkout.
-    """
-    return _shared_get_safe_write_root()
-
-
-def _is_under_root(path: str, root: str) -> bool:
-    """Return True if *path* is equal to or contained by *root*."""
-    return path == root or path.startswith(root + os.sep)
-
-
 def _is_write_denied(path: str, extra_allowed_roots: Optional[List[str]] = None) -> bool:
-    """Return True if path is blocked by the denylist or safe-root policy."""
-    resolved = os.path.realpath(os.path.expanduser(str(path)))
-
-    if resolved in WRITE_DENIED_PATHS:
-        return True
-    for prefix in WRITE_DENIED_PREFIXES:
-        if resolved.startswith(prefix):
-            return True
-
-    safe_root = _get_safe_write_root()
-    if not safe_root or _is_under_root(resolved, safe_root):
-        return False
-
-    for root in extra_allowed_roots or []:
-        try:
-            allowed_root = os.path.realpath(os.path.expanduser(str(root)))
-        except Exception:
-            continue
-        if _is_under_root(resolved, allowed_root):
-            return False
-
-    return True
+    """Return True if path is blocked by the shared write safety policy."""
+    return _shared_is_write_denied(path, extra_allowed_roots=extra_allowed_roots)
 
 
 # =============================================================================
@@ -296,50 +244,9 @@ class ShellFileOperations(FileOperations):
         """Return the cwd that relative file operations execute against."""
         return getattr(self.env, 'cwd', None) or self.cwd or "/"
 
-    def _backend_env_type(self) -> str:
-        env_type = (
-            getattr(self.env, "_hermes_env_type", None)
-            or getattr(self.env, "env_type", None)
-            or type(self.env).__name__
-        )
-        return str(env_type).lower()
-
-    def _is_workspace_backend(self) -> bool:
-        env_type = self._backend_env_type()
-        return env_type in {"docker", "singularity"} or any(
-            marker in env_type for marker in ("docker", "singularity")
-        )
-
-    def _is_ssh_backend(self) -> bool:
-        env_type = self._backend_env_type()
-        return env_type == "ssh" or "ssh" in env_type
-
     def _extra_safe_write_roots(self) -> List[str]:
         """Return backend roots allowed in addition to the host safe root."""
-        if self._is_workspace_backend():
-            roots: List[str] = [self._effective_cwd(), "/workspace"]
-        elif self._is_ssh_backend():
-            roots = [self._effective_cwd()]
-        else:
-            return []
-
-        configured_cwd = (
-            getattr(self.env, "_hermes_configured_cwd", None)
-            or getattr(getattr(self.env, "config", None), "cwd", None)
-        )
-        if configured_cwd:
-            configured_cwd = os.path.expanduser(str(configured_cwd))
-            if os.path.isabs(configured_cwd):
-                roots.append(os.path.normpath(configured_cwd))
-
-        deduped: List[str] = []
-        seen = set()
-        for root in roots:
-            normalized = os.path.normpath(root)
-            if normalized not in seen:
-                deduped.append(normalized)
-                seen.add(normalized)
-        return deduped
+        return safe_write_roots_for_env(self.env, fallback_cwd=self._effective_cwd())
 
     def _resolve_write_safety_path(self, path: str) -> str:
         """Resolve a write target the same way shell execution will."""

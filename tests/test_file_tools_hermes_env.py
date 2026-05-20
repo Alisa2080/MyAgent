@@ -178,7 +178,7 @@ def test_resolve_path_for_task_uses_backend_policy_for_ssh_active_cwd(monkeypatc
     assert resolved == Path("/home/remote/project/notes.txt")
 
 
-def test_write_file_tool_denies_relative_path_when_local_env_cwd_outside_safe_root(
+def test_write_file_tool_allows_relative_path_in_active_local_env_cwd(
     tmp_path, monkeypatch
 ):
     safe_root = tmp_path / "safe-root"
@@ -206,8 +206,12 @@ def test_write_file_tool_denies_relative_path_when_local_env_cwd_outside_safe_ro
     raw = file_tools.write_file_tool("notes.txt", "leak", task_id="task-safe")
     payload = json.loads(raw)
 
-    assert "Write denied" in payload["error"]
-    assert env.commands == []
+    assert "error" not in payload
+    assert payload["bytes_written"] == 4
+    assert [kwargs["cwd"] for _, kwargs in env.commands] == [
+        str(outside_root),
+        str(outside_root),
+    ]
 
 
 def test_shell_file_operations_allows_workspace_writes_for_docker_safe_root(
@@ -220,6 +224,7 @@ def test_shell_file_operations_allows_workspace_writes_for_docker_safe_root(
 
     class DockerEnvironment:
         cwd = "/workspace"
+        _hermes_env_type = "docker"
 
         def __init__(self):
             self.commands = []
@@ -240,6 +245,36 @@ def test_shell_file_operations_allows_workspace_writes_for_docker_safe_root(
     assert [kwargs["cwd"] for _, kwargs in env.commands] == ["/workspace", "/workspace"]
 
 
+def test_shell_file_operations_allows_docker_workspace_absolute_write(
+    tmp_path, monkeypatch
+):
+    safe_root = tmp_path / "host-workdir"
+    safe_root.mkdir()
+    monkeypatch.setenv("AGENT_WRITE_SAFE_ROOT", str(safe_root))
+
+    class DockerEnvironment:
+        cwd = "/root"
+        _hermes_env_type = "docker"
+
+        def __init__(self):
+            self.commands = []
+
+        def execute(self, command, **kwargs):
+            self.commands.append((command, kwargs))
+            if command.startswith("wc -c"):
+                return {"output": "5\n", "returncode": 0}
+            return {"output": "", "returncode": 0}
+
+    env = DockerEnvironment()
+    file_ops = file_tools.ShellFileOperations(env)
+
+    result = file_ops.write_file("/workspace/notes.txt", "hello")
+
+    assert result.error is None
+    assert result.bytes_written == 5
+    assert [kwargs["cwd"] for _, kwargs in env.commands] == ["/root", "/root", "/root"]
+
+
 def test_shell_file_operations_allows_effective_docker_cwd_writes(
     tmp_path, monkeypatch
 ):
@@ -250,6 +285,7 @@ def test_shell_file_operations_allows_effective_docker_cwd_writes(
 
     class DockerEnvironment:
         cwd = "/root"
+        _hermes_env_type = "docker"
 
         def __init__(self):
             self.commands = []
@@ -270,6 +306,65 @@ def test_shell_file_operations_allows_effective_docker_cwd_writes(
     assert [kwargs["cwd"] for _, kwargs in env.commands] == ["/root", "/root"]
 
 
+def test_shell_file_operations_allows_singularity_effective_cwd_writes(
+    tmp_path, monkeypatch
+):
+    safe_root = tmp_path / "host-workdir"
+    safe_root.mkdir()
+    monkeypatch.setenv("AGENT_WRITE_SAFE_ROOT", str(safe_root))
+
+    class SingularityEnvironment:
+        cwd = "/project"
+        _hermes_env_type = "singularity"
+        _hermes_configured_cwd = "/configured"
+
+        def __init__(self):
+            self.commands = []
+
+        def execute(self, command, **kwargs):
+            self.commands.append((command, kwargs))
+            if command.startswith("wc -c"):
+                return {"output": "5\n", "returncode": 0}
+            return {"output": "", "returncode": 0}
+
+    env = SingularityEnvironment()
+    file_ops = file_tools.ShellFileOperations(env)
+
+    result = file_ops.write_file("notes.txt", "hello")
+
+    assert result.error is None
+    assert result.bytes_written == 5
+    assert [kwargs["cwd"] for _, kwargs in env.commands] == ["/project", "/project"]
+
+
+def test_shell_file_operations_keeps_workspace_root_denied_for_singularity(
+    tmp_path, monkeypatch
+):
+    safe_root = tmp_path / "host-workdir"
+    safe_root.mkdir()
+    monkeypatch.setenv("AGENT_WRITE_SAFE_ROOT", str(safe_root))
+
+    class SingularityEnvironment:
+        cwd = "/project"
+        _hermes_env_type = "singularity"
+        _hermes_configured_cwd = "/configured"
+
+        def __init__(self):
+            self.commands = []
+
+        def execute(self, command, **kwargs):
+            self.commands.append((command, kwargs))
+            return {"output": "", "returncode": 0}
+
+    env = SingularityEnvironment()
+    file_ops = file_tools.ShellFileOperations(env)
+
+    result = file_ops.write_file("/workspace/notes.txt", "hello")
+
+    assert "Write denied" in result.error
+    assert env.commands == []
+
+
 def test_shell_file_operations_allows_effective_ssh_cwd_writes(
     tmp_path, monkeypatch
 ):
@@ -279,6 +374,7 @@ def test_shell_file_operations_allows_effective_ssh_cwd_writes(
 
     class SSHEnvironment:
         cwd = "/home/remote/project"
+        _hermes_env_type = "ssh"
 
         def __init__(self):
             self.commands = []
@@ -311,6 +407,7 @@ def test_shell_file_operations_keeps_workspace_root_denied_for_ssh(
 
     class SSHEnvironment:
         cwd = "/home/remote/project"
+        _hermes_env_type = "ssh"
 
         def __init__(self):
             self.commands = []

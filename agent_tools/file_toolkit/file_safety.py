@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from typing import Optional
+from typing import Iterable, Optional
 
 
 def build_write_denied_paths(home: str) -> set[str]:
@@ -60,7 +60,14 @@ def get_safe_write_root() -> Optional[str]:
         return None
 
 
-def is_write_denied(path: str) -> bool:
+def _is_under_root(path: str, root: str) -> bool:
+    """Return True if *path* is equal to or contained by *root*."""
+    return path == root or path.startswith(root + os.sep)
+
+
+def is_write_denied(
+    path: str, extra_allowed_roots: Optional[Iterable[str]] = None
+) -> bool:
     """Return True if path is blocked by the write denylist or safe root."""
     home = os.path.realpath(os.path.expanduser("~"))
     resolved = os.path.realpath(os.path.expanduser(str(path)))
@@ -72,7 +79,14 @@ def is_write_denied(path: str) -> bool:
             return True
 
     safe_root = get_safe_write_root()
-    if safe_root and not (resolved == safe_root or resolved.startswith(safe_root + os.sep)):
+    if safe_root and not _is_under_root(resolved, safe_root):
+        for root in extra_allowed_roots or []:
+            try:
+                allowed_root = os.path.realpath(os.path.expanduser(str(root)))
+            except Exception:
+                continue
+            if _is_under_root(resolved, allowed_root):
+                return False
         return True
 
     return False
