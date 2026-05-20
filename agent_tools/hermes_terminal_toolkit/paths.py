@@ -3,25 +3,28 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Iterator
 from pathlib import Path
+
+
+def _toolkit_home_candidates() -> Iterator[Path]:
+    """Yield toolkit-home candidates in priority order."""
+    custom = os.getenv("HERMES_TERMINAL_TOOLKIT_HOME")
+    if custom:
+        yield Path(os.path.expanduser(custom))
+
+    hermes_home = os.getenv("HERMES_HOME")
+    if hermes_home:
+        yield Path(os.path.expanduser(hermes_home)) / "terminal-toolkit"
+
+    yield Path.home() / ".hermes-terminal-toolkit"
+    yield Path.cwd() / ".hermes-terminal-toolkit"
+    yield Path("/tmp") / ".hermes-terminal-toolkit"
 
 
 def get_toolkit_home() -> Path:
     """Return the toolkit home directory used for snapshots and checkpoints."""
-    custom = os.getenv("HERMES_TERMINAL_TOOLKIT_HOME")
-    if custom:
-        candidates = [Path(os.path.expanduser(custom))]
-    else:
-        hermes_home = os.getenv("HERMES_HOME")
-        if hermes_home:
-            candidates = [Path(os.path.expanduser(hermes_home)) / "terminal-toolkit"]
-        else:
-            candidates = [
-                Path.home() / ".hermes-terminal-toolkit",
-                Path.cwd() / ".hermes-terminal-toolkit",
-                Path("/tmp") / ".hermes-terminal-toolkit",
-            ]
-    for home in candidates:
+    for home in _toolkit_home_candidates():
         try:
             home.mkdir(parents=True, exist_ok=True)
             return home
