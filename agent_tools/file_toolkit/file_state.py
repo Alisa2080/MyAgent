@@ -45,7 +45,9 @@ from typing import Dict, Iterable, List, Optional, Tuple
 # (mtime, read_ts, partial).  partial=True when read_file returned a
 # windowed view (offset > 1 or limit < total_lines) — writes that happen
 # after a partial read should still warn so the model re-reads in full.
-ReadStamp = Tuple[float, float, bool]
+ReadStamp = Tuple[Optional[float], float, bool]
+
+_MTIME_NOT_PROVIDED = object()
 
 # Number of resolved-path entries retained per agent.  Bounded to keep
 # long sessions from accumulating unbounded state.  On overflow we drop
@@ -96,19 +98,20 @@ class FileStateRegistry:
         resolved: str,
         *,
         partial: bool = False,
-        mtime: Optional[float] = None,
+        mtime=_MTIME_NOT_PROVIDED,
     ) -> None:
         if _disabled():
             return
-        if mtime is None:
+        if mtime is _MTIME_NOT_PROVIDED:
             try:
                 mtime = os.path.getmtime(resolved)
             except OSError:
                 return
+        stored_mtime = None if mtime is None else float(mtime)
         now = time.time()
         with self._state_lock:
             agent_reads = self._reads[task_id]
-            agent_reads[resolved] = (float(mtime), now, bool(partial))
+            agent_reads[resolved] = (stored_mtime, now, bool(partial))
             _cap_dict(agent_reads, _MAX_PATHS_PER_AGENT)
 
     def note_write(
@@ -116,7 +119,7 @@ class FileStateRegistry:
         task_id: str,
         resolved: str,
         *,
-        mtime: Optional[float] = None,
+        mtime=_MTIME_NOT_PROVIDED,
     ) -> None:
         """Record a successful write.
 
@@ -126,20 +129,27 @@ class FileStateRegistry:
         """
         if _disabled():
             return
-        if mtime is None:
+        if mtime is _MTIME_NOT_PROVIDED:
             try:
                 mtime = os.path.getmtime(resolved)
             except OSError:
                 return
+        stored_mtime = None if mtime is None else float(mtime)
         now = time.time()
         with self._state_lock:
             self._last_writer[resolved] = (task_id, now)
             _cap_dict(self._last_writer, _MAX_GLOBAL_WRITERS)
             # Writer's own view is now up-to-date.
-            self._reads[task_id][resolved] = (float(mtime), now, False)
+            self._reads[task_id][resolved] = (stored_mtime, now, False)
             _cap_dict(self._reads[task_id], _MAX_PATHS_PER_AGENT)
 
-    def check_stale(self, task_id: str, resolved: str) -> Optional[str]:
+    def check_stale(
+        self,
+        task_id: str,
+        resolved: str,
+        *,
+        current_mtime=_MTIME_NOT_PROVIDED,
+    ) -> Optional[str]:
         """Return a model-facing warning if this write would be stale.
 
         Three staleness classes, in order of severity:
@@ -163,11 +173,14 @@ class FileStateRegistry:
         if stamp is None and last_writer is None:
             return None
 
-        try:
-            current_mtime = os.path.getmtime(resolved)
-        except OSError:
-            # File doesn't exist — write will create it; not stale.
-            return None
+        if current_mtime is _MTIME_NOT_PROVIDED:
+            try:
+                current_mtime = os.path.getmtime(resolved)
+            except OSError:
+                # File doesn't exist — write will create it; not stale.
+                return None
+        else:
+            current_mtime = None if current_mtime is None else float(current_mtime)
 
         # Case 1: sibling subagent modified after our last read.
         if last_writer is not None:
@@ -192,7 +205,11 @@ class FileStateRegistry:
         # Case 2: external / unknown modification (mtime drifted).
         if stamp is not None:
             read_mtime, _read_ts, partial = stamp
-            if current_mtime != read_mtime:
+            if (
+                read_mtime is not None
+                and current_mtime is not None
+                and current_mtime != read_mtime
+            ):
                 return (
                     f"{resolved} was modified since you last read it "
                     "on disk (external edit or unrecorded writer). "
@@ -292,16 +309,41 @@ def _cap_dict(d: dict, limit: int) -> None:
 
 
 # ── Convenience wrappers (short names used at call sites) ────────────
-def record_read(task_id: str, resolved_or_path: str | Path, *, partial: bool = False) -> None:
-    _registry.record_read(task_id, str(resolved_or_path), partial=partial)
+def record_read(
+    task_id: str,
+    resolved_or_path: str | Path,
+    *,
+    partial: bool = False,
+    mtime=_MTIME_NOT_PROVIDED,
+) -> None:
+    _registry.record_read(
+        task_id,
+        str(resolved_or_path),
+        partial=partial,
+        mtime=mtime,
+    )
 
 
-def note_write(task_id: str, resolved_or_path: str | Path) -> None:
-    _registry.note_write(task_id, str(resolved_or_path))
+def note_write(
+    task_id: str,
+    resolved_or_path: str | Path,
+    *,
+    mtime=_MTIME_NOT_PROVIDED,
+) -> None:
+    _registry.note_write(task_id, str(resolved_or_path), mtime=mtime)
 
 
-def check_stale(task_id: str, resolved_or_path: str | Path) -> Optional[str]:
-    return _registry.check_stale(task_id, str(resolved_or_path))
+def check_stale(
+    task_id: str,
+    resolved_or_path: str | Path,
+    *,
+    current_mtime=_MTIME_NOT_PROVIDED,
+) -> Optional[str]:
+    return _registry.check_stale(
+        task_id,
+        str(resolved_or_path),
+        current_mtime=current_mtime,
+    )
 
 
 def lock_path(resolved_or_path: str | Path):
