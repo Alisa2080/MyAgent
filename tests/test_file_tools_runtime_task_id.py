@@ -233,13 +233,18 @@ def test_write_file_rejects_live_cwd_outside_workspace(monkeypatch, tmp_path):
         fake_resolve_path_for_policy,
         raising=False,
     )
+    monkeypatch.setattr(
+        file_tools.file_policy,
+        "resolve_path_for_policy",
+        fake_resolve_path_for_policy,
+    )
     monkeypatch.setattr(file_tools, "write_file_tool", fake_write_file_tool)
 
     raw = file_tools._write_file_impl(path="leak.txt", content="leak", runtime=runtime)
     payload = json.loads(raw)
 
     assert payload["ok"] is False
-    assert payload["error"]["code"] == "invalid_path"
+    assert payload["error"]["code"] == "approval_required"
     assert calls == []
     assert resolve_calls == [("leak.txt", expected_task_id)]
 
@@ -273,6 +278,11 @@ def test_write_file_denies_local_backend_configured_cwd_outside_workspace(
         raising=False,
     )
     monkeypatch.setattr(
+        file_tools.file_policy,
+        "resolve_path_for_policy",
+        fake_resolve_path_for_policy,
+    )
+    monkeypatch.setattr(
         file_tools,
         "write_file_tool",
         lambda **kwargs: calls.append(kwargs) or json.dumps({"bytes_written": 4}),
@@ -282,7 +292,7 @@ def test_write_file_denies_local_backend_configured_cwd_outside_workspace(
     payload = json.loads(raw)
 
     assert payload["ok"] is False
-    assert payload["error"]["code"] == "invalid_path"
+    assert payload["error"]["code"] == "approval_required"
     assert calls == []
     assert resolve_calls == [("leak.txt", expected_task_id)]
 
@@ -311,6 +321,11 @@ def test_write_file_allows_live_cwd_inside_workspace_and_forwards_original_path(
         "resolve_path_for_policy",
         fake_resolve_path_for_policy,
         raising=False,
+    )
+    monkeypatch.setattr(
+        file_tools.file_policy,
+        "resolve_path_for_policy",
+        fake_resolve_path_for_policy,
     )
     monkeypatch.setattr(file_tools, "write_file_tool", fake_write_file_tool)
 
@@ -355,6 +370,11 @@ def test_write_file_allows_docker_workspace_resolved_path_and_forwards_original_
         "resolve_path_for_policy",
         fake_resolve_path_for_policy,
         raising=False,
+    )
+    monkeypatch.setattr(
+        file_tools.file_policy,
+        "resolve_path_for_policy",
+        fake_resolve_path_for_policy,
     )
     monkeypatch.setattr(file_tools, "write_file_tool", fake_write_file_tool)
 
@@ -438,7 +458,7 @@ def test_write_file_rejects_ssh_absolute_path_outside_active_cwd(monkeypatch):
     payload = json.loads(raw)
 
     assert payload["ok"] is False
-    assert payload["error"]["code"] == "invalid_path"
+    assert payload["error"]["code"] == "approval_required"
     assert calls == []
 
 
@@ -925,15 +945,23 @@ def test_patch_move_file_rejects_live_cwd_outside_workspace_source(
         fake_resolve_path_for_policy,
         raising=False,
     )
+    monkeypatch.setattr(
+        file_tools.file_policy,
+        "resolve_path_for_policy",
+        fake_resolve_path_for_policy,
+    )
     monkeypatch.setattr(file_tools, "patch_tool", fake_patch_tool)
 
     raw = file_tools._patch_impl(mode="patch", patch=patch_content, runtime=runtime)
     payload = json.loads(raw)
 
     assert payload["ok"] is False
-    assert payload["error"]["code"] == "invalid_path"
+    assert payload["error"]["code"] == "approval_required"
     assert calls == []
-    assert resolve_calls == [("source.txt", expected_task_id)]
+    assert resolve_calls == [
+        ("source.txt", expected_task_id),
+        ("dest.txt", expected_task_id),
+    ]
 
 
 def test_patch_move_file_rejects_live_cwd_outside_workspace_destination(
@@ -971,13 +999,18 @@ def test_patch_move_file_rejects_live_cwd_outside_workspace_destination(
         fake_resolve_path_for_policy,
         raising=False,
     )
+    monkeypatch.setattr(
+        file_tools.file_policy,
+        "resolve_path_for_policy",
+        fake_resolve_path_for_policy,
+    )
     monkeypatch.setattr(file_tools, "patch_tool", fake_patch_tool)
 
     raw = file_tools._patch_impl(mode="patch", patch=patch_content, runtime=runtime)
     payload = json.loads(raw)
 
     assert payload["ok"] is False
-    assert payload["error"]["code"] == "invalid_path"
+    assert payload["error"]["code"] == "approval_required"
     assert calls == []
     assert resolve_calls == [
         ("source.txt", expected_task_id),

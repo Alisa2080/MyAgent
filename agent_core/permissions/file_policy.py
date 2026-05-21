@@ -56,11 +56,12 @@ def classify_file_write(path: str, *, task_id: str) -> PolicyDecision:
         return PolicyDecision.deny(
             "sensitive_path",
             risk_tags=("sensitive_path",),
+            message=f"Write denied for sensitive path: {path}",
             data={"path": str(path)},
         )
 
     try:
-        resolved_path = resolve_path_for_policy(path, task_id)
+        resolved_path = str(resolve_path_for_policy(path, task_id))
     except Exception as exc:
         return PolicyDecision.review(
             "path_resolution_failed",
@@ -75,12 +76,13 @@ def classify_file_write(path: str, *, task_id: str) -> PolicyDecision:
     return PolicyDecision.review(
         "writes_outside_workspace",
         risk_tags=("writes_outside_workspace",),
+        message=f"Write requires approval because it targets outside the workspace: {path}",
         data={"path": resolved_path},
     )
 
 
 def approved_write_root_for_path(path: str, *, task_id: str) -> str:
-    resolved_path = resolve_path_for_policy(path, task_id)
+    resolved_path = str(resolve_path_for_policy(path, task_id))
     parent = posixpath.dirname(_normalize_posix_path(resolved_path))
     return parent or "/"
 

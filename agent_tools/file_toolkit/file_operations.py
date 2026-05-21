@@ -28,6 +28,7 @@ import os
 import re
 import difflib
 from abc import ABC, abstractmethod
+from contextlib import contextmanager
 from typing import Optional, List, Dict, Any
 from agent_tools.file_toolkit.binary_extensions import BINARY_EXTENSIONS
 from agent_tools.file_toolkit.backend_paths import safe_write_roots_for_env
@@ -216,6 +217,7 @@ class ShellFileOperations(FileOperations):
 
         # Cache for command availability checks
         self._command_cache: Dict[str, bool] = {}
+        self._approved_write_roots: list[str] = []
     
     def _exec(self, command: str, cwd: str = None, timeout: int = None,
               stdin_data: str = None) -> ExecuteResult:
@@ -255,7 +257,23 @@ class ShellFileOperations(FileOperations):
 
     def _extra_safe_write_roots(self) -> List[str]:
         """Return backend roots allowed in addition to the host safe root."""
-        return safe_write_roots_for_env(self.env, fallback_cwd=self._effective_cwd())
+        return [
+            *safe_write_roots_for_env(self.env, fallback_cwd=self._effective_cwd()),
+            *self._approved_write_roots,
+        ]
+
+    @contextmanager
+    def approved_write_roots(self, roots: list[str] | None):
+        """Temporarily allow additional write roots for reviewed file writes."""
+        previous = self._approved_write_roots
+        self._approved_write_roots = [
+            *previous,
+            *[str(root) for root in (roots or [])],
+        ]
+        try:
+            yield
+        finally:
+            self._approved_write_roots = previous
 
     def _host_safe_root_applies(self) -> bool:
         """Return whether the host safe root should be used for this env."""

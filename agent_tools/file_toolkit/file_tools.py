@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import threading
+from contextlib import nullcontext
 from pathlib import Path
 
 from agent_tools.file_toolkit.backend_paths import (
@@ -30,6 +31,13 @@ logger = logging.getLogger(__name__)
 
 
 _EXPECTED_WRITE_ERRNOS = {errno.EACCES, errno.EPERM, errno.EROFS}
+
+
+def _approved_write_roots_context(file_ops, roots: list[str] | None):
+    approved_roots = getattr(file_ops, "approved_write_roots", None)
+    if approved_roots is None:
+        return nullcontext()
+    return approved_roots(roots)
 
 
 def tool_error(message: str, **extra) -> str:
@@ -749,7 +757,12 @@ def _extract_patch_paths_for_safety(patch_content: str) -> list[str]:
     return paths
 
 
-def write_file_tool(path: str, content: str, task_id: str = "default") -> str:
+def write_file_tool(
+    path: str,
+    content: str,
+    task_id: str = "default",
+    approved_write_roots: list[str] | None = None,
+) -> str:
     """Write content to a file."""
     sensitive_err = _check_sensitive_path(path, task_id)
     if sensitive_err:
@@ -771,7 +784,8 @@ def write_file_tool(path: str, content: str, task_id: str = "default") -> str:
         if _resolved is None:
             stale_warning = _check_file_staleness(path, task_id)
             file_ops = _get_file_ops(task_id)
-            result = file_ops.write_file(path, content)
+            with _approved_write_roots_context(file_ops, approved_write_roots):
+                result = file_ops.write_file(path, content)
             result_dict = result.to_dict()
             if stale_warning:
                 result_dict["_warning"] = stale_warning
@@ -792,7 +806,8 @@ def write_file_tool(path: str, content: str, task_id: str = "default") -> str:
             )
             stale_warning = _check_file_staleness(path, task_id)
             file_ops = _get_file_ops(task_id)
-            result = file_ops.write_file(path, content)
+            with _approved_write_roots_context(file_ops, approved_write_roots):
+                result = file_ops.write_file(path, content)
             result_dict = result.to_dict()
             effective_warning = cross_warning or stale_warning
             if effective_warning:
@@ -813,7 +828,8 @@ def write_file_tool(path: str, content: str, task_id: str = "default") -> str:
 
 def patch_tool(mode: str = "replace", path: str = None, old_string: str = None,
                new_string: str = None, replace_all: bool = False, patch: str = None,
-               task_id: str = "default") -> str:
+               task_id: str = "default",
+               approved_write_roots: list[str] | None = None) -> str:
     """Patch a file using replace mode or V4A patch format."""
     # Check sensitive paths for both replace (explicit path) and V4A patch (extract paths)
     _paths_to_check = []
@@ -877,18 +893,19 @@ def patch_tool(mode: str = "replace", path: str = None, old_string: str = None,
 
             file_ops = _get_file_ops(task_id)
 
-            if mode == "replace":
-                if not path:
-                    return tool_error("path required")
-                if old_string is None or new_string is None:
-                    return tool_error("old_string and new_string required")
-                result = file_ops.patch_replace(path, old_string, new_string, replace_all)
-            elif mode == "patch":
-                if not patch:
-                    return tool_error("patch content required")
-                result = file_ops.patch_v4a(patch)
-            else:
-                return tool_error(f"Unknown mode: {mode}")
+            with _approved_write_roots_context(file_ops, approved_write_roots):
+                if mode == "replace":
+                    if not path:
+                        return tool_error("path required")
+                    if old_string is None or new_string is None:
+                        return tool_error("old_string and new_string required")
+                    result = file_ops.patch_replace(path, old_string, new_string, replace_all)
+                elif mode == "patch":
+                    if not patch:
+                        return tool_error("patch content required")
+                    result = file_ops.patch_v4a(patch)
+                else:
+                    return tool_error(f"Unknown mode: {mode}")
 
             result_dict = result.to_dict()
             if stale_warnings:

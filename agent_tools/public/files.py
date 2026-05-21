@@ -9,6 +9,9 @@ from typing import Literal
 from langchain.tools import ToolRuntime, tool
 from pydantic import BaseModel, Field
 
+from agent_core.permissions import file_policy
+from agent_core.permissions.approvals import consume_approval
+from agent_core.permissions.models import PolicyDecision
 from agent_core.session_context import hermes_task_id_from_runtime
 from agent_core.workspace import WORKDIR, safe_path
 from agent_tools.file_toolkit.backend_paths import (
@@ -134,6 +137,11 @@ def _task_id_from_runtime(runtime: ToolRuntime | None) -> str:
     return hermes_task_id_from_runtime(runtime)
 
 
+def _tool_call_id_from_runtime(runtime: ToolRuntime | None) -> str | None:
+    tool_call_id = getattr(runtime, "tool_call_id", None)
+    return str(tool_call_id) if tool_call_id else None
+
+
 def _allowed_workspace_roots_for_task(task_id: str) -> list[str]:
     return allowed_workspace_roots_for_task(task_id)
 
@@ -208,6 +216,75 @@ def _ensure_patch_paths_for_task(patch_content: str | None, task_id: str) -> str
         if path_error:
             return path_error
     return None
+
+
+def _approval_roots_for_file_decision(
+    tool_name: str,
+    path: str,
+    args: dict,
+    task_id: str,
+    runtime: ToolRuntime | None,
+    decision: PolicyDecision,
+) -> list[str] | str:
+    if decision.outcome == "allow":
+        return []
+    if decision.outcome == "deny":
+        return decision.human_message
+
+    approval = consume_approval(
+        task_id=task_id,
+        tool_call_id=_tool_call_id_from_runtime(runtime),
+        tool_name=tool_name,
+        args=args,
+        required_risk_tags=decision.risk_tags,
+    )
+    if approval is None:
+        return "Approval required before writing outside the workspace."
+    return [file_policy.approved_write_root_for_path(path, task_id=task_id)]
+
+
+def _file_policy_error_code(decision: PolicyDecision) -> str:
+    return "policy_denied" if decision.outcome == "deny" else "approval_required"
+
+
+def _unique_items(items: list[str]) -> list[str]:
+    unique: list[str] = []
+    seen: set[str] = set()
+    for item in items:
+        if item in seen:
+            continue
+        unique.append(item)
+        seen.add(item)
+    return unique
+
+
+def _patch_paths_to_classify(
+    mode: str,
+    path: str | None,
+    patch_content: str | None,
+) -> tuple[list[str], str | None]:
+    if mode == "replace":
+        return ([path] if path else []), None
+    if mode != "patch" or patch_content is None:
+        return [], None
+
+    operations, parse_error = parse_v4a_patch(patch_content)
+    if parse_error:
+        return [], parse_error
+
+    paths: list[str] = []
+    for operation in operations:
+        if operation.file_path:
+            paths.append(operation.file_path)
+        if operation.new_path:
+            paths.append(operation.new_path)
+    for match in re.finditer(
+        r"^\*\*\*\s+Move to:\s*(.+)$",
+        patch_content,
+        re.MULTILINE,
+    ):
+        paths.append(match.group(1).strip())
+    return _unique_items(paths), None
 
 
 def _utc_iso(timestamp: str) -> str:
@@ -393,10 +470,26 @@ def read_file(path: str, runtime: ToolRuntime, offset: int = 1, limit: int = 500
 
 def _write_file_impl(path: str, content: str, runtime: ToolRuntime | None = None) -> str:
     task_id = _task_id_from_runtime(runtime)
-    path_error = _ensure_workspace_path_for_task(path, task_id)
-    if path_error:
-        return tool_error("write_file", path_error, code="invalid_path")
-    raw = write_file_tool(path=path, content=content, task_id=task_id)
+    decision = file_policy.classify_file_write(path, task_id=task_id)
+    approved_roots = _approval_roots_for_file_decision(
+        tool_name="write_file",
+        path=path,
+        args={"path": path, "content": content},
+        task_id=task_id,
+        runtime=runtime,
+        decision=decision,
+    )
+    if isinstance(approved_roots, str):
+        return tool_error(
+            "write_file",
+            approved_roots,
+            code=_file_policy_error_code(decision),
+            data=decision.data,
+        )
+    kwargs = {"path": path, "content": content, "task_id": task_id}
+    if approved_roots:
+        kwargs["approved_write_roots"] = approved_roots
+    raw = write_file_tool(**kwargs)
     return _wrap_file_tool_result("write_file", raw, success_message="File written.")
 
 
@@ -419,22 +512,68 @@ def _patch_impl(
     if mode == "replace":
         if not path:
             return tool_error("patch", "path is required for replace mode.", code="invalid_input")
-        path_error = _ensure_workspace_path_for_task(path, task_id)
-        if path_error:
-            return tool_error("patch", path_error, code="invalid_path")
-    if mode == "patch":
-        path_error = _ensure_patch_paths_for_task(patch, task_id)
-        if path_error:
-            return tool_error("patch", path_error, code="invalid_path")
-    raw = patch_tool(
-        mode=mode,
-        path=path,
-        old_string=old_string,
-        new_string=new_string,
-        replace_all=replace_all,
-        patch=patch,
-        task_id=task_id,
-    )
+    paths_to_classify, parse_error = _patch_paths_to_classify(mode, path, patch)
+    if parse_error:
+        return tool_error("patch", f"Failed to parse patch: {parse_error}", code="invalid_input")
+
+    decisions = [
+        file_policy.classify_file_write(path_to_classify, task_id=task_id)
+        for path_to_classify in paths_to_classify
+    ]
+    denied = next((decision for decision in decisions if decision.outcome == "deny"), None)
+    if denied is not None:
+        return tool_error(
+            "patch",
+            denied.human_message,
+            code="policy_denied",
+            data=denied.data,
+        )
+
+    approved_roots: list[str] = []
+    review = next((decision for decision in decisions if decision.outcome == "review"), None)
+    if review is not None:
+        approval_args = {
+            "mode": mode,
+            "path": path,
+            "old_string": old_string,
+            "new_string": new_string,
+            "replace_all": replace_all,
+            "patch": patch,
+        }
+        approval = consume_approval(
+            task_id=task_id,
+            tool_call_id=_tool_call_id_from_runtime(runtime),
+            tool_name="patch",
+            args=approval_args,
+            required_risk_tags=review.risk_tags,
+        )
+        if approval is None:
+            return tool_error(
+                "patch",
+                "Approval required before patching outside the workspace.",
+                code="approval_required",
+                data=review.data,
+            )
+        approved_roots = _unique_items(
+            [
+                file_policy.approved_write_root_for_path(path_to_classify, task_id=task_id)
+                for path_to_classify, decision in zip(paths_to_classify, decisions, strict=False)
+                if decision.outcome == "review"
+            ]
+        )
+
+    kwargs = {
+        "mode": mode,
+        "path": path,
+        "old_string": old_string,
+        "new_string": new_string,
+        "replace_all": replace_all,
+        "patch": patch,
+        "task_id": task_id,
+    }
+    if approved_roots:
+        kwargs["approved_write_roots"] = approved_roots
+    raw = patch_tool(**kwargs)
     return _wrap_file_tool_result("patch", raw, success_message="Patch applied.")
 
 
