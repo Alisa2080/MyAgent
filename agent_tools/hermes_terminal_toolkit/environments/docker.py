@@ -12,6 +12,7 @@ import shutil
 import subprocess
 import sys
 import uuid
+from contextlib import contextmanager
 from typing import Optional
 
 from .base import BaseEnvironment, _popen_bash
@@ -302,6 +303,8 @@ class DockerEnvironment(BaseEnvironment):
         self._forward_env = _normalize_forward_env_names(forward_env)
         self._env = _normalize_env_dict(env)
         self._container_id: Optional[str] = None
+        self._network_enabled = bool(network)
+        self._egress_network = os.getenv("HERMES_DOCKER_NETWORK", "bridge")
         logger.info(f"DockerEnvironment volumes: {volumes}")
         # Ensure volumes is a list (config.yaml could be malformed)
         if volumes is not None and not isinstance(volumes, list):
@@ -578,3 +581,38 @@ class DockerEnvironment(BaseEnvironment):
             for d in (self._workspace_dir, self._home_dir):
                 if d:
                     shutil.rmtree(d, ignore_errors=True)
+
+    def _docker_network_connect(self) -> None:
+        if not self._container_id or self._network_enabled:
+            return
+        subprocess.run(
+            [self._docker_exe, "network", "connect", self._egress_network, self._container_id],
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=True,
+        )
+        self._network_enabled = True
+
+    def _docker_network_disconnect(self) -> None:
+        if not self._container_id or not self._network_enabled:
+            return
+        subprocess.run(
+            [self._docker_exe, "network", "disconnect", self._egress_network, self._container_id],
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=True,
+        )
+        self._network_enabled = False
+
+    @contextmanager
+    def temporary_network(self):
+        was_enabled = self._network_enabled
+        if not was_enabled:
+            self._docker_network_connect()
+        try:
+            yield
+        finally:
+            if not was_enabled:
+                self._docker_network_disconnect()

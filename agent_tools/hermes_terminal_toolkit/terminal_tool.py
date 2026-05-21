@@ -674,7 +674,6 @@ def terminal_tool(
     allow_network_once: bool = False,
 ) -> str:
     try:
-        del allow_network_once
         if not isinstance(command, str):
             logger.warning("Rejected invalid terminal command value: %s", type(command).__name__)
             return json.dumps(
@@ -717,6 +716,17 @@ def terminal_tool(
             workdir=workdir,
             timeout=effective_timeout,
         )
+        temporary_network = getattr(env, "temporary_network", None) if allow_network_once else None
+        if allow_network_once and temporary_network is None and env_type != "local":
+            return json.dumps(
+                {
+                    "output": "",
+                    "exit_code": -1,
+                    "error": "One-shot network access is only supported by backends with temporary_network().",
+                    "status": "blocked",
+                },
+                ensure_ascii=False,
+            )
 
         approval_note = None
         if not force:
@@ -750,6 +760,7 @@ def terminal_tool(
 
         if background:
             effective_cwd = workdir or cwd
+            network_release = None
             try:
                 if env_type == "local":
                     proc_session = process_registry.spawn_local(
@@ -761,13 +772,22 @@ def terminal_tool(
                         use_pty=effective_pty,
                     )
                 else:
+                    if temporary_network is not None:
+                        lease = temporary_network()
+                        lease.__enter__()
+
+                        def network_release(lease=lease):
+                            lease.__exit__(None, None, None)
+
                     proc_session = process_registry.spawn_via_env(
                         env=env,
                         command=command,
                         cwd=effective_cwd,
                         task_id=effective_task_id,
                         session_key="",
+                        network_release=network_release,
                     )
+                    network_release = None
 
                 result_data = {
                     "output": "Background process started",
@@ -796,17 +816,37 @@ def terminal_tool(
                     result_data["watch_patterns"] = proc_session.watch_patterns
                 return json.dumps(result_data, ensure_ascii=False)
             except Exception as e:
+                if network_release is not None:
+                    try:
+                        network_release()
+                    except Exception:
+                        logger.warning("Failed to release network lease after spawn failure", exc_info=True)
                 return json.dumps({"output": "", "exit_code": -1, "error": f"Failed to start background process: {str(e)}"}, ensure_ascii=False)
 
         max_retries = 3
         retry_count = 0
         result = None
+        network_warning = None
         while retry_count <= max_retries:
             try:
                 execute_kwargs = {"timeout": effective_timeout}
                 if workdir:
                     execute_kwargs["cwd"] = workdir
-                result = env.execute(command, **execute_kwargs)
+                if temporary_network is None:
+                    result = env.execute(command, **execute_kwargs)
+                else:
+                    try:
+                        with temporary_network():
+                            result = env.execute(command, **execute_kwargs)
+                    except Exception as network_exc:
+                        if result is not None and "disconnect" in str(network_exc).lower():
+                            network_warning = f"Network cleanup failed after command execution: {network_exc}"
+                            try:
+                                cleanup_vm(effective_task_id)
+                            except Exception:
+                                logger.debug("Failed to cleanup env after network warning", exc_info=True)
+                        else:
+                            raise
             except Exception as e:
                 error_str = str(e).lower()
                 if "timeout" in error_str:
@@ -866,6 +906,8 @@ def terminal_tool(
             result_dict["approval"] = approval_note
         if exit_note:
             result_dict["exit_code_meaning"] = exit_note
+        if network_warning:
+            result_dict["network_warning"] = network_warning
         return json.dumps(result_dict, ensure_ascii=False)
     except Exception as e:
         import traceback

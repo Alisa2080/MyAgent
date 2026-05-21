@@ -125,6 +125,7 @@ class ProcessSession:
     notify_on_complete: bool = False             # Queue agent notification on exit
     # Watch patterns — trigger agent notification when output matches any pattern
     watch_patterns: List[str] = field(default_factory=list)
+    network_release: Any = field(default=None, repr=False)
     _watch_hits: int = field(default=0, repr=False)          # total matches delivered
     _watch_suppressed: int = field(default=0, repr=False)    # matches dropped by rate limit
     _watch_disabled: bool = field(default=False, repr=False) # permanently killed after strike limit
@@ -591,6 +592,7 @@ class ProcessRegistry:
         task_id: str = "",
         session_key: str = "",
         timeout: int = 10,
+        network_release: Any = None,
     ) -> ProcessSession:
         """
         Spawn a background process through a non-local environment backend.
@@ -612,6 +614,7 @@ class ProcessRegistry:
             started_at=time.time(),
             env_ref=env,
             pid_scope="sandbox",
+            network_release=network_release,
         )
 
         # Run the command in the sandbox with output capture
@@ -644,6 +647,17 @@ class ProcessRegistry:
             session.exited = True
             session.exit_code = -1
             session.output_buffer = f"Failed to start: {e}"
+            if session.network_release is not None:
+                try:
+                    session.network_release()
+                except Exception:
+                    logger.warning(
+                        "Failed to release network lease after spawn failure for %s",
+                        session.id,
+                        exc_info=True,
+                    )
+                finally:
+                    session.network_release = None
 
         if not session.exited:
             # Start a poller thread that periodically reads the log file
@@ -787,6 +801,14 @@ class ProcessRegistry:
         with self._lock:
             was_running = self._running.pop(session.id, None) is not None
             self._finished[session.id] = session
+        release = getattr(session, "network_release", None)
+        if release is not None:
+            try:
+                release()
+            except Exception:
+                logger.warning("Failed to release network lease for %s", session.id, exc_info=True)
+            finally:
+                session.network_release = None
         self._write_checkpoint()
 
         # Only enqueue completion notification on the FIRST move.  Without
