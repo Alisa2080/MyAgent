@@ -7,5 +7,6 @@
 .memory/
 __pycache__/
 .env
+.worktrees/
 base/
 agent_tools/hermes_terminal_toolkit/process_registry copy.py
