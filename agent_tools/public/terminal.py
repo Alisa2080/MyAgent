@@ -139,6 +139,7 @@ def _terminal_impl(
     )
     decision = tool_policy.evaluate_tool_call("terminal", policy_args, task_id, tool_call_id=tool_call_id)
     allow_network_once = False
+    force = False
     if decision.outcome == "deny":
         return tool_error(
             "terminal",
@@ -164,6 +165,7 @@ def _terminal_impl(
                 meta={"backend": "hermes_terminal_toolkit"},
             )
         allow_network_once = approval.allow_network_once
+        force = True
     if background:
         with background_quota_guard(task_id):
             available, current, limit = background_quota_available(task_id)
@@ -184,7 +186,7 @@ def _terminal_impl(
                 pty=pty,
                 notify_on_complete=notify_on_complete,
                 watch_patterns=watch_patterns,
-                force=False,
+                force=force,
                 allow_network_once=allow_network_once,
             )
     else:
@@ -197,7 +199,7 @@ def _terminal_impl(
             pty=pty,
             notify_on_complete=notify_on_complete,
             watch_patterns=watch_patterns,
-            force=False,
+            force=force,
             allow_network_once=allow_network_once,
         )
     payload = _decode_hermes_payload(raw)

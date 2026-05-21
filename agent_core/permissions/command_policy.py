@@ -235,7 +235,7 @@ def classify_command(command: str, *, background: bool = False) -> PolicyDecisio
         return PolicyDecision.review(
             unique_risks[0],
             risk_tags=unique_risks,
-            requires_network="network_access" in unique_risks,
+            requires_network=bool({"network_access", "package_install"} & set(unique_risks)),
         )
 
     return PolicyDecision.allow("low_risk_command")

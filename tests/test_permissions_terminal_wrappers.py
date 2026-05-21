@@ -141,6 +141,54 @@ def test_reviewed_network_command_with_approval_passes_network_once(monkeypatch)
     assert payload["ok"] is True
     assert calls[0]["allow_network_once"] is True
     assert calls[0]["command"] == "curl https://example.com"
+    assert calls[0]["force"] is True
+
+
+def test_reviewed_dangerous_command_with_approval_bypasses_legacy_guard(monkeypatch):
+    from agent_core.permissions.approvals import (
+        ApprovalRecord,
+        clear_approvals,
+        make_args_digest,
+        record_approval,
+    )
+    from agent_core.permissions.tool_policy import canonical_tool_args
+    from agent_core.session_context import hermes_task_id_from_thread_id
+
+    terminal_tools = _terminal_module()
+    clear_approvals()
+    calls = []
+    thread_id = "task8-dangerous"
+    tool_call_id = "call-dangerous"
+    approval_args = canonical_tool_args(
+        "terminal",
+        {"command": "rm -rf node_modules"},
+    )
+    record_approval(
+        ApprovalRecord(
+            approval_id="approval-dangerous",
+            decision_id="decision-dangerous",
+            task_id=hermes_task_id_from_thread_id(thread_id),
+            tool_call_id=tool_call_id,
+            tool_name="terminal",
+            args_digest=make_args_digest(approval_args),
+            risk_tags=("destructive_command",),
+        )
+    )
+
+    monkeypatch.setattr(
+        terminal_tools,
+        "run_terminal",
+        lambda **kwargs: calls.append(kwargs) or json.dumps({"output": "ok\n", "exit_code": 0, "error": None}),
+    )
+
+    raw = terminal_tools._terminal_impl(
+        command="rm -rf node_modules",
+        runtime=_runtime(thread_id=thread_id, tool_call_id=tool_call_id),
+    )
+    payload = json.loads(raw)
+
+    assert payload["ok"] is True
+    assert calls[0]["force"] is True
 
 
 def test_hardline_command_is_denied(monkeypatch):

@@ -122,3 +122,13 @@ def test_complex_unknown_shell_requires_review():
 
     assert decision.outcome == "review"
     assert "complex_shell" in decision.risk_tags
+
+
+def test_package_install_requires_network():
+    from agent_core.permissions.command_policy import classify_command
+
+    decision = classify_command("pip install rich", background=False)
+
+    assert decision.outcome == "review"
+    assert "package_install" in decision.risk_tags
+    assert decision.requires_network is True
