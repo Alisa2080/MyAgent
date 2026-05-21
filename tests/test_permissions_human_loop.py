@@ -1,7 +1,7 @@
 import json
 from types import SimpleNamespace
 
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, ToolMessage
 
 
 def _runtime(thread_id: str = "thread-1"):
@@ -12,6 +12,17 @@ def _terminal_policy_args(command: str) -> dict:
     from agent_core.permissions.tool_policy import canonical_tool_args
 
     return canonical_tool_args("terminal", {"command": command})
+
+
+def _assert_tool_outputs_match_calls(result: dict) -> None:
+    ai_message = result["messages"][0]
+    tool_call_ids = {tool_call["id"] for tool_call in ai_message.tool_calls}
+    tool_output_ids = {
+        message.tool_call_id
+        for message in result["messages"][1:]
+        if isinstance(message, ToolMessage)
+    }
+    assert tool_output_ids == tool_call_ids
 
 
 def test_policy_allow_does_not_interrupt(monkeypatch):
@@ -88,8 +99,9 @@ def test_policy_deny_synthesizes_tool_message(monkeypatch):
     result = middleware.after_model({"messages": [message]}, _runtime())
 
     assert result is not None
+    _assert_tool_outputs_match_calls(result)
     ai_message, tool_message = result["messages"]
-    assert ai_message.tool_calls == []
+    assert ai_message.tool_calls[0]["id"] == "call-1"
     payload = json.loads(tool_message.content)
     assert payload["error"]["code"] == "policy_denied"
     assert payload["error"]["message"] == "Blocked hardline command."
@@ -214,10 +226,20 @@ def test_policy_mixed_deny_and_review_preserves_approved_call(monkeypatch):
     result = middleware.after_model({"messages": [message]}, _runtime())
 
     assert result is not None
-    assert [tool_call["id"] for tool_call in result["messages"][0].tool_calls] == ["review-call"]
-    payload = json.loads(result["messages"][1].content)
-    assert result["messages"][1].tool_call_id == "deny-call"
+    _assert_tool_outputs_match_calls(result)
+    assert [tool_call["id"] for tool_call in result["messages"][0].tool_calls] == [
+        "deny-call",
+        "review-call",
+    ]
+    messages_by_call_id = {
+        message.tool_call_id: message
+        for message in result["messages"][1:]
+        if isinstance(message, ToolMessage)
+    }
+    payload = json.loads(messages_by_call_id["deny-call"].content)
     assert payload["error"]["code"] == "policy_denied"
+    payload = json.loads(messages_by_call_id["review-call"].content)
+    assert payload["error"]["code"] == "tool_call_deferred"
 
 
 def test_non_policy_tool_still_uses_interrupt_on(monkeypatch):
