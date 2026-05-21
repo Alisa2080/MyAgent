@@ -13,6 +13,12 @@ import threading
 import time
 from typing import Any, Dict, List, Optional
 
+from agent_core.permissions.profiles import (
+    profile_enforces_docker_network,
+    resolve_runtime_profile,
+    resolve_terminal_env,
+)
+
 from .ansi_strip import strip_ansi
 from .approval import check_all_command_guards
 from .command_utils import (
@@ -260,8 +266,14 @@ def _parse_env_var(name: str, default: str, converter=int, type_label: str = "in
 
 def _get_env_config() -> Dict[str, Any]:
     default_image = "nikolaik/python-nodejs:python3.11-nodejs20"
-    env_type = os.getenv("TERMINAL_ENV", "local")
+    profile = resolve_runtime_profile()
+    env_type = resolve_terminal_env(profile)
     mount_docker_cwd = os.getenv("TERMINAL_DOCKER_MOUNT_CWD_TO_WORKSPACE", "false").lower() in ("true", "1", "yes")
+    explicit_network = os.getenv("TERMINAL_CONTAINER_NETWORK")
+    if explicit_network is None:
+        container_network = not profile_enforces_docker_network(profile)
+    else:
+        container_network = explicit_network.lower() in ("true", "1", "yes")
 
     if env_type == "local":
         default_cwd = os.getcwd()
@@ -296,6 +308,7 @@ def _get_env_config() -> Dict[str, Any]:
             cwd = default_cwd
 
     return {
+        "runtime_profile": profile,
         "env_type": env_type,
         "docker_image": os.getenv("TERMINAL_DOCKER_IMAGE", default_image),
         "singularity_image": os.getenv("TERMINAL_SINGULARITY_IMAGE", f"docker://{default_image}"),
@@ -313,6 +326,7 @@ def _get_env_config() -> Dict[str, Any]:
         "container_memory": _parse_env_var("TERMINAL_CONTAINER_MEMORY", "5120"),
         "container_disk": _parse_env_var("TERMINAL_CONTAINER_DISK", "51200"),
         "container_persistent": os.getenv("TERMINAL_CONTAINER_PERSISTENT", "true").lower() in ("true", "1", "yes"),
+        "container_network": container_network,
         "docker_volumes": _parse_env_var("TERMINAL_DOCKER_VOLUMES", "[]", json.loads, "valid JSON"),
         "docker_forward_env": _parse_env_var("TERMINAL_DOCKER_FORWARD_ENV", "[]", json.loads, "valid JSON"),
         "docker_run_as_host_user": os.getenv("TERMINAL_DOCKER_RUN_AS_HOST_USER", "false").lower() in ("true", "1", "yes"),
@@ -345,6 +359,7 @@ def _create_environment(
     memory = cc.get("container_memory", 5120)
     disk = cc.get("container_disk", 51200)
     persistent = cc.get("container_persistent", True)
+    network = cc.get("container_network", True)
     volumes = cc.get("docker_volumes", [])
     docker_forward_env = cc.get("docker_forward_env", [])
     docker_env = cc.get("docker_env", {})
@@ -372,6 +387,7 @@ def _create_environment(
                 auto_mount_cwd=cc.get("docker_mount_cwd_to_workspace", False),
                 forward_env=docker_forward_env,
                 env=docker_env,
+                network=network,
                 run_as_host_user=cc.get("docker_run_as_host_user", False),
             ),
             env_type=env_type,
@@ -483,6 +499,7 @@ def _container_config_from_terminal_config(config: dict) -> dict | None:
         "container_memory": config.get("container_memory", 5120),
         "container_disk": config.get("container_disk", 51200),
         "container_persistent": config.get("container_persistent", True),
+        "container_network": config.get("container_network", True),
         "docker_volumes": config.get("docker_volumes", []),
         "docker_mount_cwd_to_workspace": config.get("docker_mount_cwd_to_workspace", False),
         "docker_forward_env": config.get("docker_forward_env", []),

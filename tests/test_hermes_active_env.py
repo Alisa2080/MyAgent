@@ -43,10 +43,46 @@ def _fake_config(env_type="local"):
         "container_memory": 5120,
         "container_disk": 51200,
         "container_persistent": True,
+        "container_network": True,
         "docker_volumes": [],
         "docker_forward_env": [],
         "docker_run_as_host_user": False,
     }
+
+
+def test_get_env_config_uses_profile_default_for_hosted(monkeypatch):
+    from agent_tools.hermes_terminal_toolkit import terminal_tool
+
+    monkeypatch.delenv("TERMINAL_ENV", raising=False)
+    monkeypatch.delenv("TERMINAL_CONTAINER_NETWORK", raising=False)
+    monkeypatch.setenv("AGENT_RUNTIME_PROFILE", "hosted")
+
+    config = terminal_tool._get_env_config()
+
+    assert config["env_type"] == "docker"
+    assert config["container_network"] is False
+
+
+def test_get_env_config_respects_explicit_terminal_env(monkeypatch):
+    from agent_tools.hermes_terminal_toolkit import terminal_tool
+
+    monkeypatch.setenv("AGENT_RUNTIME_PROFILE", "prod")
+    monkeypatch.setenv("TERMINAL_ENV", "local")
+
+    assert terminal_tool._get_env_config()["env_type"] == "local"
+
+
+def test_get_env_config_dev_keeps_network_default(monkeypatch):
+    from agent_tools.hermes_terminal_toolkit import terminal_tool
+
+    monkeypatch.delenv("TERMINAL_ENV", raising=False)
+    monkeypatch.delenv("TERMINAL_CONTAINER_NETWORK", raising=False)
+    monkeypatch.setenv("AGENT_RUNTIME_PROFILE", "dev")
+
+    config = terminal_tool._get_env_config()
+
+    assert config["env_type"] == "local"
+    assert config["container_network"] is True
 
 
 def test_get_or_create_active_env_creates_and_reuses(monkeypatch):
@@ -183,6 +219,7 @@ def test_get_or_create_active_env_builds_docker_config(monkeypatch):
     assert created[0]["image"] == "fake-docker-image"
     assert created[0]["host_cwd"] == "/home/miku/projects/langchain"
     assert created[0]["container_config"]["docker_mount_cwd_to_workspace"] is True
+    assert created[0]["container_config"]["container_network"] is True
     assert created[0]["container_config"]["docker_volumes"] == ["/tmp/cache:/cache"]
     assert created[0]["container_config"]["docker_forward_env"] == ["CUSTOM_ENV"]
     assert created[0]["container_config"]["docker_run_as_host_user"] is True
