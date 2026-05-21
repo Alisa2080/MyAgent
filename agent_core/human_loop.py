@@ -9,6 +9,7 @@ from langgraph.types import interrupt
 from agent_core.permissions import tool_policy
 from agent_core.permissions.approvals import ApprovalRecord, make_args_digest, record_approval
 from agent_core.permissions.audit import audit_policy_event
+from agent_core.permissions.profiles import resolve_runtime_profile
 from agent_core.session_context import hermes_task_id_from_runtime
 from agent_tools.shared.tool_output import tool_error
 
@@ -118,17 +119,19 @@ class FlexibleHumanInTheLoopMiddleware(HumanInTheLoopMiddleware):
             "description": decision.human_message,
         }
 
-    @staticmethod
     def _record_policy_approval(
+        self,
         *,
         task_id: str,
         tool_call: ToolCall,
         policy_decision: Any,
     ) -> None:
+        approval_id = str(uuid.uuid4())
+        decision_id = str(uuid.uuid4())
         record_approval(
             ApprovalRecord(
-                approval_id=str(uuid.uuid4()),
-                decision_id=str(uuid.uuid4()),
+                approval_id=approval_id,
+                decision_id=decision_id,
                 task_id=task_id,
                 tool_call_id=tool_call["id"],
                 tool_name=tool_call["name"],
@@ -141,6 +144,16 @@ class FlexibleHumanInTheLoopMiddleware(HumanInTheLoopMiddleware):
                 risk_tags=policy_decision.risk_tags,
                 allow_network_once=policy_decision.requires_network,
             )
+        )
+        audit_policy_event(
+            profile=resolve_runtime_profile(),
+            tool_name=tool_call["name"],
+            task_id=task_id,
+            decision=policy_decision,
+            preview=self._preview_for_tool_call(tool_call),
+            approved_by_human=True,
+            network_once=policy_decision.requires_network,
+            extra={"approval_id": approval_id, "decision_id": decision_id},
         )
 
     def after_model(self, state: dict[str, Any], runtime: Runtime[Any]) -> dict[str, Any] | None:
@@ -166,7 +179,7 @@ class FlexibleHumanInTheLoopMiddleware(HumanInTheLoopMiddleware):
                 policy_decision = self._policy_decision_for_tool_call(tool_call, runtime)
                 policy_decisions[idx] = policy_decision
                 audit_policy_event(
-                    profile="runtime",
+                    profile=resolve_runtime_profile(),
                     tool_name=tool_call["name"],
                     task_id=task_id,
                     decision=policy_decision,

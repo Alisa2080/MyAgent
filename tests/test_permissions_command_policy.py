@@ -220,6 +220,28 @@ def test_sensitive_redirect_targets_are_denied(command):
 @pytest.mark.parametrize(
     "command",
     [
+        "touch ~/.ssh/id_rsa",
+        "cp x /etc/hosts",
+        "mv x ~/.aws/credentials",
+        "rm /etc/hosts",
+        "chmod 600 ~/.ssh/id_rsa",
+        "chown root ~/.aws/credentials",
+        "echo x 2> ~/.ssh/authorized_keys",
+        "tee -a ~/.aws/credentials",
+    ],
+)
+def test_sensitive_write_operands_are_denied(command):
+    from agent_core.permissions.command_policy import classify_command
+
+    decision = classify_command(command, background=False)
+
+    assert decision.outcome == "deny"
+    assert "sensitive_path" in decision.risk_tags
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
         "rg token ~",
         "find ~ -maxdepth 2 -type f",
     ],

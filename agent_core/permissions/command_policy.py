@@ -83,7 +83,8 @@ _GIT_BRANCH_MUTATION_FLAGS = {
     "--unset-upstream",
 }
 _SED_WRITE_SCRIPT = re.compile(r"(^|[;{\s])(?:(?:/[^/]*/|[0-9,$!]+|s[^;\s]*/[^;\s]*/[^;\s]*/?))?w(?:\s|/|$)")
-_SENSITIVE_REDIRECT = re.compile(r"(?:^|\s)(?:>{1,2}|\btee\b)\s*(?P<path>(?:~|\$HOME|\$\{HOME\}|/root|/etc)[^\s]*)")
+_SENSITIVE_REDIRECT = re.compile(r"(?:^|\s)(?:\d?>{1,2}|\btee\b(?:\s+-[A-Za-z]+)*)\s*(?P<path>(?:~|\$HOME|\$\{HOME\}|/root|/etc)[^\s]*)")
+_SENSITIVE_OPERAND_COMMANDS = _WRITE_COMMANDS | _DELETE_COMMANDS | _PERMISSION_COMMANDS
 
 
 def _tokens(command: str) -> list[str]:
@@ -190,6 +191,17 @@ def _has_sensitive_write_target(command: str, *, workdir: str | None = None) -> 
         return True
     for match in _SENSITIVE_REDIRECT.finditer(command):
         if file_policy.is_sensitive_path(match.group("path")):
+            return True
+    tokens = _tokens(command)
+    if not tokens:
+        return False
+    command_tokens = _tokens_without_sudo(_unwrap_command_builtin(tokens))
+    if not command_tokens or command_tokens[0] not in _SENSITIVE_OPERAND_COMMANDS:
+        return False
+    for token in command_tokens[1:]:
+        if token.startswith("-"):
+            continue
+        if file_policy.is_sensitive_path(_resolve_read_operand(token, workdir)):
             return True
     return False
 

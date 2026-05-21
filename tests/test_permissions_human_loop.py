@@ -102,8 +102,15 @@ def test_policy_review_records_approval(monkeypatch):
     from agent_core.session_context import hermes_task_id_from_thread_id
 
     clear_approvals()
+    audit_events = []
 
     monkeypatch.setattr(human_loop, "interrupt", lambda _payload: {"type": "approve"})
+    monkeypatch.setattr(
+        human_loop,
+        "audit_policy_event",
+        lambda **kwargs: audit_events.append(kwargs),
+    )
+    monkeypatch.setattr(human_loop, "resolve_runtime_profile", lambda: "hosted")
     monkeypatch.setattr(
         human_loop.tool_policy,
         "evaluate_tool_call",
@@ -143,6 +150,10 @@ def test_policy_review_records_approval(monkeypatch):
     )
     assert record is not None
     assert record.allow_network_once is True
+    assert audit_events[-1]["profile"] == "hosted"
+    assert audit_events[-1]["approved_by_human"] is True
+    assert audit_events[-1]["network_once"] is True
+    assert audit_events[-1]["extra"]["approval_id"]
 
 
 def test_policy_mixed_deny_and_review_preserves_approved_call(monkeypatch):
