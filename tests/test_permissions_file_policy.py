@@ -12,6 +12,26 @@ def test_workspace_write_is_allowed(tmp_path, monkeypatch):
     assert decision.reason == "workspace_write"
 
 
+def test_relative_workspace_write_policy_does_not_call_getcwd(monkeypatch):
+    import agent_core.permissions.file_policy as policy
+
+    def fail_resolve(self, *args, **kwargs):
+        raise AssertionError(f"policy should not resolve relative path: {self}")
+
+    monkeypatch.setattr(policy.Path, "resolve", fail_resolve)
+    monkeypatch.setattr(
+        policy,
+        "resolve_path_for_policy",
+        lambda path, task_id: f"/workspace/{path}",
+    )
+    monkeypatch.setattr(policy, "allowed_workspace_roots_for_task", lambda task_id: ["/workspace"])
+
+    decision = policy.classify_file_write("docs/permission-smoke-test.md", task_id="task-local")
+
+    assert decision.outcome == "allow"
+    assert decision.reason == "workspace_write"
+
+
 def test_ordinary_workspace_escape_requires_review(tmp_path, monkeypatch):
     import agent_core.permissions.file_policy as policy
 

@@ -44,12 +44,13 @@ def is_sensitive_path(path: str) -> bool:
         home_lexical = Path.home().expanduser()
         if _is_sensitive_home_relative(expanded_path, home_lexical):
             return True
-        host_path = _host_path(path)
-        home = Path.home().expanduser().resolve()
+        if not expanded_path.is_absolute():
+            return False
+        home = Path.home().expanduser()
     except (OSError, RuntimeError):
         return False
 
-    if _is_sensitive_home_relative(host_path, home):
+    if _is_sensitive_home_relative(expanded_path, home):
         return True
     return False
 
@@ -134,10 +135,6 @@ def _allowed_workspace_roots(task_id: str) -> list[str]:
     except (OSError, RuntimeError):
         return []
     return [workdir_root]
-
-
-def _host_path(path: str) -> Path:
-    return Path(_expand_user(path)).resolve()
 
 
 def _expand_user(path: str) -> str:
