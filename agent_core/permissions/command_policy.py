@@ -83,7 +83,7 @@ _GIT_BRANCH_MUTATION_FLAGS = {
     "--unset-upstream",
 }
 _SED_WRITE_SCRIPT = re.compile(r"(^|[;{\s])(?:(?:/[^/]*/|[0-9,$!]+|s[^;\s]*/[^;\s]*/[^;\s]*/?))?w(?:\s|/|$)")
-_SENSITIVE_REDIRECT = re.compile(r"(?:^|\s)(?:\d?>{1,2}|\btee\b(?:\s+-[A-Za-z]+)*)\s*(?P<path>(?:~|\$HOME|\$\{HOME\}|/root|/etc)[^\s]*)")
+_SENSITIVE_REDIRECT = re.compile(r"(?:^|\s)(?:\d?>{1,2}|\btee\b(?:\s+--?[A-Za-z][\w-]*)*)\s*(?P<path>(?:~|\$HOME|\$\{HOME\}|/root|/etc)[^\s]*)")
 _SENSITIVE_OPERAND_COMMANDS = _WRITE_COMMANDS | _DELETE_COMMANDS | _PERMISSION_COMMANDS
 
 
@@ -199,7 +199,12 @@ def _has_sensitive_write_target(command: str, *, workdir: str | None = None) -> 
     if not command_tokens or command_tokens[0] not in _SENSITIVE_OPERAND_COMMANDS:
         return False
     for token in command_tokens[1:]:
+        option_value = ""
+        if "=" in token:
+            option_value = token.split("=", 1)[1]
         if token.startswith("-"):
+            if option_value and file_policy.is_sensitive_path(_resolve_read_operand(option_value, workdir)):
+                return True
             continue
         if file_policy.is_sensitive_path(_resolve_read_operand(token, workdir)):
             return True

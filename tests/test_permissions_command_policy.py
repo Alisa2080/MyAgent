@@ -228,6 +228,10 @@ def test_sensitive_redirect_targets_are_denied(command):
         "chown root ~/.aws/credentials",
         "echo x 2> ~/.ssh/authorized_keys",
         "tee -a ~/.aws/credentials",
+        "tee --append ~/.aws/credentials",
+        "printf x | tee --append ~/.aws/credentials",
+        "cp x --target-directory=/etc",
+        "mv x --target-directory=~/.aws",
     ],
 )
 def test_sensitive_write_operands_are_denied(command):
