@@ -12,6 +12,13 @@ _MANDATORY_REVIEW_TOOLS = {"memory_manage", "skill_manage"}
 _PROCESS_STDIN_ACTIONS = {"write", "submit"}
 
 
+def _int_or_default(value: Any, default: int) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
 def canonical_tool_args(tool_name: str, args: dict[str, Any]) -> dict[str, Any]:
     if tool_name == "terminal":
         return {
@@ -29,8 +36,8 @@ def canonical_tool_args(tool_name: str, args: dict[str, Any]) -> dict[str, Any]:
             "session_id": args.get("session_id") or "",
             "data": args.get("data") or "",
             "timeout": args.get("timeout"),
-            "offset": int(args.get("offset", 0) or 0),
-            "limit": int(args.get("limit", 200) or 200),
+            "offset": _int_or_default(args.get("offset"), 0),
+            "limit": _int_or_default(args.get("limit"), 200),
         }
     if tool_name == "write_file":
         return {

@@ -108,3 +108,12 @@ def test_process_write_requires_review():
     assert decision.outcome == "review"
     assert decision.reason == "process_stdin"
     assert "process_stdin" in decision.risk_tags
+
+
+def test_process_canonical_args_tolerate_invalid_pagination():
+    from agent_core.permissions.tool_policy import canonical_tool_args
+
+    args = canonical_tool_args("process", {"action": "list", "offset": "abc", "limit": object()})
+
+    assert args["offset"] == 0
+    assert args["limit"] == 200
