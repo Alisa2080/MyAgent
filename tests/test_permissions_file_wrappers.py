@@ -124,6 +124,17 @@ def test_workspace_escape_with_approval_passes_approved_roots(monkeypatch, tmp_p
     assert payload["ok"] is True
     assert calls[0]["approved_write_roots"] == [str(tmp_path)]
 
+    second_raw = files._write_file_impl(
+        target,
+        "hello",
+        runtime=_runtime(tool_call_id="call-escape"),
+    )
+    second_payload = json.loads(second_raw)
+
+    assert second_payload["ok"] is False
+    assert second_payload["error"]["code"] == "approval_required"
+    assert len(calls) == 1
+
 
 def test_sensitive_path_is_denied_without_consuming_approval(monkeypatch):
     import agent_tools.public.files as files
@@ -243,3 +254,16 @@ def test_patch_workspace_escape_with_approval_passes_approved_roots(monkeypatch,
 
     assert payload["ok"] is True
     assert calls[0]["approved_write_roots"] == [str(tmp_path)]
+
+    second_raw = files._patch_impl(
+        mode="replace",
+        path=target,
+        old_string="old",
+        new_string="new",
+        runtime=_runtime(tool_call_id="call-patch"),
+    )
+    second_payload = json.loads(second_raw)
+
+    assert second_payload["ok"] is False
+    assert second_payload["error"]["code"] == "approval_required"
+    assert len(calls) == 1

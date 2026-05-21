@@ -214,6 +214,31 @@ def test_write_file_tool_denies_relative_path_in_active_local_env_cwd_outside_sa
     assert env.commands == []
 
 
+def test_shell_file_operations_approved_write_roots_temporarily_extend_safety_gate(
+    tmp_path, monkeypatch
+):
+    safe_root = tmp_path / "safe-root"
+    approved_root = tmp_path / "approved-root"
+    safe_root.mkdir()
+    approved_root.mkdir()
+    monkeypatch.setenv("AGENT_WRITE_SAFE_ROOT", str(safe_root))
+
+    class LocalEnvironment:
+        cwd = str(safe_root)
+        _hermes_env_type = "local"
+
+        def execute(self, command, **kwargs):
+            return {"output": "", "returncode": 0}
+
+    file_ops = file_tools.ShellFileOperations(LocalEnvironment())
+    target = str(approved_root / "report.txt")
+
+    assert file_ops._is_write_denied_for_path(target) is True
+    with file_ops.approved_write_roots([str(approved_root)]):
+        assert file_ops._is_write_denied_for_path(target) is False
+    assert file_ops._is_write_denied_for_path(target) is True
+
+
 def test_shell_file_operations_allows_workspace_writes_for_docker_safe_root(
     tmp_path, monkeypatch
 ):
@@ -633,6 +658,78 @@ def test_patch_tool_move_file_tracks_source_and_destination(monkeypatch):
         ("task-move", "/workspace/dest.txt", None),
     ]
     assert fake_ops.patches == [patch_content]
+
+
+def test_patch_tool_enters_approved_write_roots_context(monkeypatch):
+    class PatchResult:
+        def to_dict(self):
+            return {"status": "success"}
+
+    class FakeFileOps:
+        def __init__(self):
+            self.context_roots = []
+            self.in_approved_context = False
+            self.patches = []
+
+        def approved_write_roots(self, roots):
+            fake_ops = self
+
+            class ApprovedRootsContext:
+                def __enter__(self):
+                    fake_ops.context_roots.append(roots)
+                    fake_ops.in_approved_context = True
+
+                def __exit__(self, exc_type, exc, tb):
+                    fake_ops.in_approved_context = False
+                    return False
+
+            return ApprovedRootsContext()
+
+        def patch_v4a(self, patch):
+            assert self.in_approved_context is True
+            self.patches.append(patch)
+            return PatchResult()
+
+    class RecordingLock:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    fake_ops = FakeFileOps()
+    patch_content = "\n".join(
+        [
+            "*** Begin Patch",
+            "*** Add File: approved.txt",
+            "+hello",
+            "*** End Patch",
+        ]
+    )
+
+    monkeypatch.setattr(file_tools, "_get_file_ops", lambda task_id: fake_ops)
+    monkeypatch.setattr(file_tools, "_check_sensitive_path", lambda path, task_id: None)
+    monkeypatch.setattr(
+        file_tools,
+        "_resolve_path_for_task",
+        lambda path, task_id: f"/workspace/{path}",
+    )
+    monkeypatch.setattr(file_tools.file_state, "lock_path", lambda path: RecordingLock())
+    monkeypatch.setattr(file_tools.file_state, "check_stale", lambda *args, **kwargs: None)
+    monkeypatch.setattr(file_tools.file_state, "note_write", lambda *args, **kwargs: None)
+    monkeypatch.setattr(file_tools, "_update_read_timestamp", lambda *args, **kwargs: None)
+
+    raw = file_tools.patch_tool(
+        mode="patch",
+        patch=patch_content,
+        task_id="task-approved",
+        approved_write_roots=["/approved"],
+    )
+
+    assert raw == '{"status": "success"}'
+    assert fake_ops.context_roots == [["/approved"]]
+    assert fake_ops.patches == [patch_content]
+    assert fake_ops.in_approved_context is False
 
 
 def test_sample_mtime_degrades_when_backend_context_lookup_fails_without_host_stat(
