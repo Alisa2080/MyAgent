@@ -93,6 +93,28 @@ def _terminal_policy_args(
     )
 
 
+def _process_policy_args(
+    *,
+    action: str,
+    session_id: str,
+    data: str,
+    timeout: int | None,
+    offset: int,
+    limit: int,
+) -> dict:
+    return tool_policy.canonical_tool_args(
+        "process",
+        {
+            "action": action,
+            "session_id": session_id,
+            "data": data,
+            "timeout": timeout,
+            "offset": offset,
+            "limit": limit,
+        },
+    )
+
+
 def _terminal_impl(
     *,
     command: str,
@@ -248,6 +270,7 @@ def _process_impl(
     runtime: ToolRuntime | None = None,
 ) -> str:
     task_id = hermes_task_id_from_runtime(runtime)
+    tool_call_id = _tool_call_id_from_runtime(runtime)
     if action in _PROCESS_ACTIONS_REQUIRING_SESSION:
         if not session_id:
             return tool_error("process", f"session_id is required for {action}", code="invalid_input")
@@ -257,6 +280,40 @@ def _process_impl(
                 "Process session does not belong to the current runtime task id.",
                 code="access_denied",
                 data={"session_id": session_id},
+                meta={"backend": "hermes_terminal_toolkit"},
+            )
+
+    policy_args = _process_policy_args(
+        action=action,
+        session_id=session_id,
+        data=data,
+        timeout=timeout,
+        offset=offset,
+        limit=limit,
+    )
+    decision = tool_policy.evaluate_tool_call("process", policy_args, task_id, tool_call_id=tool_call_id)
+    if decision.outcome == "deny":
+        return tool_error(
+            "process",
+            decision.human_message,
+            code="policy_denied",
+            data=decision.data,
+            meta={"backend": "hermes_terminal_toolkit"},
+        )
+    if decision.outcome == "review":
+        approval = consume_approval(
+            task_id=task_id,
+            tool_call_id=tool_call_id,
+            tool_name="process",
+            args=policy_args,
+            required_risk_tags=decision.risk_tags,
+        )
+        if approval is None:
+            return tool_error(
+                "process",
+                decision.human_message,
+                code="approval_required",
+                data=decision.data,
                 meta={"backend": "hermes_terminal_toolkit"},
             )
 
