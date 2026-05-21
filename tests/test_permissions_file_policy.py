@@ -63,3 +63,18 @@ def test_docker_workspace_path_is_allowed(monkeypatch):
 
     assert decision.outcome == "allow"
     assert decision.reason == "workspace_write"
+
+
+def test_non_local_helper_roots_do_not_allow_host_workspace(tmp_path, monkeypatch):
+    import agent_core.permissions.file_policy as policy
+
+    host_path = tmp_path / "probe.txt"
+    monkeypatch.setattr(policy, "WORKDIR", tmp_path)
+    monkeypatch.setattr(policy, "allowed_workspace_roots_for_task", lambda task_id: ["/workspace"])
+    monkeypatch.setattr(policy, "resolve_path_for_policy", lambda path, task_id: str(host_path))
+
+    decision = policy.classify_file_write("probe.txt", task_id="task-docker")
+
+    assert decision.outcome == "review"
+    assert decision.reason == "writes_outside_workspace"
+    assert "writes_outside_workspace" in decision.risk_tags

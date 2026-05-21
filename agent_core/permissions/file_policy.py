@@ -86,14 +86,18 @@ def approved_write_root_for_path(path: str, *, task_id: str) -> str:
 
 
 def _allowed_workspace_roots(task_id: str) -> list[str]:
-    roots = list(allowed_workspace_roots_for_task(task_id))
+    try:
+        roots = [root for root in allowed_workspace_roots_for_task(task_id) if root]
+    except Exception:
+        roots = []
+    if roots:
+        return roots
+
     try:
         workdir_root = str(Path(WORKDIR).expanduser().resolve())
     except (OSError, RuntimeError):
-        return roots
-    if workdir_root not in roots:
-        roots.append(workdir_root)
-    return roots
+        return []
+    return [workdir_root]
 
 
 def _host_path(path: str) -> Path:
