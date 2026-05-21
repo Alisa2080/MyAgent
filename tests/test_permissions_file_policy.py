@@ -53,6 +53,22 @@ def test_sensitive_container_path_is_denied():
     assert "sensitive_path" in decision.risk_tags
 
 
+def test_low_level_sensitive_system_paths_are_denied():
+    from agent_core.permissions.file_policy import classify_file_write
+
+    for path in (
+        "/boot/vmlinuz",
+        "/usr/lib/systemd/system/example.service",
+        "/private/etc/hosts",
+        "/private/var/db/example",
+    ):
+        decision = classify_file_write(path, task_id="task-local")
+
+        assert decision.outcome == "deny"
+        assert decision.reason == "sensitive_path"
+        assert "sensitive_path" in decision.risk_tags
+
+
 def test_docker_workspace_path_is_allowed(monkeypatch):
     import agent_core.permissions.file_policy as policy
 

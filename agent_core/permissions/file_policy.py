@@ -23,6 +23,10 @@ SENSITIVE_CONTAINER_PREFIXES = (
     "/root/.docker/",
     "/root/.azure/",
     "/etc/",
+    "/boot/",
+    "/usr/lib/systemd/",
+    "/private/etc/",
+    "/private/var/",
 )
 SENSITIVE_EXACT = {"/etc", "/var/run/docker.sock", "/run/docker.sock"}
 
