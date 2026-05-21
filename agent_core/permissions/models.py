@@ -9,6 +9,38 @@ RiskTag = str
 RuntimeProfile = Literal["dev", "test", "hosted", "prod"]
 
 
+class FrozenDict(dict):
+    """JSON-serializable immutable dict used for policy decision metadata."""
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(
+            {key: self._freeze(value) for key, value in dict(*args, **kwargs).items()}
+        )
+
+    @classmethod
+    def _freeze(cls, value: Any) -> Any:
+        if isinstance(value, FrozenDict):
+            return value
+        if isinstance(value, dict):
+            return FrozenDict(value)
+        if isinstance(value, list):
+            return tuple(cls._freeze(item) for item in value)
+        if isinstance(value, tuple):
+            return tuple(cls._freeze(item) for item in value)
+        return value
+
+    def _immutable(self, *args: Any, **kwargs: Any) -> None:
+        raise TypeError("PolicyDecision data is immutable.")
+
+    __setitem__ = _immutable
+    __delitem__ = _immutable
+    clear = _immutable
+    pop = _immutable
+    popitem = _immutable
+    setdefault = _immutable
+    update = _immutable
+
+
 @dataclass(frozen=True)
 class PolicyDecision:
     outcome: PolicyOutcome
@@ -16,7 +48,10 @@ class PolicyDecision:
     risk_tags: tuple[RiskTag, ...] = ()
     message: str = ""
     requires_network: bool = False
-    data: dict[str, Any] = field(default_factory=dict)
+    data: FrozenDict = field(default_factory=FrozenDict)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "data", FrozenDict(self.data))
 
     @classmethod
     def allow(cls, reason: str = "allowed", **kwargs: Any) -> "PolicyDecision":

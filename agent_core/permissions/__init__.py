@@ -1,4 +1,5 @@
 from agent_core.permissions.models import (
+    FrozenDict,
     PolicyDecision,
     PolicyOutcome,
     RiskTag,
@@ -14,6 +15,7 @@ from agent_core.permissions.profiles import (
 __all__ = [
     "PolicyDecision",
     "PolicyOutcome",
+    "FrozenDict",
     "RiskTag",
     "RuntimeProfile",
     "default_terminal_env",
