@@ -21,6 +21,26 @@ def test_policy_decision_data_is_copied_and_immutable():
         decision.data["path"] = "/tmp/mutated.txt"
 
 
+def test_policy_decision_data_blocks_in_place_merge():
+    from agent_core.permissions.models import PolicyDecision
+
+    decision = PolicyDecision.allow("allowed", data={"path": "/tmp/report.txt"})
+
+    with pytest.raises(TypeError, match="immutable"):
+        decision.data |= {"extra": True}
+    assert "extra" not in decision.data
+
+
+def test_policy_decision_risk_tags_are_normalized_to_tuple():
+    from agent_core.permissions.models import PolicyDecision
+
+    risk_tags = ["network_access"]
+    decision = PolicyDecision.allow("allowed", risk_tags=risk_tags)
+    risk_tags.append("mutated")
+
+    assert decision.risk_tags == ("network_access",)
+
+
 def test_policy_decision_data_remains_json_serializable():
     from agent_core.permissions.models import PolicyDecision
 

@@ -39,6 +39,7 @@ class FrozenDict(dict):
     popitem = _immutable
     setdefault = _immutable
     update = _immutable
+    __ior__ = _immutable
 
 
 @dataclass(frozen=True)
@@ -51,6 +52,7 @@ class PolicyDecision:
     data: FrozenDict = field(default_factory=FrozenDict)
 
     def __post_init__(self) -> None:
+        object.__setattr__(self, "risk_tags", tuple(self.risk_tags))
         object.__setattr__(self, "data", FrozenDict(self.data))
 
     @classmethod
