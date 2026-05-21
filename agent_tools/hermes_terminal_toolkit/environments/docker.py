@@ -11,6 +11,7 @@ import re
 import shutil
 import subprocess
 import sys
+import threading
 import uuid
 from contextlib import contextmanager
 from typing import Optional
@@ -304,6 +305,9 @@ class DockerEnvironment(BaseEnvironment):
         self._env = _normalize_env_dict(env)
         self._container_id: Optional[str] = None
         self._network_enabled = bool(network)
+        self._network_initially_enabled = bool(network)
+        self._network_lease_count = 0
+        self._network_lock = threading.Lock()
         self._egress_network = os.getenv("HERMES_DOCKER_NETWORK", "bridge")
         logger.info(f"DockerEnvironment volumes: {volumes}")
         # Ensure volumes is a list (config.yaml could be malformed)
@@ -608,11 +612,20 @@ class DockerEnvironment(BaseEnvironment):
 
     @contextmanager
     def temporary_network(self):
-        was_enabled = self._network_enabled
-        if not was_enabled:
-            self._docker_network_connect()
+        acquired = False
+        with self._network_lock:
+            if self._network_initially_enabled:
+                acquired = False
+            else:
+                if self._network_lease_count == 0:
+                    self._docker_network_connect()
+                self._network_lease_count += 1
+                acquired = True
         try:
             yield
         finally:
-            if not was_enabled:
-                self._docker_network_disconnect()
+            if acquired:
+                with self._network_lock:
+                    self._network_lease_count = max(0, self._network_lease_count - 1)
+                    if self._network_lease_count == 0:
+                        self._docker_network_disconnect()

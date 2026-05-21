@@ -145,6 +145,47 @@ def test_process_registry_releases_background_network_lease(monkeypatch):
     assert released == ["released"]
 
 
+def test_docker_temporary_network_overlapping_leases_disconnect_after_last_release():
+    from agent_tools.hermes_terminal_toolkit.environments.docker import DockerEnvironment
+
+    env = object.__new__(DockerEnvironment)
+    env._container_id = "container-1"
+    env._network_enabled = False
+    env._network_initially_enabled = False
+    env._network_lease_count = 0
+    import threading
+
+    env._network_lock = threading.Lock()
+    events = []
+
+    def connect():
+        events.append("connect")
+        env._network_enabled = True
+
+    def disconnect():
+        events.append("disconnect")
+        env._network_enabled = False
+
+    env._docker_network_connect = connect
+    env._docker_network_disconnect = disconnect
+
+    first = env.temporary_network()
+    second = env.temporary_network()
+
+    first.__enter__()
+    second.__enter__()
+    first.__exit__(None, None, None)
+
+    assert events == ["connect"]
+    assert env._network_enabled is True
+
+    second.__exit__(None, None, None)
+
+    assert events == ["connect", "disconnect"]
+    assert env._network_enabled is False
+    env._container_id = None
+
+
 def test_process_registry_releases_background_network_lease_after_spawn_failure():
     from agent_tools.hermes_terminal_toolkit.process_registry import ProcessRegistry
 
