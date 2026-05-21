@@ -46,7 +46,11 @@ def test_ci_inference(monkeypatch):
     from agent_core.permissions.profiles import resolve_runtime_profile
 
     monkeypatch.delenv("AGENT_RUNTIME_PROFILE", raising=False)
+    monkeypatch.delenv("ENVIRONMENT", raising=False)
+    monkeypatch.delenv("APP_ENV", raising=False)
+    monkeypatch.delenv("NODE_ENV", raising=False)
     monkeypatch.delenv("AGENT_HOSTED", raising=False)
+    monkeypatch.delenv("LANGGRAPH_DEPLOYMENT_ID", raising=False)
     monkeypatch.setenv("CI", "true")
 
     assert resolve_runtime_profile() == "test"

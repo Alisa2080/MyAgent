@@ -1,3 +1,15 @@
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def clear_approval_state():
+    from agent_core.permissions.approvals import clear_approvals
+
+    clear_approvals()
+    yield
+    clear_approvals()
+
+
 def test_approval_is_single_use_and_argument_bound():
     from agent_core.permissions.approvals import (
         ApprovalRecord,
