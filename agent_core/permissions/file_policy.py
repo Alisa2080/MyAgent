@@ -39,13 +39,23 @@ def is_sensitive_path(path: str) -> bool:
         return True
 
     try:
+        expanded_path = Path(_expand_user(path))
+        home_lexical = Path.home().expanduser()
+        if _is_sensitive_home_relative(expanded_path, home_lexical):
+            return True
         host_path = _host_path(path)
         home = Path.home().expanduser().resolve()
     except (OSError, RuntimeError):
         return False
 
+    if _is_sensitive_home_relative(host_path, home):
+        return True
+    return False
+
+
+def _is_sensitive_home_relative(path: Path, home: Path) -> bool:
     try:
-        relative = host_path.relative_to(home)
+        relative = path.relative_to(home)
     except ValueError:
         return False
 

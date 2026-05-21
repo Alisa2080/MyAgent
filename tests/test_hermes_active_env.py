@@ -63,6 +63,19 @@ def test_get_env_config_uses_profile_default_for_hosted(monkeypatch):
     assert config["container_network"] is False
 
 
+def test_get_env_config_hosted_ignores_container_network_override(monkeypatch):
+    from agent_tools.hermes_terminal_toolkit import terminal_tool
+
+    monkeypatch.delenv("TERMINAL_ENV", raising=False)
+    monkeypatch.setenv("AGENT_RUNTIME_PROFILE", "hosted")
+    monkeypatch.setenv("TERMINAL_CONTAINER_NETWORK", "true")
+
+    config = terminal_tool._get_env_config()
+
+    assert config["env_type"] == "docker"
+    assert config["container_network"] is False
+
+
 def test_get_env_config_respects_explicit_terminal_env(monkeypatch):
     from agent_tools.hermes_terminal_toolkit import terminal_tool
 

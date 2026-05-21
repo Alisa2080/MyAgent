@@ -151,3 +151,61 @@ def test_package_install_variants_require_network(command):
     assert decision.outcome == "review"
     assert "package_install" in decision.risk_tags
     assert decision.requires_network is True
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "cat ~/.ssh/id_rsa",
+        "ls ~/.aws",
+        "grep token ~/.config/gh/hosts.yml",
+        "find /etc -maxdepth 1 -type f",
+        "sed -n '1,20p' /root/.config/gh/hosts.yml",
+    ],
+)
+def test_read_commands_to_sensitive_paths_are_denied(command):
+    from agent_core.permissions.command_policy import classify_command
+
+    decision = classify_command(command, background=False)
+
+    assert decision.outcome == "deny"
+    assert "sensitive_path" in decision.risk_tags
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "npm i",
+        "npm ci",
+        "pnpm add pytest",
+        "uv pip install rich",
+        "poetry add rich",
+        "pipx install black",
+        "cargo install ripgrep",
+        "go install example.com/tool@latest",
+    ],
+)
+def test_more_package_install_variants_require_network(command):
+    from agent_core.permissions.command_policy import classify_command
+
+    decision = classify_command(command, background=False)
+
+    assert decision.outcome == "review"
+    assert "package_install" in decision.risk_tags
+    assert decision.requires_network is True
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "pytest --watch",
+        "npm test -- --watch",
+    ],
+)
+def test_watch_mode_test_commands_require_review(command):
+    from agent_core.permissions.command_policy import classify_command
+
+    decision = classify_command(command, background=False)
+
+    assert decision.outcome == "review"
+    assert "long_running_process" in decision.risk_tags

@@ -315,6 +315,8 @@ def test_shell_file_operations_allows_workspace_writes_for_docker_safe_root(
 
         def execute(self, command, **kwargs):
             self.commands.append((command, kwargs))
+            if command.startswith("realpath -m"):
+                return {"output": "/workspace/notes.txt\n", "returncode": 0}
             if command.startswith("wc -c"):
                 return {"output": "5\n", "returncode": 0}
             return {"output": "", "returncode": 0}
@@ -326,7 +328,7 @@ def test_shell_file_operations_allows_workspace_writes_for_docker_safe_root(
 
     assert result.error is None
     assert result.bytes_written == 5
-    assert [kwargs["cwd"] for _, kwargs in env.commands] == ["/workspace", "/workspace"]
+    assert [kwargs["cwd"] for _, kwargs in env.commands] == ["/workspace", "/workspace", "/workspace"]
 
 
 def test_shell_file_operations_allows_docker_workspace_absolute_write(
@@ -345,6 +347,8 @@ def test_shell_file_operations_allows_docker_workspace_absolute_write(
 
         def execute(self, command, **kwargs):
             self.commands.append((command, kwargs))
+            if command.startswith("realpath -m"):
+                return {"output": "/workspace/notes.txt\n", "returncode": 0}
             if command.startswith("wc -c"):
                 return {"output": "5\n", "returncode": 0}
             return {"output": "", "returncode": 0}
@@ -356,7 +360,7 @@ def test_shell_file_operations_allows_docker_workspace_absolute_write(
 
     assert result.error is None
     assert result.bytes_written == 5
-    assert [kwargs["cwd"] for _, kwargs in env.commands] == ["/root", "/root", "/root"]
+    assert [kwargs["cwd"] for _, kwargs in env.commands] == ["/root", "/root", "/root", "/root"]
 
 
 def test_shell_file_operations_allows_effective_docker_cwd_writes(
@@ -376,6 +380,8 @@ def test_shell_file_operations_allows_effective_docker_cwd_writes(
 
         def execute(self, command, **kwargs):
             self.commands.append((command, kwargs))
+            if command.startswith("realpath -m"):
+                return {"output": "/root/notes.txt\n", "returncode": 0}
             if command.startswith("wc -c"):
                 return {"output": "5\n", "returncode": 0}
             return {"output": "", "returncode": 0}
@@ -387,7 +393,7 @@ def test_shell_file_operations_allows_effective_docker_cwd_writes(
 
     assert result.error is None
     assert result.bytes_written == 5
-    assert [kwargs["cwd"] for _, kwargs in env.commands] == ["/root", "/root"]
+    assert [kwargs["cwd"] for _, kwargs in env.commands] == ["/root", "/root", "/root"]
 
 
 def test_shell_file_operations_allows_singularity_effective_cwd_writes(
@@ -407,6 +413,8 @@ def test_shell_file_operations_allows_singularity_effective_cwd_writes(
 
         def execute(self, command, **kwargs):
             self.commands.append((command, kwargs))
+            if command.startswith("realpath -m"):
+                return {"output": "/project/notes.txt\n", "returncode": 0}
             if command.startswith("wc -c"):
                 return {"output": "5\n", "returncode": 0}
             return {"output": "", "returncode": 0}
@@ -418,7 +426,7 @@ def test_shell_file_operations_allows_singularity_effective_cwd_writes(
 
     assert result.error is None
     assert result.bytes_written == 5
-    assert [kwargs["cwd"] for _, kwargs in env.commands] == ["/project", "/project"]
+    assert [kwargs["cwd"] for _, kwargs in env.commands] == ["/project", "/project", "/project"]
 
 
 def test_shell_file_operations_keeps_workspace_root_denied_for_singularity(
@@ -446,7 +454,38 @@ def test_shell_file_operations_keeps_workspace_root_denied_for_singularity(
     result = file_ops.write_file("/workspace/notes.txt", "hello")
 
     assert "Write denied" in result.error
-    assert env.commands == []
+    assert len(env.commands) == 1
+    assert env.commands[0][0].startswith("realpath -m")
+
+
+def test_shell_file_operations_denies_backend_symlink_escape_from_workspace(
+    tmp_path, monkeypatch
+):
+    safe_root = tmp_path / "host-workdir"
+    safe_root.mkdir()
+    monkeypatch.setenv("AGENT_WRITE_SAFE_ROOT", str(safe_root))
+
+    class DockerEnvironment:
+        cwd = "/workspace"
+        _hermes_env_type = "docker"
+
+        def __init__(self):
+            self.commands = []
+
+        def execute(self, command, **kwargs):
+            self.commands.append((command, kwargs))
+            if command.startswith("realpath -m"):
+                return {"output": "/root/.ssh/id_rsa\n", "returncode": 0}
+            return {"output": "", "returncode": 0}
+
+    env = DockerEnvironment()
+    file_ops = file_tools.ShellFileOperations(env)
+
+    result = file_ops.write_file("link/id_rsa", "secret")
+
+    assert "Write denied" in result.error
+    assert len(env.commands) == 1
+    assert env.commands[0][0].startswith("realpath -m")
 
 
 def test_shell_file_operations_allows_effective_ssh_cwd_writes(
@@ -465,6 +504,8 @@ def test_shell_file_operations_allows_effective_ssh_cwd_writes(
 
         def execute(self, command, **kwargs):
             self.commands.append((command, kwargs))
+            if command.startswith("realpath -m"):
+                return {"output": "/home/remote/project/notes.txt\n", "returncode": 0}
             if command.startswith("wc -c"):
                 return {"output": "5\n", "returncode": 0}
             return {"output": "", "returncode": 0}
@@ -477,6 +518,7 @@ def test_shell_file_operations_allows_effective_ssh_cwd_writes(
     assert result.error is None
     assert result.bytes_written == 5
     assert [kwargs["cwd"] for _, kwargs in env.commands] == [
+        "/home/remote/project",
         "/home/remote/project",
         "/home/remote/project",
     ]
@@ -506,7 +548,8 @@ def test_shell_file_operations_keeps_workspace_root_denied_for_ssh(
     result = file_ops.write_file("/workspace/notes.txt", "hello")
 
     assert "Write denied" in result.error
-    assert env.commands == []
+    assert len(env.commands) == 1
+    assert env.commands[0][0].startswith("realpath -m")
 
 
 def test_shell_file_operations_denies_host_safe_root_for_untagged_ssh_without_backend_roots(
@@ -590,7 +633,8 @@ def test_shell_file_operations_denies_host_safe_root_absolute_path_outside_backe
     result = file_ops.write_file(str(target), "hello")
 
     assert "Write denied" in result.error
-    assert env.commands == []
+    assert len(env.commands) == 1
+    assert env.commands[0][0].startswith("realpath -m")
 
 
 def test_invalidate_dedup_for_path_resolves_with_supplied_task_id(monkeypatch):

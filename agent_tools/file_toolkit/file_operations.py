@@ -282,22 +282,42 @@ class ShellFileOperations(FileOperations):
 
     def _host_safe_root_applies(self) -> bool:
         """Return whether the host safe root should be used for this env."""
-        env_type = (
-            getattr(self.env, "env_type", None)
-            or getattr(self.env, "_hermes_env_type", None)
-        )
+        env_type = self._env_type()
         if env_type is not None:
             return str(env_type) == "local"
 
         class_name = self.env.__class__.__name__.lower()
         return not any(env_type in class_name for env_type in ("docker", "ssh", "singularity"))
 
+    def _env_type(self) -> str | None:
+        """Return the active backend type when the environment exposes it."""
+        env_type = (
+            getattr(self.env, "env_type", None)
+            or getattr(self.env, "_hermes_env_type", None)
+        )
+        return str(env_type) if env_type is not None else None
+
     def _resolve_write_safety_path(self, path: str) -> str:
         """Resolve a write target the same way shell execution will."""
-        expanded = os.path.expanduser(str(path))
+        env_type = self._env_type()
+        if env_type and env_type != "local":
+            expanded = self._expand_path(str(path))
+        else:
+            expanded = os.path.expanduser(str(path))
         if not os.path.isabs(expanded):
             expanded = os.path.join(self._effective_cwd(), expanded)
-        return os.path.normpath(expanded)
+        normalized = os.path.normpath(expanded)
+        if not env_type or env_type == "local":
+            return normalized
+
+        quoted = self._escape_shell_arg(normalized)
+        result = self._exec(
+            f"realpath -m -- {quoted} 2>/dev/null || readlink -m -- {quoted} 2>/dev/null",
+            timeout=10,
+        )
+        if result.exit_code != 0 or not result.stdout.strip():
+            return "/__policy_unresolved_write_path__"
+        return os.path.normpath(result.stdout.splitlines()[0].strip())
 
     def _is_write_denied_for_path(self, path: str) -> bool:
         extra_roots = self._extra_safe_write_roots()

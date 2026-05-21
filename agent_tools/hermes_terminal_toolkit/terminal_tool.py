@@ -270,8 +270,10 @@ def _get_env_config() -> Dict[str, Any]:
     env_type = resolve_terminal_env(profile)
     mount_docker_cwd = os.getenv("TERMINAL_DOCKER_MOUNT_CWD_TO_WORKSPACE", "false").lower() in ("true", "1", "yes")
     explicit_network = os.getenv("TERMINAL_CONTAINER_NETWORK")
-    if explicit_network is None:
-        container_network = not profile_enforces_docker_network(profile)
+    if profile_enforces_docker_network(profile) and env_type != "local":
+        container_network = False
+    elif explicit_network is None:
+        container_network = True
     else:
         container_network = explicit_network.lower() in ("true", "1", "yes")
 

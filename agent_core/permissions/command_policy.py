@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 import shlex
 
+from agent_core.permissions.file_policy import is_sensitive_path
 from agent_core.permissions.models import PolicyDecision
 from agent_tools.hermes_terminal_toolkit.approval import check_all_command_guards
 
@@ -43,10 +44,18 @@ _PACKAGE_INSTALL_PATTERNS = (
     ("pip3", "install"),
     ("python", "-m", "pip", "install"),
     ("python3", "-m", "pip", "install"),
+    ("uv", "pip", "install"),
+    ("pipx", "install"),
     ("npm", "install"),
+    ("npm", "i"),
+    ("npm", "ci"),
     ("pnpm", "install"),
+    ("pnpm", "add"),
     ("yarn", "add"),
     ("yarn", "install"),
+    ("poetry", "add"),
+    ("cargo", "install"),
+    ("go", "install"),
     ("apt", "install"),
     ("apt-get", "install"),
     ("brew", "install"),
@@ -55,6 +64,8 @@ _NETWORK_COMMANDS = {"curl", "wget", "ssh", "scp"}
 _NETWORK_GIT_SUBCOMMANDS = {"clone", "fetch", "pull", "push"}
 _SERVICE_COMMANDS = {"systemctl", "service"}
 _LONG_RUNNING_TOKENS = {"vite", "uvicorn", "watch"}
+_WATCH_FLAGS = {"--watch", "--watchAll", "--watch-all", "-w"}
+_PATH_READING_COMMANDS = {"cat", "find", "grep", "head", "ls", "rg", "sed", "tail", "wc"}
 _GIT_BRANCH_DELETE_FLAGS = {"-d", "-D", "--delete"}
 _GIT_BRANCH_MUTATION_FLAGS = {
     "-m",
@@ -105,6 +116,28 @@ def _tokens_without_sudo(tokens: list[str]) -> list[str]:
 def _has_package_install(tokens: list[str]) -> bool:
     package_tokens = _tokens_without_sudo(tokens)
     return any(_starts_with(package_tokens, prefix) for prefix in _PACKAGE_INSTALL_PATTERNS)
+
+
+def _has_watch_mode(tokens: list[str]) -> bool:
+    return any(
+        token in _WATCH_FLAGS or token == "watch" or token.endswith(":watch")
+        for token in tokens
+    )
+
+
+def _has_sensitive_read_path(tokens: list[str]) -> bool:
+    if not tokens:
+        return False
+    command_tokens = _unwrap_command_builtin(tokens)
+    base = command_tokens[0] if command_tokens else ""
+    if base not in _PATH_READING_COMMANDS:
+        return False
+    for token in tokens[1:]:
+        if token.startswith("-"):
+            continue
+        if is_sensitive_path(token):
+            return True
+    return False
 
 
 def _is_read_only(tokens: list[str]) -> bool:
@@ -212,6 +245,12 @@ def classify_command(command: str, *, background: bool = False) -> PolicyDecisio
 
     if background:
         risk_tags.append("long_running_process")
+    if _has_sensitive_read_path(tokens):
+        return PolicyDecision.deny(
+            "sensitive_path",
+            risk_tags=("sensitive_path",),
+            message="Command reads from a sensitive path.",
+        )
     if _contains_write_redirect(command) or _sed_has_write_command(tokens):
         risk_tags.append("write_redirect")
     if base in _WRITE_COMMANDS:
@@ -228,7 +267,11 @@ def classify_command(command: str, *, background: bool = False) -> PolicyDecisio
         risk_tags.append("privilege_escalation")
     if base in _SERVICE_COMMANDS:
         risk_tags.append("service_control")
-    if base in _LONG_RUNNING_TOKENS or tuple(tokens[:3]) == ("npm", "run", "dev"):
+    if (
+        base in _LONG_RUNNING_TOKENS
+        or tuple(tokens[:3]) == ("npm", "run", "dev")
+        or _has_watch_mode(tokens)
+    ):
         risk_tags.append("long_running_process")
     if tokens and tokens[0] == "find" and "-delete" in tokens:
         risk_tags.append("destructive_command")
