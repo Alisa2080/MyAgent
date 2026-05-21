@@ -801,14 +801,16 @@ class ProcessRegistry:
         with self._lock:
             was_running = self._running.pop(session.id, None) is not None
             self._finished[session.id] = session
-        release = getattr(session, "network_release", None)
+        release = None
+        if was_running:
+            with session._lock:
+                release = getattr(session, "network_release", None)
+                session.network_release = None
         if release is not None:
             try:
                 release()
             except Exception:
                 logger.warning("Failed to release network lease for %s", session.id, exc_info=True)
-            finally:
-                session.network_release = None
         self._write_checkpoint()
 
         # Only enqueue completion notification on the FIRST move.  Without

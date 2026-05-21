@@ -145,6 +145,27 @@ def test_process_registry_releases_background_network_lease(monkeypatch):
     assert released == ["released"]
 
 
+def test_process_registry_network_release_is_single_use():
+    from agent_tools.hermes_terminal_toolkit.process_registry import ProcessRegistry
+
+    released = []
+    registry = ProcessRegistry()
+    session = registry.spawn_via_env(
+        env=FakeDockerEnv(),
+        command="python server.py",
+        cwd="/workspace",
+        task_id="task-bg",
+        session_key="",
+        network_release=lambda: released.append("released"),
+    )
+
+    registry._move_to_finished(session)
+    registry._move_to_finished(session)
+
+    assert released == ["released"]
+    assert session.network_release is None
+
+
 def test_docker_temporary_network_overlapping_leases_disconnect_after_last_release():
     from agent_tools.hermes_terminal_toolkit.environments.docker import DockerEnvironment
 
