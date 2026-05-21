@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field
 
 from agent_core.permissions import file_policy, tool_policy
 from agent_core.permissions.approvals import consume_approval
+from agent_core.permissions.constants import UNRESOLVED_BACKEND_WRITE_PATH
 from agent_core.permissions.models import PolicyDecision
 from agent_core.session_context import hermes_task_id_from_runtime
 from agent_core.workspace import WORKDIR, safe_path
@@ -254,10 +255,10 @@ def _resolved_write_path_for_policy(path: str, task_id: str) -> str | None:
             return None
         resolver = getattr(_get_file_ops(task_id), "_resolve_write_safety_path", None)
         if resolver is None:
-            return None
+            return UNRESOLVED_BACKEND_WRITE_PATH
         return str(resolver(path))
     except Exception:
-        return None
+        return UNRESOLVED_BACKEND_WRITE_PATH
 
 
 def _unique_items(items: list[str]) -> list[str]:

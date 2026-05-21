@@ -365,6 +365,11 @@ def test_write_file_allows_docker_workspace_resolved_path_and_forwards_original_
         calls.append(kwargs)
         return json.dumps({"path": "notes.txt", "bytes_written": 5})
 
+    class FakeFileOps:
+        def _resolve_write_safety_path(self, path):
+            resolve_calls.append((path, expected_task_id))
+            return f"/workspace/project/{path}"
+
     monkeypatch.setattr(
         file_tools,
         "resolve_path_for_policy",
@@ -377,6 +382,7 @@ def test_write_file_allows_docker_workspace_resolved_path_and_forwards_original_
         fake_resolve_path_for_policy,
     )
     monkeypatch.setattr(file_tools, "write_file_tool", fake_write_file_tool)
+    monkeypatch.setattr(file_tools, "_get_file_ops", lambda task_id: FakeFileOps())
 
     raw = file_tools._write_file_impl(path="notes.txt", content="hello", runtime=runtime)
     payload = json.loads(raw)
@@ -411,7 +417,12 @@ def test_write_file_allows_active_ssh_cwd_path_and_forwards_original_path(
         calls.append(kwargs)
         return json.dumps({"path": "/home/remote/project/notes.txt", "bytes_written": 5})
 
+    class FakeFileOps:
+        def _resolve_write_safety_path(self, path):
+            return path
+
     monkeypatch.setattr(file_tools, "write_file_tool", fake_write_file_tool)
+    monkeypatch.setattr(file_tools, "_get_file_ops", lambda task_id: FakeFileOps())
 
     raw = file_tools._write_file_impl(
         path="/home/remote/project/notes.txt",
@@ -449,6 +460,12 @@ def test_write_file_rejects_ssh_absolute_path_outside_active_cwd(monkeypatch):
         "write_file_tool",
         lambda **kwargs: calls.append(kwargs) or json.dumps({"bytes_written": 4}),
     )
+
+    class FakeFileOps:
+        def _resolve_write_safety_path(self, path):
+            return path
+
+    monkeypatch.setattr(file_tools, "_get_file_ops", lambda task_id: FakeFileOps())
 
     raw = file_tools._write_file_impl(
         path="/home/remote/other/leak.txt",

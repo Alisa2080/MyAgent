@@ -11,6 +11,7 @@ from agent_tools.file_toolkit.backend_paths import (
     path_is_under_any_root,
     resolve_path_for_policy,
 )
+from agent_core.permissions.constants import UNRESOLVED_BACKEND_WRITE_PATH
 
 
 SENSITIVE_HOST_NAMES = {".ssh", ".aws", ".gnupg", ".kube", ".docker", ".azure"}
@@ -31,7 +32,6 @@ SENSITIVE_CONTAINER_PREFIXES = (
     "/private/var/",
 )
 SENSITIVE_EXACT = {"/etc", "/var/run/docker.sock", "/run/docker.sock"}
-UNRESOLVED_BACKEND_WRITE_PATH = "/__policy_unresolved_write_path__"
 
 
 def is_sensitive_path(path: str) -> bool:

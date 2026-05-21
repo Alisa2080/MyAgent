@@ -69,6 +69,7 @@ _SERVICE_COMMANDS = {"systemctl", "service"}
 _LONG_RUNNING_TOKENS = {"vite", "uvicorn", "watch"}
 _WATCH_FLAGS = {"--watch", "--watchAll", "--watch-all", "-w"}
 _PATH_READING_COMMANDS = {"cat", "find", "grep", "head", "ls", "rg", "sed", "tail", "wc"}
+_IMPLICIT_RECURSIVE_READ_COMMANDS = {"find", "rg"}
 _GIT_BRANCH_DELETE_FLAGS = {"-d", "-D", "--delete"}
 _GIT_BRANCH_MUTATION_FLAGS = {
     "-m",
@@ -81,7 +82,8 @@ _GIT_BRANCH_MUTATION_FLAGS = {
     "--set-upstream-to",
     "--unset-upstream",
 }
-_SED_WRITE_SCRIPT = re.compile(r"(^|[;{\s])(?:(?:/[^/]*/|[0-9,$!]+))?w(?:\s|/|$)")
+_SED_WRITE_SCRIPT = re.compile(r"(^|[;{\s])(?:(?:/[^/]*/|[0-9,$!]+|s[^;\s]*/[^;\s]*/[^;\s]*/?))?w(?:\s|/|$)")
+_SENSITIVE_REDIRECT = re.compile(r"(?:^|\s)(?:>{1,2}|\btee\b)\s*(?P<path>(?:~|\$HOME|\$\{HOME\}|/root|/etc)[^\s]*)")
 
 
 def _tokens(command: str) -> list[str]:
@@ -171,7 +173,7 @@ def _has_sensitive_read_path(tokens: list[str], *, workdir: str | None = None) -
         return False
     if workdir and file_policy.is_sensitive_path(workdir):
         return True
-    recursive = _is_recursive_read(tokens)
+    recursive = _is_recursive_read(tokens) or base in _IMPLICIT_RECURSIVE_READ_COMMANDS
     for token in tokens[1:]:
         if token.startswith("-"):
             continue
@@ -179,6 +181,15 @@ def _has_sensitive_read_path(tokens: list[str], *, workdir: str | None = None) -
         if file_policy.is_sensitive_path(resolved_token):
             return True
         if recursive and _is_broad_sensitive_scope(resolved_token):
+            return True
+    return False
+
+
+def _has_sensitive_write_target(command: str, *, workdir: str | None = None) -> bool:
+    if workdir and file_policy.is_sensitive_path(workdir):
+        return True
+    for match in _SENSITIVE_REDIRECT.finditer(command):
+        if file_policy.is_sensitive_path(match.group("path")):
             return True
     return False
 
@@ -288,6 +299,12 @@ def classify_command(command: str, *, background: bool = False, workdir: str | N
 
     if background:
         risk_tags.append("long_running_process")
+    if _has_sensitive_write_target(command, workdir=workdir):
+        return PolicyDecision.deny(
+            "sensitive_path",
+            risk_tags=("sensitive_path",),
+            message="Command writes to a sensitive path.",
+        )
     if _has_sensitive_read_path(tokens, workdir=workdir):
         return PolicyDecision.deny(
             "sensitive_path",

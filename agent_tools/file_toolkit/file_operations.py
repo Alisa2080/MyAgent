@@ -34,7 +34,7 @@ from typing import Optional, List, Dict, Any
 from agent_tools.file_toolkit.binary_extensions import BINARY_EXTENSIONS
 from agent_tools.file_toolkit.backend_paths import safe_write_roots_for_env
 from agent_tools.file_toolkit.file_safety import is_write_denied as _shared_is_write_denied
-from agent_core.permissions.file_policy import UNRESOLVED_BACKEND_WRITE_PATH
+from agent_core.permissions.constants import UNRESOLVED_BACKEND_WRITE_PATH
 from agent_tools.file_toolkit.result_models import (
     ExecuteResult,
     LintResult,

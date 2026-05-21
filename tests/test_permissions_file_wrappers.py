@@ -156,6 +156,28 @@ def test_sensitive_path_is_denied_without_consuming_approval(monkeypatch):
     assert calls == []
 
 
+def test_backend_realpath_resolution_failure_is_denied_by_policy(monkeypatch):
+    import agent_tools.public.files as files
+
+    class FakeOps:
+        def _resolve_write_safety_path(self, path):
+            raise RuntimeError("backend unavailable")
+
+    monkeypatch.setattr(
+        files,
+        "get_backend_path_context",
+        lambda task_id: type("Ctx", (), {"env_type": "docker"})(),
+    )
+    monkeypatch.setattr(files, "_get_file_ops", lambda task_id: FakeOps())
+
+    raw = files._write_file_impl("/workspace/notes.txt", "hello", runtime=_runtime())
+    payload = json.loads(raw)
+
+    assert payload["ok"] is False
+    assert payload["error"]["code"] == "policy_denied"
+    assert payload["data"]["resolved_path"].endswith("unresolved_write_path__")
+
+
 def test_patch_workspace_escape_without_approval_is_denied(monkeypatch, tmp_path):
     import agent_tools.public.files as files
     from agent_core.permissions.models import PolicyDecision

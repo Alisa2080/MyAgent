@@ -128,12 +128,13 @@ def test_backend_realpath_escape_to_ordinary_path_requires_review(monkeypatch):
 
 
 def test_unresolved_backend_realpath_is_denied():
+    from agent_core.permissions.constants import UNRESOLVED_BACKEND_WRITE_PATH
     import agent_core.permissions.file_policy as policy
 
     decision = policy.classify_file_write(
         "/workspace/link/report.txt",
         task_id="task-docker",
-        resolved_path=policy.UNRESOLVED_BACKEND_WRITE_PATH,
+        resolved_path=UNRESOLVED_BACKEND_WRITE_PATH,
     )
 
     assert decision.outcome == "deny"

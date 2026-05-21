@@ -185,6 +185,55 @@ def test_read_commands_resolve_sensitive_workdir():
 
 
 @pytest.mark.parametrize(
+    ("command", "workdir"),
+    [
+        ("touch id_rsa", "~/.ssh"),
+        ("cat id_rsa", "~/.ssh"),
+        ("find . -maxdepth 1 -type f", "/etc"),
+    ],
+)
+def test_sensitive_workdir_is_denied(command, workdir):
+    from agent_core.permissions.command_policy import classify_command
+
+    decision = classify_command(command, background=False, workdir=workdir)
+
+    assert decision.outcome == "deny"
+    assert "sensitive_path" in decision.risk_tags
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "echo x > ~/.ssh/authorized_keys",
+        "printf token | tee ~/.aws/credentials",
+    ],
+)
+def test_sensitive_redirect_targets_are_denied(command):
+    from agent_core.permissions.command_policy import classify_command
+
+    decision = classify_command(command, background=False)
+
+    assert decision.outcome == "deny"
+    assert "sensitive_path" in decision.risk_tags
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "rg token ~",
+        "find ~ -maxdepth 2 -type f",
+    ],
+)
+def test_recursive_default_home_reads_are_denied(command):
+    from agent_core.permissions.command_policy import classify_command
+
+    decision = classify_command(command, background=False)
+
+    assert decision.outcome == "deny"
+    assert "sensitive_path" in decision.risk_tags
+
+
+@pytest.mark.parametrize(
     "command",
     [
         "npm i",
@@ -225,6 +274,7 @@ def test_piped_network_command_requires_network():
     [
         "sed -n '/x/w /tmp/out' README.md",
         "sed -n -e '/x/w /tmp/out' README.md",
+        "sed -n 's/x/y/w /tmp/out' README.md",
     ],
 )
 def test_sed_address_write_requires_review(command):
