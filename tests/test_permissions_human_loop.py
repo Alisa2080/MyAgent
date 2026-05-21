@@ -156,6 +156,29 @@ def test_policy_review_records_approval(monkeypatch):
     assert audit_events[-1]["extra"]["approval_id"]
 
 
+def test_policy_audit_redacts_secret_preview(caplog):
+    import logging
+
+    from agent_core.permissions.audit import audit_policy_event
+    from agent_core.permissions.models import PolicyDecision
+
+    caplog.set_level(logging.INFO, logger="agent_core.permissions.audit")
+    decision = PolicyDecision.review("network_access", risk_tags=("network_access",))
+
+    audit_policy_event(
+        profile="hosted",
+        tool_name="terminal",
+        task_id="task-1",
+        decision=decision,
+        preview="curl -H 'Authorization: Bearer sk-test1234567890abcdef' https://example.com?api_key=secretvalue",
+    )
+
+    logged = "\n".join(record.getMessage() for record in caplog.records)
+    assert "sk-test1234567890abcdef" not in logged
+    assert "api_key=secretvalue" not in logged
+    assert "api_key=***" in logged
+
+
 def test_policy_mixed_deny_and_review_preserves_approved_call(monkeypatch):
     import agent_core.human_loop as human_loop
     from agent_core.permissions.models import PolicyDecision

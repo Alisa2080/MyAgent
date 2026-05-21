@@ -126,6 +126,7 @@ class ProcessSession:
     # Watch patterns — trigger agent notification when output matches any pattern
     watch_patterns: List[str] = field(default_factory=list)
     network_release: Any = field(default=None, repr=False)
+    network_release_error: str = ""
     _watch_hits: int = field(default=0, repr=False)          # total matches delivered
     _watch_suppressed: int = field(default=0, repr=False)    # matches dropped by rate limit
     _watch_disabled: bool = field(default=False, repr=False) # permanently killed after strike limit
@@ -809,8 +810,27 @@ class ProcessRegistry:
         if release is not None:
             try:
                 release()
-            except Exception:
-                logger.warning("Failed to release network lease for %s", session.id, exc_info=True)
+            except Exception as exc:
+                message = (
+                    "IMPORTANT: Failed to disable temporary network access for "
+                    f"background process {session.id}; cleaning up its environment."
+                )
+                logger.warning("%s", message, exc_info=True)
+                with session._lock:
+                    session.network_release_error = str(exc)
+                    session.output_buffer += f"\n[{message}]\n"
+                    if len(session.output_buffer) > session.max_output_chars:
+                        session.output_buffer = session.output_buffer[-session.max_output_chars:]
+                cleanup = getattr(session.env_ref, "cleanup", None)
+                if callable(cleanup):
+                    try:
+                        cleanup()
+                    except Exception:
+                        logger.warning(
+                            "Failed to clean up environment after network lease release failure for %s",
+                            session.id,
+                            exc_info=True,
+                        )
         self._write_checkpoint()
 
         # Only enqueue completion notification on the FIRST move.  Without
@@ -859,6 +879,10 @@ class ProcessRegistry:
         if session.exited:
             result["exit_code"] = session.exit_code
             self._completion_consumed.add(session_id)
+        if session.network_release_error:
+            result["network_warning"] = (
+                "Temporary network access could not be disabled cleanly; the environment was cleaned up."
+            )
         if session.detached:
             result["detached"] = True
             result["note"] = "Process recovered after restart -- output history unavailable"
@@ -889,6 +913,10 @@ class ProcessRegistry:
             "total_lines": total_lines,
             "showing": f"{len(selected)} lines",
         }
+        if session.network_release_error:
+            result["network_warning"] = (
+                "Temporary network access could not be disabled cleanly; the environment was cleaned up."
+            )
         if session.exited:
             self._completion_consumed.add(session_id)
         return result
@@ -1101,6 +1129,10 @@ class ProcessRegistry:
             }
             if s.exited:
                 entry["exit_code"] = s.exit_code
+            if s.network_release_error:
+                entry["network_warning"] = (
+                    "Temporary network access could not be disabled cleanly; the environment was cleaned up."
+                )
             if s.detached:
                 entry["detached"] = True
             result.append(entry)

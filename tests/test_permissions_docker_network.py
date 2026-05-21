@@ -166,6 +166,39 @@ def test_process_registry_network_release_is_single_use():
     assert session.network_release is None
 
 
+def test_process_registry_network_release_failure_cleans_environment():
+    from agent_tools.hermes_terminal_toolkit.process_registry import ProcessRegistry
+
+    class CleanupDockerEnv(FakeDockerEnv):
+        def __init__(self):
+            super().__init__()
+            self.cleaned = False
+
+        def cleanup(self):
+            self.cleaned = True
+
+    env = CleanupDockerEnv()
+    registry = ProcessRegistry()
+    session = registry.spawn_via_env(
+        env=env,
+        command="python server.py",
+        cwd="/workspace",
+        task_id="task-bg",
+        session_key="",
+        network_release=lambda: (_ for _ in ()).throw(RuntimeError("disconnect failed")),
+    )
+
+    registry._move_to_finished(session)
+    poll = registry.poll(session.id)
+    log = registry.read_log(session.id)
+
+    assert env.cleaned is True
+    assert session.network_release is None
+    assert "disconnect failed" in session.network_release_error
+    assert "IMPORTANT: Failed to disable temporary network access" in log["output"]
+    assert "network_warning" in poll
+
+
 def test_docker_temporary_network_overlapping_leases_disconnect_after_last_release():
     from agent_tools.hermes_terminal_toolkit.environments.docker import DockerEnvironment
 

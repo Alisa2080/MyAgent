@@ -262,6 +262,24 @@ def test_recursive_default_home_reads_are_denied(command):
 @pytest.mark.parametrize(
     "command",
     [
+        "sudo cat /etc/passwd",
+        "git diff --no-index /etc/passwd /tmp/x",
+        "find / -name id_rsa",
+        "rg secret /",
+    ],
+)
+def test_sensitive_read_bypass_variants_are_denied(command):
+    from agent_core.permissions.command_policy import classify_command
+
+    decision = classify_command(command, background=False)
+
+    assert decision.outcome == "deny"
+    assert "sensitive_path" in decision.risk_tags
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
         "npm i",
         "npm ci",
         "pnpm i",

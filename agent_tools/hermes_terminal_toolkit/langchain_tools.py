@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import List, Literal, Optional
 
 try:
@@ -20,15 +21,19 @@ def _require_langchain():
     return BaseModel, Field
 
 
+def _runtime_for_task_id(task_id: str):
+    return SimpleNamespace(config={"configurable": {"thread_id": task_id}})
+
+
 def _load_wrappers():
-    from .terminal import run_process, run_terminal
-    return run_process, run_terminal
+    from agent_tools.public import terminal as public_terminal
+    return public_terminal._process_impl, public_terminal._terminal_impl
 
 
 def build_langchain_tools(default_task_id: str = "default", expose_task_id: bool = False):
     """Return LangChain tools for terminal/process."""
     BaseModel, Field = _require_langchain()
-    run_process, run_terminal = _load_wrappers()
+    process_impl, terminal_impl = _load_wrappers()
 
     if expose_task_id:
         class TerminalInput(BaseModel):
@@ -88,16 +93,16 @@ def build_langchain_tools(default_task_id: str = "default", expose_task_id: bool
         watch_patterns: Optional[List[str]] = None,
         task_id: str = default_task_id,
     ) -> str:
-        """Execute a shell command through the standalone terminal toolkit."""
-        return run_terminal(
+        """Execute a shell command through the policy-enforced terminal wrapper."""
+        return terminal_impl(
             command=command,
             background=background,
             timeout=timeout,
-            task_id=task_id,
             workdir=workdir,
             pty=pty,
             notify_on_complete=notify_on_complete,
             watch_patterns=watch_patterns,
+            runtime=_runtime_for_task_id(task_id),
         )
 
     @tool("process", args_schema=ProcessInput)
@@ -110,15 +115,15 @@ def build_langchain_tools(default_task_id: str = "default", expose_task_id: bool
         limit: int = 200,
         task_id: str = default_task_id,
     ) -> str:
-        """Manage background processes started with terminal(background=true)."""
-        return run_process(
+        """Manage background processes through the policy-enforced process wrapper."""
+        return process_impl(
             action=action,
             session_id=session_id,
             data=data,
             timeout=timeout,
             offset=offset,
             limit=limit,
-            task_id=task_id,
+            runtime=_runtime_for_task_id(task_id),
         )
 
     return [terminal, process]

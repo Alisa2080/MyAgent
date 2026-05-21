@@ -152,9 +152,11 @@ def _is_recursive_read(tokens: list[str]) -> bool:
 
 
 def _is_broad_sensitive_scope(path: str) -> bool:
+    if path in {"", "."}:
+        return False
     expanded = file_policy._normalize_posix_path(file_policy._expand_user(path))
     home = file_policy._normalize_posix_path(str(file_policy.Path.home().expanduser()))
-    return expanded in {home, "/root", "/etc"}
+    return expanded in {"/", home, "/root", "/etc"}
 
 
 def _resolve_read_operand(token: str, workdir: str | None) -> str:
@@ -168,20 +170,54 @@ def _resolve_read_operand(token: str, workdir: str | None) -> str:
 def _has_sensitive_read_path(tokens: list[str], *, workdir: str | None = None) -> bool:
     if not tokens:
         return False
-    command_tokens = _unwrap_command_builtin(tokens)
+    command_tokens = _tokens_without_sudo(_unwrap_command_builtin(tokens))
     base = command_tokens[0] if command_tokens else ""
+    if _has_sensitive_git_read(command_tokens, workdir=workdir):
+        return True
     if base not in _PATH_READING_COMMANDS:
         return False
     if workdir and file_policy.is_sensitive_path(workdir):
         return True
     recursive = _is_recursive_read(tokens) or base in _IMPLICIT_RECURSIVE_READ_COMMANDS
-    for token in tokens[1:]:
-        if token.startswith("-"):
-            continue
+    for token in _read_path_operands(base, command_tokens):
         resolved_token = _resolve_read_operand(token, workdir)
         if file_policy.is_sensitive_path(resolved_token):
             return True
         if recursive and _is_broad_sensitive_scope(resolved_token):
+            return True
+    return False
+
+
+def _read_path_operands(base: str, tokens: list[str]) -> list[str]:
+    operands = tokens[1:]
+    if base == "find":
+        paths = []
+        for token in operands:
+            if token.startswith("-"):
+                break
+            paths.append(token)
+        return paths or ["."]
+    if base in {"rg", "grep"}:
+        paths = []
+        saw_pattern = False
+        for token in operands:
+            if token.startswith("-"):
+                continue
+            if not saw_pattern:
+                saw_pattern = True
+                continue
+            paths.append(token)
+        return paths
+    return [token for token in operands if not token.startswith("-")]
+
+
+def _has_sensitive_git_read(tokens: list[str], *, workdir: str | None = None) -> bool:
+    if len(tokens) < 3 or tokens[:2] != ["git", "diff"] or "--no-index" not in tokens:
+        return False
+    for token in tokens[2:]:
+        if token.startswith("-"):
+            continue
+        if file_policy.is_sensitive_path(_resolve_read_operand(token, workdir)):
             return True
     return False
 

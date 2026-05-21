@@ -305,7 +305,7 @@ def _redact_form_body(text: str) -> str:
     return _redact_query_string(text.strip())
 
 
-def redact_sensitive_text(text: str) -> str:
+def redact_sensitive_text(text: str, *, force: bool = False) -> str:
     """Apply all redaction patterns to a block of text.
 
     Safe to call on any string -- non-matching text passes through unchanged.
@@ -317,7 +317,7 @@ def redact_sensitive_text(text: str) -> str:
         text = str(text)
     if not text:
         return text
-    if not _REDACT_ENABLED:
+    if not (_REDACT_ENABLED or force):
         return text
 
     # Known prefixes (sk-, ghp_, etc.)
