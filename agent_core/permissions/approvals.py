@@ -20,6 +20,9 @@ class ApprovalRecord:
     risk_tags: tuple[RiskTag, ...]
     allow_network_once: bool = False
 
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "risk_tags", tuple(self.risk_tags))
+
 
 _lock = threading.Lock()
 _approvals: dict[tuple[str, str], ApprovalRecord] = {}

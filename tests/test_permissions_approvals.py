@@ -121,3 +121,35 @@ def test_approval_rejects_missing_risk_tag():
         args={"command": "curl https://example.com"},
         required_risk_tags=("network_access",),
     ) is None
+
+
+def test_approval_record_risk_tags_are_copied():
+    from agent_core.permissions.approvals import (
+        ApprovalRecord,
+        consume_approval,
+        make_args_digest,
+        record_approval,
+    )
+
+    risk_tags = ["network_access"]
+    record_approval(
+        ApprovalRecord(
+            approval_id="approval-4",
+            decision_id="decision-4",
+            task_id="task-1",
+            tool_call_id="call-4",
+            tool_name="terminal",
+            args_digest=make_args_digest({"command": "curl https://example.com"}),
+            risk_tags=risk_tags,
+            allow_network_once=True,
+        )
+    )
+    risk_tags.append("package_install")
+
+    assert consume_approval(
+        task_id="task-1",
+        tool_call_id="call-4",
+        tool_name="terminal",
+        args={"command": "curl https://example.com"},
+        required_risk_tags=("package_install",),
+    ) is None
