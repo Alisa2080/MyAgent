@@ -53,6 +53,18 @@ Security and approval:
 - `terminal` uses Hermes built-in command guards by calling Hermes with `force=False`.
 - `terminal` and `process` are intercepted by the human-in-the-loop middleware before execution.
 
+Layered permission model:
+
+- `AGENT_RUNTIME_PROFILE` controls default runtime posture: `dev`, `test`, `hosted`, or `prod`.
+- If `TERMINAL_ENV` is unset, `dev/test` default to `local` and `hosted/prod` default to `docker`.
+- Read-only file tools run without human review when existing workspace admission allows them.
+- Workspace-local `write_file` and `patch` calls run without review.
+- Ordinary writes outside the workspace require one-shot approval; sensitive paths such as `~/.ssh`, `~/.aws`, `/etc`, and Docker socket paths are denied.
+- Low-risk shell commands such as read-only file inspection, read-only Git commands, and tests run without review.
+- Package installs, network commands, destructive commands, permission changes, background servers, and complex shell require one-shot approval.
+- Hardline destructive commands are denied.
+- In `hosted/prod`, Docker sandboxes default to no network. Approved network commands receive temporary network access for the command lifetime.
+
 Lifecycle policy:
 
 - `invoke_agent_with_terminal_notifications(...)` wraps each initial and notification-resume turn in `terminal_execution_scope(thread_id)` and runs per-turn terminal cleanup after each attempted turn, including error paths.
