@@ -13,7 +13,7 @@ _PROCESS_STDIN_ACTIONS = {"write", "submit"}
 
 
 def _patch_paths(args: dict[str, Any]) -> list[str]:
-    mode = args.get("mode")
+    mode = args.get("mode", "replace")
     if mode == "replace":
         path = args.get("path")
         return [str(path)] if path else []

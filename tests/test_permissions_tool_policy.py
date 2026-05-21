@@ -52,6 +52,28 @@ def test_patch_uses_all_patch_paths(monkeypatch):
     assert seen == ["a.txt"]
 
 
+def test_patch_without_mode_defaults_to_replace(monkeypatch):
+    from agent_core.permissions.models import PolicyDecision
+    import agent_core.permissions.tool_policy as tool_policy
+
+    seen = []
+
+    def fake_classify_file_write(path, *, task_id):
+        seen.append((path, task_id))
+        return PolicyDecision.allow("workspace_write")
+
+    monkeypatch.setattr(tool_policy.file_policy, "classify_file_write", fake_classify_file_write)
+
+    decision = tool_policy.evaluate_tool_call(
+        "patch",
+        {"path": "x.py", "old_string": "a", "new_string": "b"},
+        task_id="task-local",
+    )
+
+    assert decision.outcome == "allow"
+    assert seen == [("x.py", "task-local")]
+
+
 def test_terminal_uses_command_policy(monkeypatch):
     from agent_core.permissions.models import PolicyDecision
     import agent_core.permissions.tool_policy as tool_policy
