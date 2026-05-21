@@ -8,6 +8,12 @@ def _runtime(thread_id: str = "thread-1"):
     return SimpleNamespace(config={"configurable": {"thread_id": thread_id}})
 
 
+def _terminal_policy_args(command: str) -> dict:
+    from agent_core.permissions.tool_policy import canonical_tool_args
+
+    return canonical_tool_args("terminal", {"command": command})
+
+
 def test_policy_allow_does_not_interrupt(monkeypatch):
     import agent_core.human_loop as human_loop
     from agent_core.permissions.models import PolicyDecision
@@ -132,7 +138,7 @@ def test_policy_review_records_approval(monkeypatch):
         task_id=hermes_task_id_from_thread_id("thread-1"),
         tool_call_id="call-1",
         tool_name="terminal",
-        args={"command": "pip install rich"},
+        args=_terminal_policy_args("pip install rich"),
         required_risk_tags=("package_install",),
     )
     assert record is not None
@@ -262,7 +268,7 @@ def test_policy_reject_does_not_record_approval(monkeypatch):
             task_id=hermes_task_id_from_thread_id("thread-1"),
             tool_call_id="call-1",
             tool_name="terminal",
-            args={"command": "pip install rich"},
+            args=_terminal_policy_args("pip install rich"),
             required_risk_tags=("package_install",),
         )
         is None
@@ -317,7 +323,7 @@ def test_policy_edit_does_not_record_approval(monkeypatch):
             task_id=hermes_task_id_from_thread_id("thread-1"),
             tool_call_id="call-1",
             tool_name="terminal",
-            args={"command": "pip install rich --dry-run"},
+            args=_terminal_policy_args("pip install rich --dry-run"),
             required_risk_tags=("package_install",),
         )
         is None
@@ -368,7 +374,7 @@ def test_policy_respond_does_not_record_approval(monkeypatch):
             task_id=hermes_task_id_from_thread_id("thread-1"),
             tool_call_id="call-1",
             tool_name="terminal",
-            args={"command": "pip install rich"},
+            args=_terminal_policy_args("pip install rich"),
             required_risk_tags=("package_install",),
         )
         is None

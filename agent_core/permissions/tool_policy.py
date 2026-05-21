@@ -12,6 +12,43 @@ _MANDATORY_REVIEW_TOOLS = {"memory_manage", "skill_manage"}
 _PROCESS_STDIN_ACTIONS = {"write", "submit"}
 
 
+def canonical_tool_args(tool_name: str, args: dict[str, Any]) -> dict[str, Any]:
+    if tool_name == "terminal":
+        return {
+            "command": args.get("command") or "",
+            "background": bool(args.get("background", False)),
+            "timeout": args.get("timeout"),
+            "workdir": args.get("workdir"),
+            "pty": bool(args.get("pty", False)),
+            "notify_on_complete": bool(args.get("notify_on_complete", False)),
+            "watch_patterns": args.get("watch_patterns"),
+        }
+    if tool_name == "process":
+        return {
+            "action": args.get("action") or "",
+            "session_id": args.get("session_id") or "",
+            "data": args.get("data") or "",
+            "timeout": args.get("timeout"),
+            "offset": int(args.get("offset", 0) or 0),
+            "limit": int(args.get("limit", 200) or 200),
+        }
+    if tool_name == "write_file":
+        return {
+            "path": args.get("path"),
+            "content": args.get("content"),
+        }
+    if tool_name == "patch":
+        return {
+            "mode": args.get("mode", "replace"),
+            "path": args.get("path"),
+            "old_string": args.get("old_string"),
+            "new_string": args.get("new_string"),
+            "replace_all": bool(args.get("replace_all", False)),
+            "patch": args.get("patch"),
+        }
+    return dict(args)
+
+
 def _patch_paths(args: dict[str, Any]) -> list[str]:
     mode = args.get("mode", "replace")
     if mode == "replace":
@@ -64,6 +101,7 @@ def evaluate_tool_call(
     tool_call_id: str | None = None,
 ) -> PolicyDecision:
     del tool_call_id
+    args = canonical_tool_args(tool_name, args)
 
     if tool_name in _READ_TOOLS:
         return PolicyDecision.allow("read_tool")

@@ -132,7 +132,12 @@ class FlexibleHumanInTheLoopMiddleware(HumanInTheLoopMiddleware):
                 task_id=task_id,
                 tool_call_id=tool_call["id"],
                 tool_name=tool_call["name"],
-                args_digest=make_args_digest(tool_call.get("args") or {}),
+                args_digest=make_args_digest(
+                    tool_policy.canonical_tool_args(
+                        tool_call["name"],
+                        tool_call.get("args") or {},
+                    )
+                ),
                 risk_tags=policy_decision.risk_tags,
                 allow_network_once=policy_decision.requires_network,
             )

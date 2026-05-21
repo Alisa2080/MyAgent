@@ -9,7 +9,7 @@ from typing import Literal
 from langchain.tools import ToolRuntime, tool
 from pydantic import BaseModel, Field
 
-from agent_core.permissions import file_policy
+from agent_core.permissions import file_policy, tool_policy
 from agent_core.permissions.approvals import consume_approval
 from agent_core.permissions.models import PolicyDecision
 from agent_core.session_context import hermes_task_id_from_runtime
@@ -474,7 +474,10 @@ def _write_file_impl(path: str, content: str, runtime: ToolRuntime | None = None
     approved_roots = _approval_roots_for_file_decision(
         tool_name="write_file",
         path=path,
-        args={"path": path, "content": content},
+        args=tool_policy.canonical_tool_args(
+            "write_file",
+            {"path": path, "content": content},
+        ),
         task_id=task_id,
         runtime=runtime,
         decision=decision,
@@ -532,14 +535,17 @@ def _patch_impl(
     approved_roots: list[str] = []
     review = next((decision for decision in decisions if decision.outcome == "review"), None)
     if review is not None:
-        approval_args = {
-            "mode": mode,
-            "path": path,
-            "old_string": old_string,
-            "new_string": new_string,
-            "replace_all": replace_all,
-            "patch": patch,
-        }
+        approval_args = tool_policy.canonical_tool_args(
+            "patch",
+            {
+                "mode": mode,
+                "path": path,
+                "old_string": old_string,
+                "new_string": new_string,
+                "replace_all": replace_all,
+                "patch": patch,
+            },
+        )
         approval = consume_approval(
             task_id=task_id,
             tool_call_id=_tool_call_id_from_runtime(runtime),

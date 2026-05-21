@@ -239,6 +239,65 @@ def test_shell_file_operations_approved_write_roots_temporarily_extend_safety_ga
     assert file_ops._is_write_denied_for_path(target) is True
 
 
+def test_shell_file_operations_approved_write_roots_are_context_local(
+    tmp_path, monkeypatch
+):
+    import threading
+
+    safe_root = tmp_path / "safe-root"
+    approved_a = tmp_path / "approved-a"
+    approved_b = tmp_path / "approved-b"
+    for directory in (safe_root, approved_a, approved_b):
+        directory.mkdir()
+    monkeypatch.setenv("AGENT_WRITE_SAFE_ROOT", str(safe_root))
+
+    class LocalEnvironment:
+        cwd = str(safe_root)
+        _hermes_env_type = "local"
+
+        def execute(self, command, **kwargs):
+            return {"output": "", "returncode": 0}
+
+    file_ops = file_tools.ShellFileOperations(LocalEnvironment())
+    entered_a = threading.Event()
+    entered_b = threading.Event()
+    release = threading.Event()
+    results = []
+
+    def worker(root, own_target, other_target, entered, other_entered):
+        with file_ops.approved_write_roots([str(root)]):
+            entered.set()
+            assert other_entered.wait(timeout=5)
+            results.append(
+                (
+                    file_ops._is_write_denied_for_path(str(own_target)),
+                    file_ops._is_write_denied_for_path(str(other_target)),
+                )
+            )
+            assert release.wait(timeout=5)
+
+    thread_a = threading.Thread(
+        target=worker,
+        args=(approved_a, approved_a / "a.txt", approved_b / "b.txt", entered_a, entered_b),
+    )
+    thread_b = threading.Thread(
+        target=worker,
+        args=(approved_b, approved_b / "b.txt", approved_a / "a.txt", entered_b, entered_a),
+    )
+
+    thread_a.start()
+    thread_b.start()
+    assert entered_a.wait(timeout=5)
+    assert entered_b.wait(timeout=5)
+    release.set()
+    thread_a.join(timeout=5)
+    thread_b.join(timeout=5)
+
+    assert results == [(False, True), (False, True)]
+    assert file_ops._is_write_denied_for_path(str(approved_a / "a.txt")) is True
+    assert file_ops._is_write_denied_for_path(str(approved_b / "b.txt")) is True
+
+
 def test_shell_file_operations_allows_workspace_writes_for_docker_safe_root(
     tmp_path, monkeypatch
 ):

@@ -27,6 +27,7 @@ Usage:
 import os
 import re
 import difflib
+import contextvars
 from abc import ABC, abstractmethod
 from contextlib import contextmanager
 from typing import Optional, List, Dict, Any
@@ -217,7 +218,9 @@ class ShellFileOperations(FileOperations):
 
         # Cache for command availability checks
         self._command_cache: Dict[str, bool] = {}
-        self._approved_write_roots: list[str] = []
+        self._approved_write_roots_var: contextvars.ContextVar[tuple[str, ...]] = (
+            contextvars.ContextVar("approved_write_roots", default=())
+        )
     
     def _exec(self, command: str, cwd: str = None, timeout: int = None,
               stdin_data: str = None) -> ExecuteResult:
@@ -259,21 +262,23 @@ class ShellFileOperations(FileOperations):
         """Return backend roots allowed in addition to the host safe root."""
         return [
             *safe_write_roots_for_env(self.env, fallback_cwd=self._effective_cwd()),
-            *self._approved_write_roots,
+            *self._approved_write_roots_var.get(),
         ]
 
     @contextmanager
     def approved_write_roots(self, roots: list[str] | None):
         """Temporarily allow additional write roots for reviewed file writes."""
-        previous = self._approved_write_roots
-        self._approved_write_roots = [
-            *previous,
-            *[str(root) for root in (roots or [])],
-        ]
+        previous = self._approved_write_roots_var.get()
+        token = self._approved_write_roots_var.set(
+            (
+                *previous,
+                *tuple(str(root) for root in (roots or [])),
+            )
+        )
         try:
             yield
         finally:
-            self._approved_write_roots = previous
+            self._approved_write_roots_var.reset(token)
 
     def _host_safe_root_applies(self) -> bool:
         """Return whether the host safe root should be used for this env."""

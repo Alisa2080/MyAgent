@@ -14,27 +14,6 @@ def _runtime(*, thread_id: str, tool_call_id: str | None) -> SimpleNamespace:
     )
 
 
-def _terminal_policy_args(
-    *,
-    command: str,
-    background: bool = False,
-    timeout: int | None = None,
-    workdir: str | None = None,
-    pty: bool = False,
-    notify_on_complete: bool = False,
-    watch_patterns: list[str] | None = None,
-) -> dict:
-    return {
-        "command": command,
-        "background": background,
-        "timeout": timeout,
-        "workdir": workdir,
-        "pty": pty,
-        "notify_on_complete": notify_on_complete,
-        "watch_patterns": watch_patterns,
-    }
-
-
 def test_low_risk_command_runs_without_approval(monkeypatch):
     from agent_core.permissions.approvals import clear_approvals
 
@@ -122,6 +101,7 @@ def test_reviewed_network_command_with_approval_passes_network_once(monkeypatch)
         make_args_digest,
         record_approval,
     )
+    from agent_core.permissions.tool_policy import canonical_tool_args
     from agent_core.session_context import hermes_task_id_from_thread_id
 
     terminal_tools = _terminal_module()
@@ -129,14 +109,9 @@ def test_reviewed_network_command_with_approval_passes_network_once(monkeypatch)
     calls = []
     thread_id = "task8-network"
     tool_call_id = "call-network"
-    policy_args = _terminal_policy_args(
-        command="curl https://example.com",
-        background=False,
-        timeout=7,
-        workdir="/tmp",
-        pty=True,
-        notify_on_complete=True,
-        watch_patterns=["ready"],
+    approval_args = canonical_tool_args(
+        "terminal",
+        {"command": "curl https://example.com"},
     )
     record_approval(
         ApprovalRecord(
@@ -145,7 +120,7 @@ def test_reviewed_network_command_with_approval_passes_network_once(monkeypatch)
             task_id=hermes_task_id_from_thread_id(thread_id),
             tool_call_id=tool_call_id,
             tool_name="terminal",
-            args_digest=make_args_digest(policy_args),
+            args_digest=make_args_digest(approval_args),
             risk_tags=("network_access",),
             allow_network_once=True,
         )
@@ -158,20 +133,14 @@ def test_reviewed_network_command_with_approval_passes_network_once(monkeypatch)
     monkeypatch.setattr(terminal_tools, "run_terminal", fake_run_terminal)
 
     raw = terminal_tools._terminal_impl(
-        command=policy_args["command"],
-        background=policy_args["background"],
-        timeout=policy_args["timeout"],
-        workdir=policy_args["workdir"],
-        pty=policy_args["pty"],
-        notify_on_complete=policy_args["notify_on_complete"],
-        watch_patterns=policy_args["watch_patterns"],
+        command="curl https://example.com",
         runtime=_runtime(thread_id=thread_id, tool_call_id=tool_call_id),
     )
 
     payload = json.loads(raw)
     assert payload["ok"] is True
     assert calls[0]["allow_network_once"] is True
-    assert calls[0]["command"] == policy_args["command"]
+    assert calls[0]["command"] == "curl https://example.com"
 
 
 def test_hardline_command_is_denied(monkeypatch):

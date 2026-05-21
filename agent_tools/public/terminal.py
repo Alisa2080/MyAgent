@@ -79,15 +79,18 @@ def _terminal_policy_args(
     notify_on_complete: bool,
     watch_patterns: list[str] | None,
 ) -> dict:
-    return {
-        "command": command,
-        "background": background,
-        "timeout": timeout,
-        "workdir": workdir,
-        "pty": pty,
-        "notify_on_complete": notify_on_complete,
-        "watch_patterns": watch_patterns,
-    }
+    return tool_policy.canonical_tool_args(
+        "terminal",
+        {
+            "command": command,
+            "background": background,
+            "timeout": timeout,
+            "workdir": workdir,
+            "pty": pty,
+            "notify_on_complete": notify_on_complete,
+            "watch_patterns": watch_patterns,
+        },
+    )
 
 
 def _terminal_impl(

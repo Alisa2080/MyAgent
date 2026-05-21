@@ -76,6 +76,7 @@ def test_workspace_escape_with_approval_passes_approved_roots(monkeypatch, tmp_p
         record_approval,
     )
     from agent_core.permissions.models import PolicyDecision
+    from agent_core.permissions.tool_policy import canonical_tool_args
     from agent_core.session_context import hermes_task_id_from_thread_id
 
     calls = []
@@ -199,19 +200,20 @@ def test_patch_workspace_escape_with_approval_passes_approved_roots(monkeypatch,
         record_approval,
     )
     from agent_core.permissions.models import PolicyDecision
+    from agent_core.permissions.tool_policy import canonical_tool_args
     from agent_core.session_context import hermes_task_id_from_thread_id
 
     calls = []
     target = str(tmp_path / "escape.txt")
     task_id = hermes_task_id_from_thread_id("file-policy-thread")
-    args = {
-        "mode": "replace",
-        "path": target,
-        "old_string": "old",
-        "new_string": "new",
-        "replace_all": False,
-        "patch": None,
-    }
+    args = canonical_tool_args(
+        "patch",
+        {
+            "path": target,
+            "old_string": "old",
+            "new_string": "new",
+        },
+    )
     record_approval(
         ApprovalRecord(
             approval_id="approval-patch",
