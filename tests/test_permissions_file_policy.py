@@ -97,6 +97,49 @@ def test_docker_workspace_path_is_allowed(monkeypatch):
     assert decision.reason == "workspace_write"
 
 
+def test_backend_realpath_escape_to_sensitive_path_is_denied(monkeypatch):
+    import agent_core.permissions.file_policy as policy
+
+    monkeypatch.setattr(policy, "allowed_workspace_roots_for_task", lambda task_id: ["/workspace"])
+
+    decision = policy.classify_file_write(
+        "/workspace/link/id_rsa",
+        task_id="task-docker",
+        resolved_path="/root/.ssh/id_rsa",
+    )
+
+    assert decision.outcome == "deny"
+    assert "sensitive_path" in decision.risk_tags
+
+
+def test_backend_realpath_escape_to_ordinary_path_requires_review(monkeypatch):
+    import agent_core.permissions.file_policy as policy
+
+    monkeypatch.setattr(policy, "allowed_workspace_roots_for_task", lambda task_id: ["/workspace"])
+
+    decision = policy.classify_file_write(
+        "/workspace/link/report.txt",
+        task_id="task-docker",
+        resolved_path="/tmp/report.txt",
+    )
+
+    assert decision.outcome == "review"
+    assert "writes_outside_workspace" in decision.risk_tags
+
+
+def test_unresolved_backend_realpath_is_denied():
+    import agent_core.permissions.file_policy as policy
+
+    decision = policy.classify_file_write(
+        "/workspace/link/report.txt",
+        task_id="task-docker",
+        resolved_path=policy.UNRESOLVED_BACKEND_WRITE_PATH,
+    )
+
+    assert decision.outcome == "deny"
+    assert "path_resolution_failed" in decision.risk_tags
+
+
 def test_non_local_helper_roots_do_not_allow_host_workspace(tmp_path, monkeypatch):
     import agent_core.permissions.file_policy as policy
 

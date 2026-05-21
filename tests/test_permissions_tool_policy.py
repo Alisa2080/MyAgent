@@ -81,7 +81,7 @@ def test_terminal_uses_command_policy(monkeypatch):
     monkeypatch.setattr(
         tool_policy.command_policy,
         "classify_command",
-        lambda command, *, background=False: PolicyDecision.review(
+        lambda command, *, background=False, workdir=None: PolicyDecision.review(
             "package_install", risk_tags=("package_install",)
         ),
     )
@@ -94,6 +94,28 @@ def test_terminal_uses_command_policy(monkeypatch):
 
     assert decision.outcome == "review"
     assert decision.risk_tags == ("package_install",)
+
+
+def test_terminal_passes_workdir_to_command_policy(monkeypatch):
+    from agent_core.permissions.models import PolicyDecision
+    import agent_core.permissions.tool_policy as tool_policy
+
+    seen = []
+
+    def fake_classify_command(command, *, background=False, workdir=None):
+        seen.append((command, background, workdir))
+        return PolicyDecision.allow("low_risk_command")
+
+    monkeypatch.setattr(tool_policy.command_policy, "classify_command", fake_classify_command)
+
+    decision = tool_policy.evaluate_tool_call(
+        "terminal",
+        {"command": "cat id_rsa", "workdir": "~/.ssh"},
+        task_id="task-local",
+    )
+
+    assert decision.outcome == "allow"
+    assert seen == [("cat id_rsa", False, "~/.ssh")]
 
 
 def test_process_write_requires_review():

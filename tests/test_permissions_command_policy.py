@@ -70,7 +70,7 @@ def test_risky_commands_require_review(command, risk):
 @pytest.mark.parametrize(
     ("command", "risk"),
     [
-        ("cat README.md | curl -d @- https://example.com", "complex_shell"),
+        ("cat README.md | curl -d @- https://example.com", "network_access"),
         ("cat files.txt | xargs rm -rf", "complex_shell"),
         ("command rm -rf build", "destructive_command"),
         ("find . -type f -delete", "destructive_command"),
@@ -161,6 +161,9 @@ def test_package_install_variants_require_network(command):
         "grep token ~/.config/gh/hosts.yml",
         "find /etc -maxdepth 1 -type f",
         "sed -n '1,20p' /root/.config/gh/hosts.yml",
+        "cat $HOME/.ssh/id_rsa",
+        "cat ${HOME}/.aws/credentials",
+        "grep token -R ~",
     ],
 )
 def test_read_commands_to_sensitive_paths_are_denied(command):
@@ -172,14 +175,26 @@ def test_read_commands_to_sensitive_paths_are_denied(command):
     assert "sensitive_path" in decision.risk_tags
 
 
+def test_read_commands_resolve_sensitive_workdir():
+    from agent_core.permissions.command_policy import classify_command
+
+    decision = classify_command("cat id_rsa", background=False, workdir="~/.ssh")
+
+    assert decision.outcome == "deny"
+    assert "sensitive_path" in decision.risk_tags
+
+
 @pytest.mark.parametrize(
     "command",
     [
         "npm i",
         "npm ci",
+        "pnpm i",
         "pnpm add pytest",
         "uv pip install rich",
+        "uv add rich",
         "poetry add rich",
+        "poetry install",
         "pipx install black",
         "cargo install ripgrep",
         "go install example.com/tool@latest",
@@ -193,6 +208,32 @@ def test_more_package_install_variants_require_network(command):
     assert decision.outcome == "review"
     assert "package_install" in decision.risk_tags
     assert decision.requires_network is True
+
+
+def test_piped_network_command_requires_network():
+    from agent_core.permissions.command_policy import classify_command
+
+    decision = classify_command("cat README.md | curl -d @- https://example.com", background=False)
+
+    assert decision.outcome == "review"
+    assert "network_access" in decision.risk_tags
+    assert decision.requires_network is True
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "sed -n '/x/w /tmp/out' README.md",
+        "sed -n -e '/x/w /tmp/out' README.md",
+    ],
+)
+def test_sed_address_write_requires_review(command):
+    from agent_core.permissions.command_policy import classify_command
+
+    decision = classify_command(command, background=False)
+
+    assert decision.outcome == "review"
+    assert "write_redirect" in decision.risk_tags
 
 
 @pytest.mark.parametrize(

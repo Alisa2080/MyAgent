@@ -31,6 +31,7 @@ SENSITIVE_CONTAINER_PREFIXES = (
     "/private/var/",
 )
 SENSITIVE_EXACT = {"/etc", "/var/run/docker.sock", "/run/docker.sock"}
+UNRESOLVED_BACKEND_WRITE_PATH = "/__policy_unresolved_write_path__"
 
 
 def is_sensitive_path(path: str) -> bool:
@@ -70,7 +71,7 @@ def _is_sensitive_home_relative(path: Path, home: Path) -> bool:
     return len(parts) == 1 and parts[0] in SENSITIVE_HOST_FILES
 
 
-def classify_file_write(path: str, *, task_id: str) -> PolicyDecision:
+def classify_file_write(path: str, *, task_id: str, resolved_path: str | None = None) -> PolicyDecision:
     if is_sensitive_path(path):
         return PolicyDecision.deny(
             "sensitive_path",
@@ -80,12 +81,26 @@ def classify_file_write(path: str, *, task_id: str) -> PolicyDecision:
         )
 
     try:
-        resolved_path = str(resolve_path_for_policy(path, task_id))
+        resolved_path = str(resolved_path or resolve_path_for_policy(path, task_id))
     except Exception as exc:
         return PolicyDecision.review(
             "path_resolution_failed",
             risk_tags=("path_resolution_failed",),
             data={"path": str(path), "error": str(exc)},
+        )
+    if resolved_path == UNRESOLVED_BACKEND_WRITE_PATH:
+        return PolicyDecision.deny(
+            "path_resolution_failed",
+            risk_tags=("path_resolution_failed",),
+            message=f"Write denied because backend path resolution failed: {path}",
+            data={"path": str(path), "resolved_path": resolved_path},
+        )
+    if is_sensitive_path(resolved_path):
+        return PolicyDecision.deny(
+            "sensitive_path",
+            risk_tags=("sensitive_path",),
+            message=f"Write denied for sensitive path: {path}",
+            data={"path": str(path), "resolved_path": resolved_path},
         )
 
     roots = _allowed_workspace_roots(task_id)
@@ -100,8 +115,8 @@ def classify_file_write(path: str, *, task_id: str) -> PolicyDecision:
     )
 
 
-def approved_write_root_for_path(path: str, *, task_id: str) -> str:
-    resolved_path = str(resolve_path_for_policy(path, task_id))
+def approved_write_root_for_path(path: str, *, task_id: str, resolved_path: str | None = None) -> str:
+    resolved_path = str(resolved_path or resolve_path_for_policy(path, task_id))
     parent = posixpath.dirname(_normalize_posix_path(resolved_path))
     return parent or "/"
 
@@ -126,7 +141,7 @@ def _host_path(path: str) -> Path:
 
 
 def _expand_user(path: str) -> str:
-    path_str = os.fspath(path)
+    path_str = os.path.expandvars(os.fspath(path))
     if path_str == "~":
         return str(Path.home())
     if path_str.startswith("~/"):

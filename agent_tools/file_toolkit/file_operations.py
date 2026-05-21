@@ -34,6 +34,7 @@ from typing import Optional, List, Dict, Any
 from agent_tools.file_toolkit.binary_extensions import BINARY_EXTENSIONS
 from agent_tools.file_toolkit.backend_paths import safe_write_roots_for_env
 from agent_tools.file_toolkit.file_safety import is_write_denied as _shared_is_write_denied
+from agent_core.permissions.file_policy import UNRESOLVED_BACKEND_WRITE_PATH
 from agent_tools.file_toolkit.result_models import (
     ExecuteResult,
     LintResult,
@@ -316,7 +317,7 @@ class ShellFileOperations(FileOperations):
             timeout=10,
         )
         if result.exit_code != 0 or not result.stdout.strip():
-            return "/__policy_unresolved_write_path__"
+            return UNRESOLVED_BACKEND_WRITE_PATH
         return os.path.normpath(result.stdout.splitlines()[0].strip())
 
     def _is_write_denied_for_path(self, path: str) -> bool:

@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 import shlex
 
-from agent_core.permissions.file_policy import is_sensitive_path
+from agent_core.permissions import file_policy
 from agent_core.permissions.models import PolicyDecision
 from agent_tools.hermes_terminal_toolkit.approval import check_all_command_guards
 
@@ -45,15 +45,18 @@ _PACKAGE_INSTALL_PATTERNS = (
     ("python", "-m", "pip", "install"),
     ("python3", "-m", "pip", "install"),
     ("uv", "pip", "install"),
+    ("uv", "add"),
     ("pipx", "install"),
     ("npm", "install"),
     ("npm", "i"),
     ("npm", "ci"),
     ("pnpm", "install"),
+    ("pnpm", "i"),
     ("pnpm", "add"),
     ("yarn", "add"),
     ("yarn", "install"),
     ("poetry", "add"),
+    ("poetry", "install"),
     ("cargo", "install"),
     ("go", "install"),
     ("apt", "install"),
@@ -78,7 +81,7 @@ _GIT_BRANCH_MUTATION_FLAGS = {
     "--set-upstream-to",
     "--unset-upstream",
 }
-_SED_WRITE_SCRIPT = re.compile(r"(^|[;{\s])(?:[0-9,$!]+)?w(?:\s|/|$)")
+_SED_WRITE_SCRIPT = re.compile(r"(^|[;{\s])(?:(?:/[^/]*/|[0-9,$!]+))?w(?:\s|/|$)")
 
 
 def _tokens(command: str) -> list[str]:
@@ -113,9 +116,25 @@ def _tokens_without_sudo(tokens: list[str]) -> list[str]:
     return tokens[index:]
 
 
+def _contains_prefix(tokens: list[str], prefixes: tuple[tuple[str, ...], ...]) -> bool:
+    for index in range(len(tokens)):
+        candidate = _tokens_without_sudo(tokens[index:])
+        if any(_starts_with(candidate, prefix) for prefix in prefixes):
+            return True
+    return False
+
+
 def _has_package_install(tokens: list[str]) -> bool:
-    package_tokens = _tokens_without_sudo(tokens)
-    return any(_starts_with(package_tokens, prefix) for prefix in _PACKAGE_INSTALL_PATTERNS)
+    return _contains_prefix(tokens, _PACKAGE_INSTALL_PATTERNS)
+
+
+def _has_network_access(tokens: list[str]) -> bool:
+    for index, token in enumerate(tokens):
+        if token in _NETWORK_COMMANDS:
+            return True
+        if token == "git" and index + 1 < len(tokens) and tokens[index + 1] in _NETWORK_GIT_SUBCOMMANDS:
+            return True
+    return False
 
 
 def _has_watch_mode(tokens: list[str]) -> bool:
@@ -125,17 +144,41 @@ def _has_watch_mode(tokens: list[str]) -> bool:
     )
 
 
-def _has_sensitive_read_path(tokens: list[str]) -> bool:
+def _is_recursive_read(tokens: list[str]) -> bool:
+    return any(token in {"-R", "-r", "--recursive"} for token in tokens)
+
+
+def _is_broad_sensitive_scope(path: str) -> bool:
+    expanded = file_policy._normalize_posix_path(file_policy._expand_user(path))
+    home = file_policy._normalize_posix_path(str(file_policy.Path.home().expanduser()))
+    return expanded in {home, "/root", "/etc"}
+
+
+def _resolve_read_operand(token: str, workdir: str | None) -> str:
+    if token.startswith(("$", "~")) or token.startswith("/"):
+        return token
+    if not workdir:
+        return token
+    return file_policy._normalize_posix_path(f"{workdir.rstrip('/')}/{token}")
+
+
+def _has_sensitive_read_path(tokens: list[str], *, workdir: str | None = None) -> bool:
     if not tokens:
         return False
     command_tokens = _unwrap_command_builtin(tokens)
     base = command_tokens[0] if command_tokens else ""
     if base not in _PATH_READING_COMMANDS:
         return False
+    if workdir and file_policy.is_sensitive_path(workdir):
+        return True
+    recursive = _is_recursive_read(tokens)
     for token in tokens[1:]:
         if token.startswith("-"):
             continue
-        if is_sensitive_path(token):
+        resolved_token = _resolve_read_operand(token, workdir)
+        if file_policy.is_sensitive_path(resolved_token):
+            return True
+        if recursive and _is_broad_sensitive_scope(resolved_token):
             return True
     return False
 
@@ -227,7 +270,7 @@ def _has_git_branch_mutation(tokens: list[str]) -> bool:
     return any(not token.startswith("-") for token in tokens[2:])
 
 
-def classify_command(command: str, *, background: bool = False) -> PolicyDecision:
+def classify_command(command: str, *, background: bool = False, workdir: str | None = None) -> PolicyDecision:
     guard = check_all_command_guards(command, env_type="local")
     if guard.get("hardline"):
         return PolicyDecision.deny(
@@ -245,7 +288,7 @@ def classify_command(command: str, *, background: bool = False) -> PolicyDecisio
 
     if background:
         risk_tags.append("long_running_process")
-    if _has_sensitive_read_path(tokens):
+    if _has_sensitive_read_path(tokens, workdir=workdir):
         return PolicyDecision.deny(
             "sensitive_path",
             risk_tags=("sensitive_path",),
@@ -261,7 +304,7 @@ def classify_command(command: str, *, background: bool = False) -> PolicyDecisio
         risk_tags.append("permission_change")
     if _has_package_install(tokens):
         risk_tags.append("package_install")
-    if base in _NETWORK_COMMANDS or (base == "git" and len(tokens) > 1 and tokens[1] in _NETWORK_GIT_SUBCOMMANDS):
+    if _has_network_access(tokens):
         risk_tags.append("network_access")
     if base == "sudo":
         risk_tags.append("privilege_escalation")

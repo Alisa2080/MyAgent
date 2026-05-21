@@ -225,6 +225,7 @@ def _approval_roots_for_file_decision(
     task_id: str,
     runtime: ToolRuntime | None,
     decision: PolicyDecision,
+    resolved_path: str | None = None,
 ) -> list[str] | str:
     if decision.outcome == "allow":
         return []
@@ -240,11 +241,23 @@ def _approval_roots_for_file_decision(
     )
     if approval is None:
         return "Approval required before writing outside the workspace."
-    return [file_policy.approved_write_root_for_path(path, task_id=task_id)]
+    return [file_policy.approved_write_root_for_path(path, task_id=task_id, resolved_path=resolved_path)]
 
 
 def _file_policy_error_code(decision: PolicyDecision) -> str:
     return "policy_denied" if decision.outcome == "deny" else "approval_required"
+
+
+def _resolved_write_path_for_policy(path: str, task_id: str) -> str | None:
+    try:
+        if get_backend_path_context(task_id).env_type == "local":
+            return None
+        resolver = getattr(_get_file_ops(task_id), "_resolve_write_safety_path", None)
+        if resolver is None:
+            return None
+        return str(resolver(path))
+    except Exception:
+        return None
 
 
 def _unique_items(items: list[str]) -> list[str]:
@@ -470,7 +483,8 @@ def read_file(path: str, runtime: ToolRuntime, offset: int = 1, limit: int = 500
 
 def _write_file_impl(path: str, content: str, runtime: ToolRuntime | None = None) -> str:
     task_id = _task_id_from_runtime(runtime)
-    decision = file_policy.classify_file_write(path, task_id=task_id)
+    resolved_path = _resolved_write_path_for_policy(path, task_id)
+    decision = file_policy.classify_file_write(path, task_id=task_id, resolved_path=resolved_path)
     approved_roots = _approval_roots_for_file_decision(
         tool_name="write_file",
         path=path,
@@ -481,6 +495,7 @@ def _write_file_impl(path: str, content: str, runtime: ToolRuntime | None = None
         task_id=task_id,
         runtime=runtime,
         decision=decision,
+        resolved_path=resolved_path,
     )
     if isinstance(approved_roots, str):
         return tool_error(
@@ -519,9 +534,13 @@ def _patch_impl(
     if parse_error:
         return tool_error("patch", f"Failed to parse patch: {parse_error}", code="invalid_input")
 
-    decisions = [
-        file_policy.classify_file_write(path_to_classify, task_id=task_id)
+    resolved_paths = [
+        _resolved_write_path_for_policy(path_to_classify, task_id)
         for path_to_classify in paths_to_classify
+    ]
+    decisions = [
+        file_policy.classify_file_write(path_to_classify, task_id=task_id, resolved_path=resolved_path)
+        for path_to_classify, resolved_path in zip(paths_to_classify, resolved_paths, strict=False)
     ]
     denied = next((decision for decision in decisions if decision.outcome == "deny"), None)
     if denied is not None:
@@ -562,8 +581,17 @@ def _patch_impl(
             )
         approved_roots = _unique_items(
             [
-                file_policy.approved_write_root_for_path(path_to_classify, task_id=task_id)
-                for path_to_classify, decision in zip(paths_to_classify, decisions, strict=False)
+                file_policy.approved_write_root_for_path(
+                    path_to_classify,
+                    task_id=task_id,
+                    resolved_path=resolved_path,
+                )
+                for path_to_classify, resolved_path, decision in zip(
+                    paths_to_classify,
+                    resolved_paths,
+                    decisions,
+                    strict=False,
+                )
                 if decision.outcome == "review"
             ]
         )

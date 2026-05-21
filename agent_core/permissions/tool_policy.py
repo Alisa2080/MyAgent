@@ -134,6 +134,7 @@ def evaluate_tool_call(
         return command_policy.classify_command(
             str(args.get("command") or ""),
             background=bool(args.get("background", False)),
+            workdir=args.get("workdir"),
         )
 
     if tool_name == "process":
