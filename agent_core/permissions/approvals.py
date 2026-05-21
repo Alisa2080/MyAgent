@@ -6,6 +6,8 @@ import threading
 from dataclasses import dataclass
 from typing import Any
 
+from agent_core.permissions.models import RiskTag
+
 
 @dataclass(frozen=True)
 class ApprovalRecord:
@@ -15,7 +17,7 @@ class ApprovalRecord:
     tool_call_id: str
     tool_name: str
     args_digest: str
-    risk_tags: tuple[str, ...]
+    risk_tags: tuple[RiskTag, ...]
     allow_network_once: bool = False
 
 
@@ -39,13 +41,13 @@ def consume_approval(
     tool_call_id: str | None,
     tool_name: str,
     args: dict[str, Any],
-    required_risk_tags: tuple[str, ...],
+    required_risk_tags: tuple[RiskTag, ...],
 ) -> ApprovalRecord | None:
     if not tool_call_id:
         return None
     key = (task_id, tool_call_id)
     with _lock:
-        record = _approvals.get(key)
+        record = _approvals.pop(key, None)
         if record is None:
             return None
         if record.tool_name != tool_name:
@@ -54,7 +56,7 @@ def consume_approval(
             return None
         if not set(required_risk_tags).issubset(set(record.risk_tags)):
             return None
-        return _approvals.pop(key)
+        return record
 
 
 def clear_approvals() -> None:

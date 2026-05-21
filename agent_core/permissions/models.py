@@ -5,6 +5,7 @@ from typing import Any, Literal
 
 
 PolicyOutcome = Literal["allow", "review", "deny"]
+RiskTag = str
 RuntimeProfile = Literal["dev", "test", "hosted", "prod"]
 
 
@@ -12,7 +13,7 @@ RuntimeProfile = Literal["dev", "test", "hosted", "prod"]
 class PolicyDecision:
     outcome: PolicyOutcome
     reason: str
-    risk_tags: tuple[str, ...] = ()
+    risk_tags: tuple[RiskTag, ...] = ()
     message: str = ""
     requires_network: bool = False
     data: dict[str, Any] = field(default_factory=dict)
@@ -26,7 +27,7 @@ class PolicyDecision:
         cls,
         reason: str,
         *,
-        risk_tags: tuple[str, ...],
+        risk_tags: tuple[RiskTag, ...],
         requires_network: bool = False,
         message: str = "",
         data: dict[str, Any] | None = None,
@@ -45,7 +46,7 @@ class PolicyDecision:
         cls,
         reason: str,
         *,
-        risk_tags: tuple[str, ...] = (),
+        risk_tags: tuple[RiskTag, ...] = (),
         message: str = "",
         data: dict[str, Any] | None = None,
     ) -> "PolicyDecision":

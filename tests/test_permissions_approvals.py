@@ -65,6 +65,13 @@ def test_approval_rejects_changed_arguments():
         args={"path": "/tmp/a.txt", "content": "b"},
         required_risk_tags=("writes_outside_workspace",),
     ) is None
+    assert consume_approval(
+        task_id="task-1",
+        tool_call_id="call-2",
+        tool_name="write_file",
+        args={"path": "/tmp/a.txt", "content": "a"},
+        required_risk_tags=("writes_outside_workspace",),
+    ) is None
 
 
 def test_approval_rejects_missing_risk_tag():
@@ -94,4 +101,11 @@ def test_approval_rejects_missing_risk_tag():
         tool_name="terminal",
         args={"command": "curl https://example.com"},
         required_risk_tags=("package_install",),
+    ) is None
+    assert consume_approval(
+        task_id="task-1",
+        tool_call_id="call-3",
+        tool_name="terminal",
+        args={"command": "curl https://example.com"},
+        required_risk_tags=("network_access",),
     ) is None

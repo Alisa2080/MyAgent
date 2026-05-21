@@ -1,4 +1,9 @@
-from agent_core.permissions.models import PolicyDecision, PolicyOutcome, RuntimeProfile
+from agent_core.permissions.models import (
+    PolicyDecision,
+    PolicyOutcome,
+    RiskTag,
+    RuntimeProfile,
+)
 from agent_core.permissions.profiles import (
     default_terminal_env,
     profile_enforces_docker_network,
@@ -9,6 +14,7 @@ from agent_core.permissions.profiles import (
 __all__ = [
     "PolicyDecision",
     "PolicyOutcome",
+    "RiskTag",
     "RuntimeProfile",
     "default_terminal_env",
     "profile_enforces_docker_network",
