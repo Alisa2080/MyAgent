@@ -15,6 +15,7 @@ from agent_tools.file_toolkit.backend_paths import (
 
 SENSITIVE_HOST_NAMES = {".ssh", ".aws", ".gnupg", ".kube", ".docker", ".azure"}
 SENSITIVE_HOST_FILES = {".netrc", ".npmrc", ".pypirc", ".pgpass"}
+SENSITIVE_HOST_SUBPATHS = {(".config", "gh")}
 SENSITIVE_CONTAINER_PREFIXES = (
     "/root/.ssh/",
     "/root/.aws/",
@@ -22,6 +23,7 @@ SENSITIVE_CONTAINER_PREFIXES = (
     "/root/.kube/",
     "/root/.docker/",
     "/root/.azure/",
+    "/root/.config/gh/",
     "/etc/",
     "/boot/",
     "/usr/lib/systemd/",
@@ -52,6 +54,9 @@ def is_sensitive_path(path: str) -> bool:
         return False
     if parts[0] in SENSITIVE_HOST_NAMES:
         return True
+    for subpath in SENSITIVE_HOST_SUBPATHS:
+        if parts[: len(subpath)] == subpath:
+            return True
     return len(parts) == 1 and parts[0] in SENSITIVE_HOST_FILES
 
 

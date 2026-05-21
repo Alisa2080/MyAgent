@@ -40,10 +40,13 @@ _DELETE_COMMANDS = {"rm"}
 _PERMISSION_COMMANDS = {"chmod", "chown"}
 _PACKAGE_INSTALL_PATTERNS = (
     ("pip", "install"),
+    ("pip3", "install"),
     ("python", "-m", "pip", "install"),
+    ("python3", "-m", "pip", "install"),
     ("npm", "install"),
     ("pnpm", "install"),
     ("yarn", "add"),
+    ("yarn", "install"),
     ("apt", "install"),
     ("apt-get", "install"),
     ("brew", "install"),
@@ -88,6 +91,20 @@ def _starts_with(tokens: list[str], prefix: tuple[str, ...]) -> bool:
 
 def _is_test_command(tokens: list[str]) -> bool:
     return any(_starts_with(tokens, prefix) for prefix in _TEST_COMMANDS)
+
+
+def _tokens_without_sudo(tokens: list[str]) -> list[str]:
+    if not tokens or tokens[0] != "sudo":
+        return tokens
+    index = 1
+    while index < len(tokens) and tokens[index].startswith("-"):
+        index += 1
+    return tokens[index:]
+
+
+def _has_package_install(tokens: list[str]) -> bool:
+    package_tokens = _tokens_without_sudo(tokens)
+    return any(_starts_with(package_tokens, prefix) for prefix in _PACKAGE_INSTALL_PATTERNS)
 
 
 def _is_read_only(tokens: list[str]) -> bool:
@@ -203,7 +220,7 @@ def classify_command(command: str, *, background: bool = False) -> PolicyDecisio
         risk_tags.append("destructive_command")
     if base in _PERMISSION_COMMANDS:
         risk_tags.append("permission_change")
-    if any(_starts_with(tokens, prefix) for prefix in _PACKAGE_INSTALL_PATTERNS):
+    if _has_package_install(tokens):
         risk_tags.append("package_install")
     if base in _NETWORK_COMMANDS or (base == "git" and len(tokens) > 1 and tokens[1] in _NETWORK_GIT_SUBCOMMANDS):
         risk_tags.append("network_access")

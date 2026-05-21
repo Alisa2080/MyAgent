@@ -53,6 +53,22 @@ def test_sensitive_container_path_is_denied():
     assert "sensitive_path" in decision.risk_tags
 
 
+def test_github_cli_credential_paths_are_denied(tmp_path, monkeypatch):
+    import agent_core.permissions.file_policy as policy
+
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setattr(policy.Path, "home", lambda: home)
+
+    host_decision = policy.classify_file_write(str(home / ".config" / "gh" / "hosts.yml"), task_id="task-local")
+    container_decision = policy.classify_file_write("/root/.config/gh/hosts.yml", task_id="task-docker")
+
+    assert host_decision.outcome == "deny"
+    assert container_decision.outcome == "deny"
+    assert "sensitive_path" in host_decision.risk_tags
+    assert "sensitive_path" in container_decision.risk_tags
+
+
 def test_low_level_sensitive_system_paths_are_denied():
     from agent_core.permissions.file_policy import classify_file_write
 

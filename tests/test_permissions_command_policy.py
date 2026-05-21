@@ -132,3 +132,22 @@ def test_package_install_requires_network():
     assert decision.outcome == "review"
     assert "package_install" in decision.risk_tags
     assert decision.requires_network is True
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "python3 -m pip install rich",
+        "pip3 install rich",
+        "yarn install",
+        "sudo apt install jq",
+    ],
+)
+def test_package_install_variants_require_network(command):
+    from agent_core.permissions.command_policy import classify_command
+
+    decision = classify_command(command, background=False)
+
+    assert decision.outcome == "review"
+    assert "package_install" in decision.risk_tags
+    assert decision.requires_network is True
