@@ -369,10 +369,10 @@ def test_parent_base_tools_include_terminal_and_process():
 
 
 def test_human_interrupt_intercepts_terminal_and_process():
-    from agent_core.builders import HUMAN_INTERRUPT_ON
+    from agent_core.builders import HUMAN_INTERRUPT_ON, POLICY_REVIEW_TOOLS
 
-    assert "terminal" in HUMAN_INTERRUPT_ON
-    assert "process" in HUMAN_INTERRUPT_ON
-    assert "execute_command" not in HUMAN_INTERRUPT_ON
-    assert HUMAN_INTERRUPT_ON["terminal"]["allowed_decisions"] == ["approve", "edit", "reject", "respond"]
-    assert HUMAN_INTERRUPT_ON["process"]["allowed_decisions"] == ["approve", "edit", "reject", "respond"]
+    assert "terminal" in POLICY_REVIEW_TOOLS
+    assert "process" in POLICY_REVIEW_TOOLS
+    assert "execute_command" not in POLICY_REVIEW_TOOLS
+    assert "memory_manage" in HUMAN_INTERRUPT_ON
+    assert "skill_manage" in HUMAN_INTERRUPT_ON

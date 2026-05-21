@@ -36,22 +36,6 @@ TODO_TOOL_DESCRIPTION = (
 )
 
 HUMAN_INTERRUPT_ON = {
-    "terminal": {
-        "allowed_decisions": ["approve", "edit", "reject", "respond"],
-        "description": "Review this Hermes terminal command before it executes.",
-    },
-    "process": {
-        "allowed_decisions": ["approve", "edit", "reject", "respond"],
-        "description": "Review this Hermes background process action before it executes.",
-    },
-    "write_file": {
-        "allowed_decisions": ["approve", "edit", "reject", "respond"],
-        "description": "Review this file write before it modifies the workspace.",
-    },
-    "patch": {
-        "allowed_decisions": ["approve", "edit", "reject", "respond"],
-        "description": "Review this file patch before it modifies the workspace. Patches may add, update, move, or delete files.",
-    },
     "memory_manage": {
         "allowed_decisions": ["approve", "edit", "reject", "respond"],
         "description": "Review this durable memory change before it is written to disk.",
@@ -61,6 +45,8 @@ HUMAN_INTERRUPT_ON = {
         "description": "Review this procedural skill change before it is written to disk.",
     },
 }
+
+POLICY_REVIEW_TOOLS = {"terminal", "process", "write_file", "patch"}
 
 
 def build_agent():
@@ -100,6 +86,7 @@ def build_agent():
             *build_tool_call_limit_middleware(include_task=True),
             FlexibleHumanInTheLoopMiddleware(
                 interrupt_on=HUMAN_INTERRUPT_ON,
+                policy_tools=POLICY_REVIEW_TOOLS,
                 description_prefix="Approval required before tool execution",
             ),
             # ModelCallLimitMiddleware(
