@@ -2,6 +2,16 @@ import json
 from types import SimpleNamespace
 
 
+def _allow_terminal_policy(monkeypatch, terminal_tools):
+    from agent_core.permissions.models import PolicyDecision
+
+    monkeypatch.setattr(
+        terminal_tools.tool_policy,
+        "evaluate_tool_call",
+        lambda *args, **kwargs: PolicyDecision.allow("test_allow"),
+    )
+
+
 def test_terminal_schema_does_not_expose_task_id():
     from agent_tools.terminal_tools import terminal
 
@@ -49,6 +59,8 @@ def test_terminal_injects_runtime_thread_as_task_id(monkeypatch):
 
 def test_terminal_preserves_hermes_guard_block_response(monkeypatch):
     import agent_tools.terminal_tools as terminal_tools
+
+    _allow_terminal_policy(monkeypatch, terminal_tools)
 
     def fake_run_terminal(**kwargs):
         return json.dumps(
@@ -180,6 +192,7 @@ def test_terminal_background_runs_when_quota_available(monkeypatch):
 
     calls = []
 
+    _allow_terminal_policy(monkeypatch, terminal_tools)
     monkeypatch.setattr(terminal_tools, "background_quota_available", lambda task_id: (True, 2, 3))
 
     def fake_run_terminal(**kwargs):
@@ -200,6 +213,7 @@ def test_terminal_background_holds_quota_guard_while_starting(monkeypatch):
 
     import agent_tools.terminal_tools as terminal_tools
 
+    _allow_terminal_policy(monkeypatch, terminal_tools)
     in_guard = False
 
     @contextlib.contextmanager
@@ -229,6 +243,7 @@ def test_terminal_background_rejects_when_task_quota_exceeded(monkeypatch):
     import agent_tools.terminal_tools as terminal_tools
 
     calls = []
+    _allow_terminal_policy(monkeypatch, terminal_tools)
     monkeypatch.setattr(terminal_tools, "background_quota_available", lambda task_id: (False, 3, 3))
     monkeypatch.setattr(terminal_tools, "run_terminal", lambda **kwargs: calls.append(kwargs))
 

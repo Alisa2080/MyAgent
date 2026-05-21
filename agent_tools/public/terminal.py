@@ -4,6 +4,8 @@ from typing import Literal
 from langchain.tools import ToolRuntime, tool
 from pydantic import BaseModel, Field
 
+from agent_core.permissions import tool_policy
+from agent_core.permissions.approvals import consume_approval
 from agent_core.session_context import hermes_task_id_from_runtime
 from agent_core.terminal_process_policy import background_quota_available, background_quota_guard
 from agent_core.workspace import WORKDIR
@@ -62,6 +64,32 @@ def _exit_code_from_payload(payload: dict) -> int | None:
         return None
 
 
+def _tool_call_id_from_runtime(runtime: ToolRuntime | None) -> str | None:
+    value = getattr(runtime, "tool_call_id", None)
+    return str(value) if value else None
+
+
+def _terminal_policy_args(
+    *,
+    command: str,
+    background: bool,
+    timeout: int | None,
+    workdir: str | None,
+    pty: bool,
+    notify_on_complete: bool,
+    watch_patterns: list[str] | None,
+) -> dict:
+    return {
+        "command": command,
+        "background": background,
+        "timeout": timeout,
+        "workdir": workdir,
+        "pty": pty,
+        "notify_on_complete": notify_on_complete,
+        "watch_patterns": watch_patterns,
+    }
+
+
 def _terminal_impl(
     *,
     command: str,
@@ -74,6 +102,43 @@ def _terminal_impl(
     runtime: ToolRuntime | None = None,
 ) -> str:
     task_id = hermes_task_id_from_runtime(runtime)
+    tool_call_id = _tool_call_id_from_runtime(runtime)
+    policy_args = _terminal_policy_args(
+        command=command,
+        background=background,
+        timeout=timeout,
+        workdir=workdir,
+        pty=pty,
+        notify_on_complete=notify_on_complete,
+        watch_patterns=watch_patterns,
+    )
+    decision = tool_policy.evaluate_tool_call("terminal", policy_args, task_id, tool_call_id=tool_call_id)
+    allow_network_once = False
+    if decision.outcome == "deny":
+        return tool_error(
+            "terminal",
+            decision.human_message,
+            code="policy_denied",
+            data=decision.data,
+            meta={"backend": "hermes_terminal_toolkit"},
+        )
+    if decision.outcome == "review":
+        approval = consume_approval(
+            task_id=task_id,
+            tool_call_id=tool_call_id,
+            tool_name="terminal",
+            args=policy_args,
+            required_risk_tags=decision.risk_tags,
+        )
+        if approval is None:
+            return tool_error(
+                "terminal",
+                decision.human_message,
+                code="approval_required",
+                data=decision.data,
+                meta={"backend": "hermes_terminal_toolkit"},
+            )
+        allow_network_once = approval.allow_network_once
     if background:
         with background_quota_guard(task_id):
             available, current, limit = background_quota_available(task_id)
@@ -95,6 +160,7 @@ def _terminal_impl(
                 notify_on_complete=notify_on_complete,
                 watch_patterns=watch_patterns,
                 force=False,
+                allow_network_once=allow_network_once,
             )
     else:
         raw = run_terminal(
@@ -107,6 +173,7 @@ def _terminal_impl(
             notify_on_complete=notify_on_complete,
             watch_patterns=watch_patterns,
             force=False,
+            allow_network_once=allow_network_once,
         )
     payload = _decode_hermes_payload(raw)
     if payload.get("error"):

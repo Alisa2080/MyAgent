@@ -671,8 +671,10 @@ def terminal_tool(
     pty: bool = False,
     notify_on_complete: bool = False,
     watch_patterns: Optional[List[str]] = None,
+    allow_network_once: bool = False,
 ) -> str:
     try:
+        del allow_network_once
         if not isinstance(command, str):
             logger.warning("Rejected invalid terminal command value: %s", type(command).__name__)
             return json.dumps(

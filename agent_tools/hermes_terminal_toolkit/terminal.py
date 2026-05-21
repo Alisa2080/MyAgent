@@ -18,6 +18,7 @@ def run_terminal(
     notify_on_complete: bool = False,
     watch_patterns: Optional[List[str]] = None,
     force: bool = False,
+    allow_network_once: bool = False,
 ) -> str:
     return terminal_tool(
         command=command,
@@ -29,6 +30,7 @@ def run_terminal(
         notify_on_complete=notify_on_complete,
         watch_patterns=watch_patterns,
         force=force,
+        allow_network_once=allow_network_once,
     )
 
 

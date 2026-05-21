@@ -16,6 +16,10 @@ _READ_ONLY_COMMANDS = {
     "cat",
     "head",
     "tail",
+    "echo",
+    "printf",
+    "true",
+    "false",
     "wc",
     "which",
 }
