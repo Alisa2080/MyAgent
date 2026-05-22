@@ -189,6 +189,41 @@ def get_job(job_id: str) -> dict[str, Any] | None:
     return None
 
 
+def _find_job_index(jobs: list[dict[str, Any]], job_id: str) -> int:
+    for index, job in enumerate(jobs):
+        if job.get("id") == job_id:
+            return index
+    raise KeyError(f"Cron job not found: {job_id}")
+
+
+def _normalize_updates(updates: dict[str, Any]) -> dict[str, Any]:
+    normalized_updates = dict(updates)
+    if "workdir" in normalized_updates:
+        normalized_updates["workdir"] = _normalize_workdir(
+            normalized_updates["workdir"]
+        )
+    if "schedule" in normalized_updates and isinstance(
+        normalized_updates["schedule"], str
+    ):
+        parsed_schedule = parse_schedule(normalized_updates["schedule"])
+        normalized_updates["schedule"] = parsed_schedule
+        normalized_updates["schedule_display"] = parsed_schedule.get("display")
+        normalized_updates["next_run_at"] = compute_next_run(parsed_schedule)
+    return normalized_updates
+
+
+def _update_job_locked(
+    jobs: list[dict[str, Any]],
+    index: int,
+    updates: dict[str, Any],
+) -> dict[str, Any]:
+    merged = dict(jobs[index])
+    merged.update(_normalize_updates(updates))
+    jobs[index] = merged
+    save_jobs(jobs)
+    return copy.deepcopy(merged)
+
+
 def compute_next_run(
     schedule: dict[str, Any],
     last_run_at: str | None = None,
@@ -276,30 +311,8 @@ def create_job(
 def update_job(job_id: str, updates: dict[str, Any]) -> dict[str, Any]:
     with _jobs_file_lock:
         jobs = load_jobs()
-        for index, job in enumerate(jobs):
-            if job.get("id") != job_id:
-                continue
-
-            normalized_updates = dict(updates)
-            if "workdir" in normalized_updates:
-                normalized_updates["workdir"] = _normalize_workdir(
-                    normalized_updates["workdir"]
-                )
-            if "schedule" in normalized_updates and isinstance(
-                normalized_updates["schedule"], str
-            ):
-                parsed_schedule = parse_schedule(normalized_updates["schedule"])
-                normalized_updates["schedule"] = parsed_schedule
-                normalized_updates["schedule_display"] = parsed_schedule.get("display")
-                normalized_updates["next_run_at"] = compute_next_run(parsed_schedule)
-
-            merged = dict(job)
-            merged.update(normalized_updates)
-            jobs[index] = merged
-            save_jobs(jobs)
-            return copy.deepcopy(merged)
-
-    raise KeyError(f"Cron job not found: {job_id}")
+        index = _find_job_index(jobs, job_id)
+        return _update_job_locked(jobs, index, updates)
 
 
 def remove_job(job_id: str) -> bool:
@@ -325,17 +338,20 @@ def pause_job(job_id: str, reason: str | None = None) -> dict[str, Any]:
 
 
 def resume_job(job_id: str) -> dict[str, Any]:
-    job = get_job(job_id)
-    if job is None:
-        raise KeyError(f"Cron job not found: {job_id}")
-    return update_job(
-        job_id,
-        {
-            "enabled": True,
-            "state": "scheduled",
-            "next_run_at": compute_next_run(job["schedule"]),
-        },
-    )
+    with _jobs_file_lock:
+        jobs = load_jobs()
+        index = _find_job_index(jobs, job_id)
+        job = jobs[index]
+        schedule = job.get("schedule")
+        return _update_job_locked(
+            jobs,
+            index,
+            {
+                "enabled": True,
+                "state": "scheduled",
+                "next_run_at": compute_next_run(schedule) if schedule else None,
+            },
+        )
 
 
 def trigger_job(job_id: str) -> dict[str, Any]:
@@ -393,7 +409,10 @@ def get_due_jobs(now_dt: datetime | None = None) -> list[dict[str, Any]]:
 
         grace_seconds = _recurring_grace_seconds(schedule, run_at)
         if current - run_at > timedelta(seconds=grace_seconds):
-            update_job(job["id"], {"next_run_at": compute_next_run(schedule, base=current)})
+            update_job(
+                job["id"],
+                {"next_run_at": compute_next_run(schedule, base=current)},
+            )
             continue
 
         due_jobs.append(copy.deepcopy(job))
@@ -402,25 +421,26 @@ def get_due_jobs(now_dt: datetime | None = None) -> list[dict[str, Any]]:
 
 
 def advance_next_run(job_id: str, run_at: datetime | None = None) -> dict[str, Any]:
-    job = get_job(job_id)
-    if job is None:
-        raise KeyError(f"Cron job not found: {job_id}")
+    with _jobs_file_lock:
+        jobs = load_jobs()
+        index = _find_job_index(jobs, job_id)
+        job = jobs[index]
 
-    schedule = job.get("schedule") or {}
-    effective_run_at = _ensure_aware(run_at or now())
-    kind = schedule.get("kind")
-    if kind == "once":
-        next_run_at = None
-    elif kind == "interval":
-        next_run_at = (
-            effective_run_at + timedelta(minutes=int(schedule["minutes"]))
-        ).isoformat()
-    elif kind == "cron":
-        next_run_at = compute_next_run(schedule, base=effective_run_at)
-    else:
-        raise ValueError(f"Unsupported schedule kind: {kind!r}")
+        schedule = job.get("schedule") or {}
+        effective_run_at = _ensure_aware(run_at or now())
+        kind = schedule.get("kind")
+        if kind == "once":
+            next_run_at = None
+        elif kind == "interval":
+            next_run_at = (
+                effective_run_at + timedelta(minutes=int(schedule["minutes"]))
+            ).isoformat()
+        elif kind == "cron":
+            next_run_at = compute_next_run(schedule, base=effective_run_at)
+        else:
+            raise ValueError(f"Unsupported schedule kind: {kind!r}")
 
-    return update_job(job_id, {"next_run_at": next_run_at})
+        return _update_job_locked(jobs, index, {"next_run_at": next_run_at})
 
 
 def mark_job_run(
@@ -429,24 +449,27 @@ def mark_job_run(
     error: str | None = None,
     run_at: datetime | None = None,
 ) -> dict[str, Any]:
-    job = get_job(job_id)
-    if job is None:
-        raise KeyError(f"Cron job not found: {job_id}")
+    with _jobs_file_lock:
+        jobs = load_jobs()
+        index = _find_job_index(jobs, job_id)
+        job = jobs[index]
 
-    repeat = dict(job.get("repeat") or {"times": None, "completed": 0})
-    repeat["completed"] = int(repeat.get("completed") or 0) + 1
-    repeat_times = repeat.get("times")
-    completed = repeat_times is not None and repeat["completed"] >= int(repeat_times)
+        repeat = dict(job.get("repeat") or {"times": None, "completed": 0})
+        repeat["completed"] = int(repeat.get("completed") or 0) + 1
+        repeat_times = repeat.get("times")
+        completed = repeat_times is not None and repeat["completed"] >= int(
+            repeat_times
+        )
 
-    updates = {
-        "last_run_at": _ensure_aware(run_at or now()).isoformat(),
-        "last_status": "ok" if success else "error",
-        "last_error": None if success else error,
-        "repeat": repeat,
-        "state": "completed" if completed else "scheduled",
-        "enabled": False if completed else job.get("enabled", True),
-    }
-    return update_job(job_id, updates)
+        updates = {
+            "last_run_at": _ensure_aware(run_at or now()).isoformat(),
+            "last_status": "ok" if success else "error",
+            "last_error": None if success else error,
+            "repeat": repeat,
+            "state": "completed" if completed else "scheduled",
+            "enabled": False if completed else job.get("enabled", True),
+        }
+        return _update_job_locked(jobs, index, updates)
 
 
 def save_job_output(
@@ -469,7 +492,7 @@ def latest_job_output(job_id: str) -> str | None:
     if not output_dir.exists():
         return None
 
-    files = sorted(output_dir.glob("*.md"), key=lambda path: path.stat().st_mtime)
+    files = sorted(output_dir.glob("*.md"), key=lambda path: path.name)
     if not files:
         return None
     return files[-1].read_text(encoding="utf-8")
