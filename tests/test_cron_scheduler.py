@@ -113,6 +113,60 @@ def test_tick_queues_origin_notification(monkeypatch, tmp_path):
     ]
 
 
+def test_legacy_delivery_value_runs_without_origin_notification(monkeypatch, tmp_path):
+    import cron.scheduler as scheduler
+
+    calls = []
+    job = {
+        "id": "job-1",
+        "name": "daily",
+        "workdir": None,
+        "deliver": "telegram:123",
+        "origin": {"thread_id": "thread-1"},
+    }
+
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setattr(scheduler, "get_due_jobs", lambda now_dt=None: [job])
+    monkeypatch.setattr(scheduler, "advance_next_run", lambda job_id, run_at: job)
+    monkeypatch.setattr(
+        scheduler,
+        "run_job",
+        lambda advanced: scheduler.JobRunResult(True, "doc", "final", None),
+    )
+    monkeypatch.setattr(
+        scheduler,
+        "save_job_output",
+        lambda job_id, doc, run_at=None: calls.append(("save", job_id, doc, run_at))
+        or "/tmp/out.md",
+    )
+    monkeypatch.setattr(
+        scheduler,
+        "mark_job_run",
+        lambda job_id, success, error=None, run_at=None: calls.append(
+            ("mark", job_id, success, error, run_at)
+        ),
+    )
+    monkeypatch.setattr(
+        scheduler,
+        "queue_cron_notification",
+        lambda thread_id, event: calls.append(("notify", thread_id, event)),
+    )
+
+    result = scheduler.tick(now_dt=RUN_AT)
+
+    assert result.due == 1
+    assert result.ran == 1
+    assert result.succeeded == 1
+    assert result.failed == 0
+    assert result.results == [
+        scheduler.JobTickResult(job_id="job-1", success=True, output_path="/tmp/out.md")
+    ]
+    assert calls == [
+        ("save", "job-1", "doc", RUN_AT),
+        ("mark", "job-1", True, None, RUN_AT),
+    ]
+
+
 def test_silent_response_suppresses_origin_notification(monkeypatch, tmp_path):
     import cron.scheduler as scheduler
 
