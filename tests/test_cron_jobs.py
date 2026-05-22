@@ -1,9 +1,50 @@
 import os
 from pathlib import Path
 import stat
+import sys
 from datetime import datetime, timedelta, timezone
 
 import pytest
+
+
+def test_import_cron_keeps_scheduler_lazy_until_tick_access():
+    for module_name in (
+        "agent_core.model_config",
+        "cron",
+        "cron.runner",
+        "cron.scheduler",
+    ):
+        sys.modules.pop(module_name, None)
+
+    import cron
+
+    assert "tick" in cron.__all__
+    assert "cron.scheduler" not in sys.modules
+    assert "cron.runner" not in sys.modules
+    assert "agent_core.model_config" not in sys.modules
+
+    tick = cron.tick
+
+    assert callable(tick)
+    assert "cron.scheduler" in sys.modules
+
+
+def test_cron_package_reexports_job_compatibility_api():
+    import cron
+
+    for name in (
+        "JOBS_FILE",
+        "create_job",
+        "get_job",
+        "list_jobs",
+        "pause_job",
+        "remove_job",
+        "resume_job",
+        "trigger_job",
+        "update_job",
+    ):
+        assert hasattr(cron, name)
+        assert name in cron.__all__
 
 
 def test_import_cron_jobs_works_normally():
