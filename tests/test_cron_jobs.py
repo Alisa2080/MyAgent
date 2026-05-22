@@ -297,7 +297,7 @@ def test_mark_job_run_error_and_completion_disable(jobs_module):
     assert errored["last_status"] == "error"
     assert errored["last_error"] == "boom"
     assert errored["repeat"] == {"times": 2, "completed": 1}
-    assert errored["state"] == "scheduled"
+    assert errored["state"] == "error"
     assert errored["enabled"] is True
     assert completed["state"] == "completed"
     assert completed["enabled"] is False

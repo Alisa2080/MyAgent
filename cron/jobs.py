@@ -461,12 +461,19 @@ def mark_job_run(
             repeat_times
         )
 
+        if completed:
+            state = "completed"
+        elif success:
+            state = "scheduled"
+        else:
+            state = "error"
+
         updates = {
             "last_run_at": _ensure_aware(run_at or now()).isoformat(),
             "last_status": "ok" if success else "error",
             "last_error": None if success else error,
             "repeat": repeat,
-            "state": "completed" if completed else "scheduled",
+            "state": state,
             "enabled": False if completed else job.get("enabled", True),
         }
         return _update_job_locked(jobs, index, updates)
