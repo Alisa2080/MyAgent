@@ -46,7 +46,9 @@ class JobRunResult:
     error: str | None = None
 
 
-def _bounded(text: str, max_chars: int = SCRIPT_OUTPUT_MAX_CHARS) -> str:
+def _bounded(text: str, max_chars: int | None = None) -> str:
+    if max_chars is None:
+        max_chars = SCRIPT_OUTPUT_MAX_CHARS
     if len(text) <= max_chars:
         return text
     return text[-max_chars:]
@@ -311,19 +313,19 @@ def run_job(job: dict[str, Any]) -> JobRunResult:
             output_doc=_output_doc(job, final_response, script_output),
             final_response=final_response,
         )
-    except concurrent.futures.TimeoutError:
-        error = "Cron job timed out."
-        return JobRunResult(
-            success=False,
-            output_doc=_output_doc(job, "", script_output, error),
-            final_response="",
-            error=error,
-        )
     except _ScriptTimeoutError as exc:
         error = str(exc)
         return JobRunResult(
             success=False,
             output_doc=_output_doc(job, "", exc.output or script_output, error),
+            final_response="",
+            error=error,
+        )
+    except concurrent.futures.TimeoutError:
+        error = "Cron job timed out."
+        return JobRunResult(
+            success=False,
+            output_doc=_output_doc(job, "", script_output, error),
             final_response="",
             error=error,
         )
