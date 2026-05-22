@@ -1,27 +1,21 @@
 import os
 from pathlib import Path
 import stat
-import sys
 from datetime import datetime, timedelta, timezone
 
 import pytest
 
 
-def import_jobs_module():
-    try:
-        import cron.jobs as jobs
+def test_import_cron_jobs_works_normally():
+    import cron.jobs as jobs
 
-        return jobs
-    except ModuleNotFoundError as exc:
-        # cron/__init__.py still imports the legacy scheduler in this task.
-        if exc.name == "hermes_constants" and "cron.jobs" in sys.modules:
-            return sys.modules["cron.jobs"]
-        raise
+    assert jobs.__name__ == "cron.jobs"
 
 
 @pytest.fixture
 def jobs_module(monkeypatch, tmp_path):
-    jobs = import_jobs_module()
+    import cron.jobs as jobs
+
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     monkeypatch.setattr(
         jobs,
