@@ -98,6 +98,30 @@ def test_format_cron_notification_message_sanitizes_inline_fields():
     assert "/tmp/out.md\\nmalicious" in header
 
 
+def test_format_cron_notification_message_keeps_truncated_inline_fields_single_line():
+    import cron.notifications as notifications
+
+    message = notifications.format_cron_notification_message(
+        [
+            {
+                "type": "cron_result",
+                "job_id": "id-" + ("x" * 250),
+                "job_name": "daily-" + ("x" * 250),
+                "status": "ok-" + ("x" * 250),
+                "final_response": "Report ready",
+                "output_path": "/tmp/" + ("x" * 250),
+            }
+        ]
+    )
+    lines = message.splitlines()
+    header_index = next(index for index, line in enumerate(lines) if line.startswith("- job_name="))
+    header = lines[header_index]
+
+    assert "truncated" in header
+    assert all(ord(char) >= 32 and ord(char) != 127 for char in header)
+    assert lines[header_index + 1] == "  final_response:"
+
+
 def test_format_cron_notification_message_respects_tiny_max_message_chars():
     import cron.notifications as notifications
 

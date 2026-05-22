@@ -86,6 +86,20 @@ def _shorten(text: Any, max_chars: int) -> str:
     return value[: max_chars - len(marker)].rstrip() + marker
 
 
+def _shorten_inline(text: Any, max_chars: int) -> str:
+    if max_chars <= 0:
+        return ""
+
+    value = "" if text is None else str(text)
+    if len(value) <= max_chars:
+        return value
+
+    marker = "...(truncated)"
+    if max_chars <= len(marker):
+        return marker[:max_chars]
+    return value[: max_chars - len(marker)].rstrip() + marker
+
+
 def _sanitize_inline_field(value: Any, max_chars: int = _INLINE_FIELD_MAX_CHARS) -> str:
     sanitized = []
     for char in "" if value is None else str(value):
@@ -99,7 +113,7 @@ def _sanitize_inline_field(value: Any, max_chars: int = _INLINE_FIELD_MAX_CHARS)
             sanitized.append(f"\\x{ord(char):02x}")
         else:
             sanitized.append(char)
-    return _shorten("".join(sanitized), max_chars)
+    return _shorten_inline("".join(sanitized), max_chars)
 
 
 def format_cron_notification_message(
