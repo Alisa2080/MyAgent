@@ -1,30 +1,13 @@
-"""Safe cron package exports.
+"""Project-native cron scheduling support."""
 
-The scheduler module is still a legacy Hermes port and is intentionally not
-imported here. Later cron tasks can re-export tick once scheduler imports are
-project-native.
-"""
-
-from cron.jobs import (
-    JOBS_FILE,
-    create_job,
-    get_job,
-    list_jobs,
-    pause_job,
-    remove_job,
-    resume_job,
-    trigger_job,
-    update_job,
-)
+from cron.jobs import create_job, get_job, list_jobs
+from cron.notifications import drain_cron_notifications_for_thread_id
+from cron.scheduler import tick
 
 __all__ = [
-    "JOBS_FILE",
     "create_job",
+    "drain_cron_notifications_for_thread_id",
     "get_job",
     "list_jobs",
-    "pause_job",
-    "remove_job",
-    "resume_job",
-    "trigger_job",
-    "update_job",
+    "tick",
 ]

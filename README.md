@@ -107,3 +107,23 @@ Background completion notifications:
 - The runner uses the same `configurable.thread_id`, wraps initial and resumed turns in `terminal_execution_scope(thread_id)`, and resumes only with terminal events mapped to the same Hermes `task_id`.
 - Automatic continuation is bounded by `HERMES_TERMINAL_MAX_AUTO_RESUMES`, defaulting to 3. Notifications produced after the final allowed resume are left queued for a future invocation.
 - CLI display, idle polling, websocket delivery, and push notifications are not implemented here. Future CLI or server code should build on the runner and notification helper APIs above.
+
+## Cron Scheduling
+
+Cron is not started automatically. Embedding applications that want scheduled jobs should call:
+
+```python
+from agent_core.cron_lifecycle import start_cron_scheduler, stop_cron_scheduler
+
+start_cron_scheduler(interval_seconds=60)
+```
+
+To let the parent agent create and manage jobs, build it explicitly with:
+
+```python
+from agent_core.builders import build_agent
+
+agent = build_agent(include_cron_tools=True)
+```
+
+Cron output is saved under the configured Hermes home. `deliver="origin"` queues thread-scoped notifications that embedding applications can drain with `cron.notifications.drain_cron_notifications_for_thread_id(thread_id)`.
