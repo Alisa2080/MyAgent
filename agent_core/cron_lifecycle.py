@@ -52,7 +52,7 @@ def stop_cron_scheduler(timeout: float | None = None) -> bool:
 
     with _lock:
         stopped = not thread.is_alive()
-        if stopped:
+        if stopped and _thread is thread:
             _thread = None
         return stopped
 

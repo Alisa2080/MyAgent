@@ -84,6 +84,39 @@ def test_stop_cron_scheduler_returns_false_when_thread_still_alive(monkeypatch):
     assert lifecycle._thread is thread
 
 
+def test_stop_cron_scheduler_preserves_thread_restarted_during_join(monkeypatch):
+    import agent_core.cron_lifecycle as lifecycle
+
+    created = []
+
+    class NewThread:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+            created.append(self)
+
+        def start(self):
+            return None
+
+        def is_alive(self):
+            return True
+
+    class OldThread:
+        def is_alive(self):
+            return False
+
+        def join(self, timeout=None):
+            assert lifecycle.start_cron_scheduler(interval_seconds=1) is True
+
+    monkeypatch.setattr(lifecycle.threading, "Thread", lambda **kwargs: NewThread(**kwargs))
+    old_thread = OldThread()
+    monkeypatch.setattr(lifecycle, "_thread", old_thread)
+    lifecycle._stop_event.clear()
+
+    assert lifecycle.stop_cron_scheduler(timeout=0.1) is True
+    assert lifecycle._thread is created[0]
+    assert lifecycle.is_cron_scheduler_running() is True
+
+
 def test_is_cron_scheduler_running_reflects_thread_alive_state(monkeypatch):
     import agent_core.cron_lifecycle as lifecycle
 
