@@ -176,6 +176,15 @@ def _prompt_scan_error(prompt: str | None) -> dict[str, Any] | None:
     return None
 
 
+def _normalize_repeat(repeat: Any) -> Any:
+    if repeat is None:
+        return None
+    try:
+        return None if int(repeat) <= 0 else repeat
+    except (TypeError, ValueError):
+        return repeat
+
+
 def _cronjob_impl(action: str, runtime: ToolRuntime | None = None, **kwargs: Any) -> dict[str, Any]:
     normalized = (action or "").strip().lower()
     deliver = kwargs.get("deliver")
@@ -211,7 +220,7 @@ def _cronjob_impl(action: str, runtime: ToolRuntime | None = None, **kwargs: Any
                 prompt=prompt,
                 schedule=schedule,
                 name=kwargs.get("name"),
-                repeat=kwargs.get("repeat"),
+                repeat=_normalize_repeat(kwargs.get("repeat")),
                 deliver=deliver,
                 origin=origin,
                 skills=skills,
@@ -273,6 +282,9 @@ def _cronjob_impl(action: str, runtime: ToolRuntime | None = None, **kwargs: Any
                 if script_error:
                     return script_error
                 updates["script"] = script
+
+            if "repeat" in updates:
+                updates["repeat"] = _normalize_repeat(updates["repeat"])
 
             return {"success": True, "job": _format_job(update_job(job_id, updates))}
 

@@ -154,6 +154,27 @@ def test_cronjob_create_allows_skills_only(monkeypatch):
     assert created["skills"] == ["daily-report"]
 
 
+def test_cronjob_create_normalizes_nonpositive_repeat_to_forever(monkeypatch):
+    cronjob_tool = _cronjob_tool()
+    created = {}
+
+    def fake_create_job(**kwargs):
+        created.update(kwargs)
+        return _job(repeat={"times": kwargs["repeat"], "completed": 0})
+
+    monkeypatch.setattr(cronjob_tool, "create_job", fake_create_job)
+
+    result = cronjob_tool._cronjob_impl(
+        action="create",
+        prompt="write report",
+        schedule="every 30m",
+        repeat=0,
+    )
+
+    assert result["success"] is True
+    assert created["repeat"] is None
+
+
 @pytest.mark.parametrize("deliver", [None, "local", "origin"])
 def test_cronjob_create_accepts_supported_deliveries(monkeypatch, deliver):
     cronjob_tool = _cronjob_tool()
@@ -409,6 +430,23 @@ def test_cronjob_update_validates_context_from(monkeypatch):
 
     assert result["success"] is True
     assert updated["updates"]["context_from"] == ["source-job"]
+
+
+def test_cronjob_update_normalizes_nonpositive_repeat_to_forever(monkeypatch):
+    cronjob_tool = _cronjob_tool()
+    updated = {}
+
+    def fake_update_job(job_id, updates):
+        updated["job_id"] = job_id
+        updated["updates"] = updates
+        return _job(job_id=job_id, repeat={"times": updates["repeat"], "completed": 0})
+
+    monkeypatch.setattr(cronjob_tool, "update_job", fake_update_job)
+
+    result = cronjob_tool._cronjob_impl(action="update", job_id="job-1", repeat=-1)
+
+    assert result["success"] is True
+    assert updated["updates"]["repeat"] is None
 
 
 def test_public_init_exports_cronjob():

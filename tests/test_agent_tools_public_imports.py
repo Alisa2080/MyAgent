@@ -1,3 +1,7 @@
+import importlib
+import sys
+
+
 def test_public_files_exports_existing_tool_objects():
     from agent_tools.file_tools import file_info, list_directory, patch, read_file, search_files, write_file
     from agent_tools.public.files import (
@@ -92,3 +96,29 @@ def test_agent_core_uses_public_tool_facades_for_runtime_registration():
     assert "from agent_tools.public.skills import" in delegation_source
     assert "from agent_tools.public.memory import" in builders_source
     assert "from agent_tools.public.skills import build_skills_system_prompt" in system_prompt_source
+
+
+def test_public_package_does_not_eagerly_import_cronjob(monkeypatch):
+    for module_name in [
+        "agent_tools.public",
+        "agent_tools.public.cronjob",
+        "cron.jobs",
+    ]:
+        monkeypatch.delitem(sys.modules, module_name, raising=False)
+
+    public = importlib.import_module("agent_tools.public")
+
+    assert "agent_tools.public.cronjob" not in sys.modules
+    assert "cron.jobs" not in sys.modules
+
+    from agent_tools.public import memory_manage
+
+    assert getattr(memory_manage, "name", None) == "memory_manage"
+    assert "agent_tools.public.cronjob" not in sys.modules
+    assert "cron.jobs" not in sys.modules
+
+    cronjob = public.cronjob
+
+    assert getattr(cronjob, "name", None) == "cronjob"
+    assert "agent_tools.public.cronjob" in sys.modules
+    assert "cron.jobs" in sys.modules
