@@ -471,7 +471,7 @@ def mark_job_run(
         updates = {
             "last_run_at": _ensure_aware(run_at or now()).isoformat(),
             "last_status": "ok" if success else "error",
-            "last_error": None if success else error,
+            "last_error": error,
             "repeat": repeat,
             "state": state,
             "enabled": False if completed else job.get("enabled", True),

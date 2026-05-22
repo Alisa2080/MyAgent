@@ -173,6 +173,49 @@ def test_legacy_delivery_value_runs_without_origin_notification(monkeypatch, tmp
     ]
 
 
+def test_legacy_delivery_error_is_persisted_with_real_job_storage(monkeypatch, tmp_path):
+    import cron.jobs as jobs
+    import cron.scheduler as scheduler
+
+    delivery_error = "Unsupported delivery target: telegram:123"
+
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    job = jobs.create_job(
+        prompt="daily report",
+        schedule="30m",
+        deliver="telegram:123",
+        origin={"thread_id": "thread-1"},
+    )
+    jobs.update_job(job["id"], {"next_run_at": RUN_AT.isoformat()})
+    monkeypatch.setattr(
+        scheduler,
+        "run_job",
+        lambda advanced: scheduler.JobRunResult(True, "doc", "final", None),
+    )
+    monkeypatch.setattr(
+        scheduler,
+        "queue_cron_notification",
+        lambda thread_id, event: pytest.fail("unsupported delivery must not notify"),
+    )
+
+    result = scheduler.tick(now_dt=RUN_AT)
+
+    persisted = jobs.get_job(job["id"])
+    assert result.due == 1
+    assert result.succeeded == 1
+    assert result.results == [
+        scheduler.JobTickResult(
+            job_id=job["id"],
+            success=True,
+            output_path=str(
+                tmp_path / "cron" / "output" / job["id"] / "20260522_090000.md"
+            ),
+            error=delivery_error,
+        )
+    ]
+    assert persisted["last_error"] == delivery_error
+
+
 def test_silent_response_suppresses_origin_notification(monkeypatch, tmp_path):
     import cron.scheduler as scheduler
 
