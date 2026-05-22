@@ -1,8 +1,13 @@
 from __future__ import annotations
 
 import concurrent.futures
+import os
+import subprocess
+import sys
 import time
 from types import SimpleNamespace
+
+import pytest
 
 
 def test_validate_script_path_rejects_unsafe_paths(monkeypatch, tmp_path):
@@ -453,7 +458,8 @@ def test_invoke_cron_agent_process_passes_recursion_limit_and_default_timeout(
         "messages": [{"role": "user", "content": "prompt text"}]
     }
     assert calls["config"] == {"recursion_limit": runner.AGENT_RECURSION_LIMIT}
-    assert calls["timeout"] == 600
+    assert runner._cron_timeout() == 600
+    assert calls["timeout"] == runner.AGENT_TERMINATE_GRACE_SECONDS
 
 
 def test_invoke_cron_agent_timeout_zero_joins_without_timeout(monkeypatch):
@@ -484,7 +490,8 @@ def test_invoke_cron_agent_timeout_zero_joins_without_timeout(monkeypatch):
     )
 
     assert runner._invoke_cron_agent({"id": "job-1"}, "prompt text") == "done"
-    assert calls["timeout"] is None
+    assert runner._cron_timeout() is None
+    assert calls["timeout"] == runner.AGENT_TERMINATE_GRACE_SECONDS
 
 
 def test_invoke_cron_agent_timeout_terminates_process_and_propagates(monkeypatch):
@@ -493,10 +500,12 @@ def test_invoke_cron_agent_timeout_terminates_process_and_propagates(monkeypatch
     calls = {}
 
     class FakeQueue:
-        pass
+        def get(self, timeout=None):
+            raise runner.queue.Empty
 
     class FakeProcess:
         exitcode = None
+        terminated = False
 
         def start(self):
             calls["started"] = True
@@ -505,15 +514,16 @@ def test_invoke_cron_agent_timeout_terminates_process_and_propagates(monkeypatch
             calls.setdefault("joins", []).append(timeout)
 
         def is_alive(self):
-            return len(calls.get("joins", [])) == 1
+            return not self.terminated
 
         def terminate(self):
+            self.terminated = True
             calls["terminated"] = True
 
         def kill(self):
             calls["killed"] = True
 
-    monkeypatch.delenv("HERMES_CRON_TIMEOUT", raising=False)
+    monkeypatch.setenv("HERMES_CRON_TIMEOUT", "1")
     monkeypatch.setattr(runner, "_create_agent_result_queue", lambda: FakeQueue())
     monkeypatch.setattr(
         runner, "_create_agent_process", lambda job, prompt, result_queue: FakeProcess()
@@ -525,9 +535,63 @@ def test_invoke_cron_agent_timeout_terminates_process_and_propagates(monkeypatch
         pass
     else:
         raise AssertionError("expected TimeoutError")
-    assert calls["joins"][0] == 600
-    assert calls["joins"][1] == 5
+    assert calls["joins"] == [runner.AGENT_TERMINATE_GRACE_SECONDS]
     assert calls["terminated"] is True
+
+
+def test_invoke_cron_agent_timeout_kills_descendant_process_group(
+    monkeypatch,
+    tmp_path,
+):
+    if os.name != "posix":
+        pytest.skip("process-group cleanup regression is POSIX-specific")
+
+    import cron.runner as runner
+
+    marker_path = tmp_path / "descendant-terminated"
+
+    class FakeAgent:
+        def invoke(self, payload, config):
+            code = (
+                "import pathlib, signal, sys, time\n"
+                "marker = pathlib.Path(sys.argv[1])\n"
+                "def term(signum, frame):\n"
+                "    marker.write_text('terminated')\n"
+                "    raise SystemExit(0)\n"
+                "signal.signal(signal.SIGTERM, term)\n"
+                "while True:\n"
+                "    time.sleep(1)\n"
+            )
+            subprocess.Popen([sys.executable, "-c", code, str(marker_path)])
+            time.sleep(30)
+
+    monkeypatch.setenv("HERMES_CRON_TIMEOUT", "1")
+    monkeypatch.setattr(runner, "_build_cron_agent", lambda job: FakeAgent())
+
+    start = time.monotonic()
+    with pytest.raises(concurrent.futures.TimeoutError):
+        runner._invoke_cron_agent({"id": "job-1"}, "prompt")
+
+    assert time.monotonic() - start < 10
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline and not marker_path.exists():
+        time.sleep(0.05)
+    assert marker_path.read_text() == "terminated"
+
+
+def test_invoke_cron_agent_large_final_response_does_not_timeout(monkeypatch):
+    import cron.runner as runner
+
+    large_response = "x" * (8 * 1024 * 1024)
+
+    class FakeAgent:
+        def invoke(self, payload, config):
+            return {"messages": [SimpleNamespace(content=large_response)]}
+
+    monkeypatch.setenv("HERMES_CRON_TIMEOUT", "3")
+    monkeypatch.setattr(runner, "_build_cron_agent", lambda job: FakeAgent())
+
+    assert runner._invoke_cron_agent({"id": "job-1"}, "prompt") == large_response
 
 
 def test_run_job_generic_agent_error_returns_failure(monkeypatch):

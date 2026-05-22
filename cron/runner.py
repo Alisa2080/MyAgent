@@ -6,8 +6,10 @@ import multiprocessing
 import os
 import queue
 import re
+import signal
 import subprocess
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -32,6 +34,8 @@ from cron.paths import get_scripts_dir
 SCRIPT_OUTPUT_MAX_CHARS = 12_000
 SKILL_CONTENT_MAX_CHARS = 12_000
 AGENT_RECURSION_LIMIT = 90
+AGENT_QUEUE_POLL_SECONDS = 0.05
+AGENT_TERMINATE_GRACE_SECONDS = 5
 
 
 class _ScriptTimeoutError(TimeoutError):
@@ -285,6 +289,7 @@ def _agent_process_target(
     prompt: str,
     result_queue: multiprocessing.Queue,
 ) -> None:
+    _start_agent_process_group()
     try:
         agent = _build_cron_agent(job)
         response = agent.invoke(
@@ -322,35 +327,118 @@ def _create_agent_process(
     )
 
 
-def _read_agent_result(result_queue: Any) -> dict[str, Any]:
+def _start_agent_process_group() -> None:
+    if os.name != "posix":
+        return
+    try:
+        os.setsid()
+    except OSError:
+        pass
+
+
+def _process_group_id(process: Any) -> int | None:
+    if os.name != "posix":
+        return None
+    pid = getattr(process, "pid", None)
+    if not pid:
+        return None
+    try:
+        pgid = os.getpgid(pid)
+    except ProcessLookupError:
+        return None
+    except OSError:
+        return None
+    try:
+        if pgid == os.getpgrp():
+            return None
+    except OSError:
+        return None
+    return pgid
+
+
+def _signal_process_group(process: Any, sig: int) -> bool:
+    pgid = _process_group_id(process)
+    if pgid is None:
+        return False
+    try:
+        os.killpg(pgid, sig)
+        return True
+    except ProcessLookupError:
+        return True
+    except OSError:
+        return False
+
+
+def _terminate_agent_process(process: Any) -> None:
+    if not process.is_alive():
+        return
+
+    if not _signal_process_group(process, signal.SIGTERM):
+        process.terminate()
+    process.join(AGENT_TERMINATE_GRACE_SECONDS)
+
+    if process.is_alive():
+        if not _signal_process_group(process, signal.SIGKILL) and hasattr(
+            process, "kill"
+        ):
+            process.kill()
+        process.join(AGENT_TERMINATE_GRACE_SECONDS)
+
+
+def _read_agent_result(
+    result_queue: Any,
+    timeout: float | None = None,
+) -> dict[str, Any]:
     get = getattr(result_queue, "get", None)
     if callable(get):
-        return get(timeout=1)
-    return result_queue.get_nowait()
+        try:
+            return get(timeout=timeout)
+        except TypeError:
+            return get()
+    get_nowait = getattr(result_queue, "get_nowait", None)
+    if callable(get_nowait):
+        return get_nowait()
+    raise queue.Empty
 
 
 def _invoke_cron_agent(job: dict[str, Any], prompt: str) -> str:
     result_queue = _create_agent_result_queue()
     process = _create_agent_process(job, prompt, result_queue)
     process.start()
-    process.join(_cron_timeout())
-    if process.is_alive():
-        process.terminate()
-        process.join(5)
-        if process.is_alive() and hasattr(process, "kill"):
-            process.kill()
-            process.join(5)
-        raise concurrent.futures.TimeoutError()
+    timeout = _cron_timeout()
+    deadline = None if timeout is None else time.monotonic() + timeout
 
-    try:
-        result = _read_agent_result(result_queue)
-    except queue.Empty as exc:
-        exitcode = getattr(process, "exitcode", None)
-        if exitcode:
-            raise RuntimeError(
-                f"Cron agent process exited with code {exitcode}."
-            ) from exc
-        return ""
+    result: dict[str, Any] | None = None
+    while result is None:
+        if deadline is None:
+            read_timeout = AGENT_QUEUE_POLL_SECONDS
+        else:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                _terminate_agent_process(process)
+                raise concurrent.futures.TimeoutError()
+            read_timeout = min(AGENT_QUEUE_POLL_SECONDS, remaining)
+
+        try:
+            result = _read_agent_result(result_queue, timeout=read_timeout)
+            break
+        except queue.Empty:
+            if process.is_alive():
+                continue
+            process.join(0)
+            try:
+                result = _read_agent_result(result_queue, timeout=0)
+            except queue.Empty as exc:
+                exitcode = getattr(process, "exitcode", None)
+                if exitcode:
+                    raise RuntimeError(
+                        f"Cron agent process exited with code {exitcode}."
+                    ) from exc
+                return ""
+
+    process.join(AGENT_TERMINATE_GRACE_SECONDS)
+    if process.is_alive():
+        _terminate_agent_process(process)
 
     if not result.get("success"):
         raise RuntimeError(result.get("error") or "Cron agent failed.")
