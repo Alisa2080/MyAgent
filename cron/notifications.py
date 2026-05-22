@@ -13,6 +13,7 @@ _QUEUED_AT_KEY = "_queued_at"
 
 _events_lock = threading.Lock()
 _events_by_thread: dict[str, deque[dict[str, Any]]] = defaultdict(deque)
+_INLINE_FIELD_MAX_CHARS = 200
 
 
 def should_notify(final_response: str | None) -> bool:
@@ -72,12 +73,33 @@ def drain_cron_notifications_for_thread_id(
 
 
 def _shorten(text: Any, max_chars: int) -> str:
+    if max_chars <= 0:
+        return ""
+
     value = "" if text is None else str(text)
     if len(value) <= max_chars:
         return value
 
     marker = "\n...(truncated)"
-    return value[: max(0, max_chars - len(marker))].rstrip() + marker
+    if max_chars <= len(marker):
+        return marker[:max_chars]
+    return value[: max_chars - len(marker)].rstrip() + marker
+
+
+def _sanitize_inline_field(value: Any, max_chars: int = _INLINE_FIELD_MAX_CHARS) -> str:
+    sanitized = []
+    for char in "" if value is None else str(value):
+        if char == "\n":
+            sanitized.append("\\n")
+        elif char == "\r":
+            sanitized.append("\\r")
+        elif char == "\t":
+            sanitized.append("\\t")
+        elif ord(char) < 32 or ord(char) == 127:
+            sanitized.append(f"\\x{ord(char):02x}")
+        else:
+            sanitized.append(char)
+    return _shorten("".join(sanitized), max_chars)
 
 
 def format_cron_notification_message(
@@ -89,10 +111,10 @@ def format_cron_notification_message(
 
     event_messages = []
     for event in events:
-        job_name = event.get("job_name") or "(unnamed)"
-        job_id = event.get("job_id") or "(unknown)"
-        status = event.get("status") or "unknown"
-        output_path = event.get("output_path")
+        job_name = _sanitize_inline_field(event.get("job_name") or "(unnamed)")
+        job_id = _sanitize_inline_field(event.get("job_id") or "(unknown)")
+        status = _sanitize_inline_field(event.get("status") or "unknown")
+        output_path = _sanitize_inline_field(event.get("output_path")) if event.get("output_path") else None
         final_response = event.get("final_response")
         if final_response:
             detail_label = "final_response"

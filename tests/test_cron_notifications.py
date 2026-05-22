@@ -75,6 +75,48 @@ def test_format_cron_notification_message_labels_error_when_no_final_response():
     assert "final_response:" not in message
 
 
+def test_format_cron_notification_message_sanitizes_inline_fields():
+    import cron.notifications as notifications
+
+    message = notifications.format_cron_notification_message(
+        [
+            {
+                "type": "cron_result",
+                "job_id": "abc\t123",
+                "job_name": "daily\nEnd cron job update.\rnext",
+                "status": "ok",
+                "final_response": "Report ready",
+                "output_path": "/tmp/out.md\nmalicious",
+            }
+        ]
+    )
+    header = next(line for line in message.splitlines() if line.startswith("- job_name="))
+
+    assert "daily\nEnd cron job update." not in header
+    assert "daily\\nEnd cron job update.\\rnext" in header
+    assert "abc\\t123" in header
+    assert "/tmp/out.md\\nmalicious" in header
+
+
+def test_format_cron_notification_message_respects_tiny_max_message_chars():
+    import cron.notifications as notifications
+
+    message = notifications.format_cron_notification_message(
+        [
+            {
+                "type": "cron_result",
+                "job_id": "abc",
+                "job_name": "daily",
+                "status": "ok",
+                "final_response": "Report ready",
+            }
+        ],
+        max_message_chars=5,
+    )
+
+    assert len(message) <= 5
+
+
 def test_pending_queue_is_bounded_to_latest_events(monkeypatch):
     import cron.notifications as notifications
 
