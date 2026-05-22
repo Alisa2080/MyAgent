@@ -9,6 +9,26 @@ def reset_cron_lifecycle_state(monkeypatch):
     lifecycle._stop_event.set()
 
 
+def test_import_cron_lifecycle_does_not_import_scheduler_stack():
+    import importlib
+    import sys
+
+    for module_name in (
+        "agent_core.cron_lifecycle",
+        "agent_core.model_config",
+        "cron.scheduler",
+        "cron.runner",
+    ):
+        sys.modules.pop(module_name, None)
+
+    lifecycle = importlib.import_module("agent_core.cron_lifecycle")
+
+    assert callable(lifecycle.tick)
+    assert "cron.scheduler" not in sys.modules
+    assert "cron.runner" not in sys.modules
+    assert "agent_core.model_config" not in sys.modules
+
+
 def test_start_cron_scheduler_is_idempotent(monkeypatch):
     import agent_core.cron_lifecycle as lifecycle
 
@@ -159,7 +179,7 @@ def test_ticker_loop_calls_tick_and_continues_after_tick_exception(monkeypatch):
             raise RuntimeError("tick failed")
 
     monkeypatch.setattr(lifecycle, "_stop_event", FakeStopEvent())
-    monkeypatch.setattr(lifecycle.cron.scheduler, "tick", fake_tick)
+    monkeypatch.setattr(lifecycle, "tick", fake_tick)
 
     lifecycle._ticker_loop(3)
 

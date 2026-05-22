@@ -1,4 +1,5 @@
 import importlib
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -447,6 +448,34 @@ def test_cronjob_update_normalizes_nonpositive_repeat_to_forever(monkeypatch):
 
     assert result["success"] is True
     assert updated["updates"]["repeat"] is None
+
+
+def test_cronjob_update_repeat_stores_dict_compatible_with_mark_run(
+    monkeypatch, tmp_path
+):
+    cronjob_tool = _cronjob_tool()
+    import cron.jobs as jobs
+
+    base = datetime(2026, 5, 22, 9, 0, tzinfo=timezone.utc)
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setattr(jobs, "now", lambda: base)
+
+    job = jobs.create_job(prompt="write report", schedule="every 30m")
+
+    result = cronjob_tool._cronjob_impl(
+        action="update",
+        job_id=job["id"],
+        repeat=5,
+    )
+
+    assert result["success"] is True
+    assert result["job"]["repeat"] == {"times": 5, "completed": 0}
+    assert jobs.get_job(job["id"])["repeat"] == {"times": 5, "completed": 0}
+
+    marked = jobs.mark_job_run(job["id"], success=True, run_at=base)
+
+    assert jobs.get_job(job["id"])["repeat"] == {"times": 5, "completed": 1}
+    assert marked["repeat"] == {"times": 5, "completed": 1}
 
 
 def test_public_init_exports_cronjob():

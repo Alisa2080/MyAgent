@@ -3,8 +3,6 @@ from __future__ import annotations
 import logging
 import threading
 
-import cron.scheduler
-
 logger = logging.getLogger(__name__)
 
 _lock = threading.Lock()
@@ -12,10 +10,16 @@ _stop_event = threading.Event()
 _thread: threading.Thread | None = None
 
 
+def tick():
+    from cron.scheduler import tick as scheduler_tick
+
+    return scheduler_tick()
+
+
 def _ticker_loop(interval_seconds: float) -> None:
     while not _stop_event.is_set():
         try:
-            cron.scheduler.tick()
+            tick()
         except Exception:
             logger.exception("Cron scheduler tick failed.")
         _stop_event.wait(interval_seconds)

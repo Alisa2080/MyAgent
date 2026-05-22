@@ -196,11 +196,59 @@ def _find_job_index(jobs: list[dict[str, Any]], job_id: str) -> int:
     raise KeyError(f"Cron job not found: {job_id}")
 
 
-def _normalize_updates(updates: dict[str, Any]) -> dict[str, Any]:
+def _normalize_repeat_update(value: Any, existing: Any = None) -> Any:
+    existing_completed = 0
+    if isinstance(existing, dict):
+        existing_completed = int(existing.get("completed") or 0)
+
+    if isinstance(value, dict):
+        normalized = dict(value)
+        normalized.setdefault("completed", existing_completed)
+        if normalized.get("times") is not None:
+            try:
+                times = int(normalized["times"])
+            except (TypeError, ValueError):
+                return normalized
+            normalized["times"] = times if times > 0 else None
+        return normalized
+
+    try:
+        times = int(value)
+    except (TypeError, ValueError):
+        return value
+    return {"times": times if times > 0 else None, "completed": existing_completed}
+
+
+def _coerce_repeat_state(value: Any) -> dict[str, Any]:
+    if value is None:
+        return {"times": None, "completed": 0}
+    if isinstance(value, dict):
+        repeat = dict(value)
+        repeat.setdefault("times", None)
+        repeat["completed"] = int(repeat.get("completed") or 0)
+        if repeat.get("times") is not None:
+            repeat["times"] = int(repeat["times"])
+        return repeat
+    normalized = _normalize_repeat_update(value)
+    if isinstance(normalized, dict):
+        return normalized
+    return {"times": None, "completed": 0}
+
+
+def _normalize_updates(
+    updates: dict[str, Any],
+    existing_job: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     normalized_updates = dict(updates)
     if "workdir" in normalized_updates:
         normalized_updates["workdir"] = _normalize_workdir(
             normalized_updates["workdir"]
+        )
+    if "repeat" in normalized_updates:
+        existing_repeat = (existing_job or {}).get("repeat")
+        normalized_updates["repeat"] = _normalize_repeat_update(
+            normalized_updates["repeat"],
+            existing_repeat,
         )
     if "schedule" in normalized_updates and isinstance(
         normalized_updates["schedule"], str
@@ -218,7 +266,7 @@ def _update_job_locked(
     updates: dict[str, Any],
 ) -> dict[str, Any]:
     merged = dict(jobs[index])
-    merged.update(_normalize_updates(updates))
+    merged.update(_normalize_updates(updates, merged))
     jobs[index] = merged
     save_jobs(jobs)
     return copy.deepcopy(merged)
@@ -455,16 +503,17 @@ def mark_job_run(
         index = _find_job_index(jobs, job_id)
         job = jobs[index]
 
-        repeat = dict(job.get("repeat") or {"times": None, "completed": 0})
+        repeat = _coerce_repeat_state(job.get("repeat"))
         repeat["completed"] = int(repeat.get("completed") or 0) + 1
         repeat_times = repeat.get("times")
         completed = repeat_times is not None and repeat["completed"] >= int(
             repeat_times
         )
 
+        schedule_kind = (job.get("schedule") or {}).get("kind")
         if completed:
             state = "completed"
-        elif success:
+        elif success or schedule_kind in {"interval", "cron"}:
             state = "scheduled"
         else:
             state = "error"

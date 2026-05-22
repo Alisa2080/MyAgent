@@ -315,6 +315,29 @@ def test_advance_next_run_before_mark_run(jobs_module):
     assert final["repeat"]["completed"] == 1
 
 
+def test_failed_recurring_job_remains_due_at_advanced_next_run(jobs_module):
+    jobs = jobs_module
+
+    base = datetime(2026, 5, 22, 9, 0, tzinfo=timezone.utc)
+    next_run = base + timedelta(minutes=30)
+    job = jobs.create_job(prompt="x", schedule="every 30m", deliver="local")
+    jobs.update_job(job["id"], {"next_run_at": base.isoformat()})
+
+    advanced = jobs.advance_next_run(job["id"], base)
+    marked = jobs.mark_job_run(
+        job["id"], success=False, error="boom", run_at=base
+    )
+
+    assert advanced["next_run_at"] == next_run.isoformat()
+    assert marked["last_status"] == "error"
+    assert marked["last_error"] == "boom"
+    assert marked["state"] == "scheduled"
+    assert marked["enabled"] is True
+    assert marked["repeat"] == {"times": None, "completed": 1}
+    assert jobs.get_due_jobs(now_dt=next_run - timedelta(seconds=1)) == []
+    assert [due["id"] for due in jobs.get_due_jobs(now_dt=next_run)] == [job["id"]]
+
+
 def test_mark_job_run_error_and_completion_disable(jobs_module):
     jobs = jobs_module
     base = jobs.now()
@@ -332,7 +355,7 @@ def test_mark_job_run_error_and_completion_disable(jobs_module):
     assert errored["last_status"] == "error"
     assert errored["last_error"] == "boom"
     assert errored["repeat"] == {"times": 2, "completed": 1}
-    assert errored["state"] == "error"
+    assert errored["state"] == "scheduled"
     assert errored["enabled"] is True
     assert completed["state"] == "completed"
     assert completed["enabled"] is False
