@@ -55,6 +55,26 @@ def test_format_cron_notification_message_includes_event_details():
     assert "/tmp/out.md" in message
 
 
+def test_format_cron_notification_message_labels_error_when_no_final_response():
+    import cron.notifications as notifications
+
+    message = notifications.format_cron_notification_message(
+        [
+            {
+                "type": "cron_result",
+                "job_id": "abc",
+                "job_name": "daily",
+                "status": "error",
+                "error": "boom",
+            }
+        ]
+    )
+
+    assert "error:" in message
+    assert "boom" in message
+    assert "final_response:" not in message
+
+
 def test_pending_queue_is_bounded_to_latest_events(monkeypatch):
     import cron.notifications as notifications
 

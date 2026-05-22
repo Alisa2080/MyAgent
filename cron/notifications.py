@@ -94,14 +94,19 @@ def format_cron_notification_message(
         status = event.get("status") or "unknown"
         output_path = event.get("output_path")
         final_response = event.get("final_response")
-        detail = final_response if final_response else event.get("error", "")
+        if final_response:
+            detail_label = "final_response"
+            detail = final_response
+        else:
+            detail_label = "error"
+            detail = event.get("error", "")
 
         header = f"- job_name={job_name} job_id={job_id} status={status}"
         if output_path:
             header += f" output_path={output_path}"
 
         body = _shorten(detail, 1200).replace("\n", "\n    ")
-        event_messages.append(f"{header}\n  final_response:\n    {body}")
+        event_messages.append(f"{header}\n  {detail_label}:\n    {body}")
 
     message = (
         "[IMPORTANT: Cron job update]\n"
