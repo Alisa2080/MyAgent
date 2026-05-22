@@ -117,6 +117,7 @@ def test_legacy_delivery_value_runs_without_origin_notification(monkeypatch, tmp
     import cron.scheduler as scheduler
 
     calls = []
+    delivery_error = "Unsupported delivery target: telegram:123"
     job = {
         "id": "job-1",
         "name": "daily",
@@ -159,11 +160,16 @@ def test_legacy_delivery_value_runs_without_origin_notification(monkeypatch, tmp
     assert result.succeeded == 1
     assert result.failed == 0
     assert result.results == [
-        scheduler.JobTickResult(job_id="job-1", success=True, output_path="/tmp/out.md")
+        scheduler.JobTickResult(
+            job_id="job-1",
+            success=True,
+            output_path="/tmp/out.md",
+            error=delivery_error,
+        )
     ]
     assert calls == [
         ("save", "job-1", "doc", RUN_AT),
-        ("mark", "job-1", True, None, RUN_AT),
+        ("mark", "job-1", True, delivery_error, RUN_AT),
     ]
 
 

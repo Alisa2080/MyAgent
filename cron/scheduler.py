@@ -123,16 +123,19 @@ def _deliver_result(
     result: JobRunResult,
     output_path: str,
     run_at: datetime,
-) -> None:
-    if job.get("deliver", "local") != "origin":
-        return
+) -> str | None:
+    delivery_target = job.get("deliver", "local")
+    if delivery_target in {None, "", "local"}:
+        return None
+    if delivery_target != "origin":
+        return f"Unsupported delivery target: {delivery_target}"
     if not result.success or not should_notify(result.final_response):
-        return
+        return None
 
     origin = job.get("origin") or {}
     thread_id = origin.get("thread_id")
     if not thread_id:
-        return
+        return None
 
     queue_cron_notification(
         str(thread_id),
@@ -147,6 +150,7 @@ def _deliver_result(
             "run_at": run_at.isoformat(),
         },
     )
+    return None
 
 
 def _process_job(job: dict[str, Any], run_at: datetime) -> JobTickResult:
@@ -155,13 +159,14 @@ def _process_job(job: dict[str, Any], run_at: datetime) -> JobTickResult:
         advanced = advance_next_run(job_id, run_at)
         result = run_job(advanced)
         output_path = save_job_output(job_id, result.output_doc, run_at=run_at)
-        mark_job_run(job_id, success=result.success, error=result.error, run_at=run_at)
-        _deliver_result(advanced, result, output_path, run_at)
+        delivery_error = _deliver_result(advanced, result, output_path, run_at)
+        error = result.error or delivery_error
+        mark_job_run(job_id, success=result.success, error=error, run_at=run_at)
         return JobTickResult(
             job_id=job_id,
             success=result.success,
             output_path=output_path,
-            error=result.error,
+            error=error,
         )
     except Exception as exc:
         logger.exception("Cron job %s failed during tick.", job_id)
