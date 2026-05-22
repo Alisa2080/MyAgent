@@ -49,7 +49,7 @@ HUMAN_INTERRUPT_ON = {
 POLICY_REVIEW_TOOLS = {"terminal", "process", "write_file", "patch"}
 
 
-def build_agent():
+def build_agent(*, include_cron_tools: bool = False):
     install_process_signal_handlers()
     memory_store.load_from_disk()
     recover_terminal_processes()
@@ -68,6 +68,12 @@ def build_agent():
         memory_blocks=memory_blocks,
         project_instruction_blocks=load_project_instruction_blocks(WORKDIR),
     )
+
+    tools = [*BASE_TOOLS, memory_manage, task]
+    if include_cron_tools:
+        from agent_tools.public.cronjob import cronjob
+
+        tools.append(cronjob)
 
     return create_agent(
         model=MAIN_MODEL,
@@ -97,5 +103,5 @@ def build_agent():
             ToolRetryMiddleware(max_retries=3),
             ModelRetryMiddleware(max_retries=2),
         ],
-        tools=[*BASE_TOOLS, memory_manage, task],
+        tools=tools,
     )
