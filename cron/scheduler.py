@@ -35,6 +35,10 @@ logger = logging.getLogger(__name__)
 _fallback_lock = threading.Lock()
 
 
+class _TickLockBusy(Exception):
+    pass
+
+
 @dataclass
 class JobTickResult:
     job_id: str
@@ -75,12 +79,12 @@ class _TickLock:
             elif _fallback_lock.acquire(blocking=False):
                 self._locked_with_fallback = True
             else:
-                raise BlockingIOError("Cron tick lock is already held.")
+                raise _TickLockBusy("Cron tick lock is already held.")
         except OSError as exc:
             self.handle.close()
             self.handle = None
             if exc.errno in {errno.EACCES, errno.EAGAIN, errno.EWOULDBLOCK}:
-                raise BlockingIOError("Cron tick lock is already held.") from exc
+                raise _TickLockBusy("Cron tick lock is already held.") from exc
             raise
         except BaseException:
             self.handle.close()
@@ -160,13 +164,18 @@ def _process_job(job: dict[str, Any], run_at: datetime) -> JobTickResult:
         result = run_job(advanced)
         output_path = save_job_output(job_id, result.output_doc, run_at=run_at)
         delivery_error = _deliver_result(advanced, result, output_path, run_at)
-        error = result.error or delivery_error
-        mark_job_run(job_id, success=result.success, error=error, run_at=run_at)
+        mark_job_run(
+            job_id,
+            success=result.success,
+            error=result.error,
+            run_at=run_at,
+            delivery_error=delivery_error,
+        )
         return JobTickResult(
             job_id=job_id,
             success=result.success,
             output_path=output_path,
-            error=error,
+            error=result.error or delivery_error,
         )
     except Exception as exc:
         logger.exception("Cron job %s failed during tick.", job_id)
@@ -190,21 +199,26 @@ def _run_parallel(jobs: list[dict[str, Any]], run_at: datetime) -> list[JobTickR
 
 def tick(now_dt: datetime | None = None) -> TickResult:
     run_at = now_dt or now()
+    lock = _TickLock()
     try:
-        with _TickLock():
-            due_jobs = get_due_jobs(now_dt=run_at)
-            result = TickResult(due=len(due_jobs))
-
-            workdir_jobs = [job for job in due_jobs if job.get("workdir")]
-            parallel_jobs = [job for job in due_jobs if not job.get("workdir")]
-
-            for job in workdir_jobs:
-                result.results.append(_process_job(job, run_at))
-            result.results.extend(_run_parallel(parallel_jobs, run_at))
-
-            result.ran = len(result.results)
-            result.succeeded = sum(1 for item in result.results if item.success)
-            result.failed = sum(1 for item in result.results if not item.success)
-            return result
-    except BlockingIOError:
+        lock.__enter__()
+    except _TickLockBusy:
         return TickResult(skipped=1)
+
+    try:
+        due_jobs = get_due_jobs(now_dt=run_at)
+        result = TickResult(due=len(due_jobs))
+
+        workdir_jobs = [job for job in due_jobs if job.get("workdir")]
+        parallel_jobs = [job for job in due_jobs if not job.get("workdir")]
+
+        for job in workdir_jobs:
+            result.results.append(_process_job(job, run_at))
+        result.results.extend(_run_parallel(parallel_jobs, run_at))
+
+        result.ran = len(result.results)
+        result.succeeded = sum(1 for item in result.results if item.success)
+        result.failed = sum(1 for item in result.results if not item.success)
+        return result
+    finally:
+        lock.__exit__(None, None, None)

@@ -448,6 +448,7 @@ def mark_job_run(
     success: bool,
     error: str | None = None,
     run_at: datetime | None = None,
+    delivery_error: str | None = None,
 ) -> dict[str, Any]:
     with _jobs_file_lock:
         jobs = load_jobs()
@@ -471,7 +472,8 @@ def mark_job_run(
         updates = {
             "last_run_at": _ensure_aware(run_at or now()).isoformat(),
             "last_status": "ok" if success else "error",
-            "last_error": error,
+            "last_error": None if success else error,
+            "last_delivery_error": delivery_error,
             "repeat": repeat,
             "state": state,
             "enabled": False if completed else job.get("enabled", True),

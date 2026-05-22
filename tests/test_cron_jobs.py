@@ -297,6 +297,24 @@ def test_mark_job_run_error_and_completion_disable(jobs_module):
     assert completed["enabled"] is False
 
 
+def test_mark_job_run_separates_execution_and_delivery_errors(jobs_module):
+    jobs = jobs_module
+    base = jobs.now()
+    job = jobs.create_job(prompt="x", schedule="every 30m", deliver="telegram:123")
+
+    marked = jobs.mark_job_run(
+        job["id"],
+        success=True,
+        error=None,
+        delivery_error="Unsupported delivery target: telegram:123",
+        run_at=base,
+    )
+
+    assert marked["last_status"] == "ok"
+    assert marked["last_error"] is None
+    assert marked["last_delivery_error"] == "Unsupported delivery target: telegram:123"
+
+
 def test_save_and_latest_job_output(jobs_module, tmp_path):
     jobs = jobs_module
     first_run = jobs.now()

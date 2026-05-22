@@ -36,8 +36,8 @@ def test_tick_advances_before_run_and_marks_result(monkeypatch, tmp_path):
     monkeypatch.setattr(
         scheduler,
         "mark_job_run",
-        lambda job_id, success, error=None, run_at=None: calls.append(
-            ("mark", job_id, success, error, run_at)
+        lambda job_id, success, error=None, run_at=None, delivery_error=None: (
+            calls.append(("mark", job_id, success, error, run_at, delivery_error))
         ),
     )
 
@@ -54,7 +54,7 @@ def test_tick_advances_before_run_and_marks_result(monkeypatch, tmp_path):
         ("advance", "job-1", RUN_AT),
         ("run", "job-1"),
         ("save", "job-1", "doc", RUN_AT),
-        ("mark", "job-1", True, None, RUN_AT),
+        ("mark", "job-1", True, None, RUN_AT, None),
     ]
 
 
@@ -86,7 +86,7 @@ def test_tick_queues_origin_notification(monkeypatch, tmp_path):
     monkeypatch.setattr(
         scheduler,
         "mark_job_run",
-        lambda job_id, success, error=None, run_at=None: None,
+        lambda job_id, success, error=None, run_at=None, delivery_error=None: None,
     )
     monkeypatch.setattr(
         scheduler,
@@ -143,8 +143,8 @@ def test_legacy_delivery_value_runs_without_origin_notification(monkeypatch, tmp
     monkeypatch.setattr(
         scheduler,
         "mark_job_run",
-        lambda job_id, success, error=None, run_at=None: calls.append(
-            ("mark", job_id, success, error, run_at)
+        lambda job_id, success, error=None, run_at=None, delivery_error=None: (
+            calls.append(("mark", job_id, success, error, run_at, delivery_error))
         ),
     )
     monkeypatch.setattr(
@@ -169,7 +169,7 @@ def test_legacy_delivery_value_runs_without_origin_notification(monkeypatch, tmp
     ]
     assert calls == [
         ("save", "job-1", "doc", RUN_AT),
-        ("mark", "job-1", True, delivery_error, RUN_AT),
+        ("mark", "job-1", True, None, RUN_AT, delivery_error),
     ]
 
 
@@ -213,7 +213,9 @@ def test_legacy_delivery_error_is_persisted_with_real_job_storage(monkeypatch, t
             error=delivery_error,
         )
     ]
-    assert persisted["last_error"] == delivery_error
+    assert persisted["last_status"] == "ok"
+    assert persisted["last_error"] is None
+    assert persisted["last_delivery_error"] == delivery_error
 
 
 def test_silent_response_suppresses_origin_notification(monkeypatch, tmp_path):
@@ -249,7 +251,7 @@ def test_silent_response_suppresses_origin_notification(monkeypatch, tmp_path):
     monkeypatch.setattr(
         scheduler,
         "mark_job_run",
-        lambda job_id, success, error=None, run_at=None: None,
+        lambda job_id, success, error=None, run_at=None, delivery_error=None: None,
     )
     monkeypatch.setattr(
         scheduler,
@@ -292,8 +294,8 @@ def test_failed_run_saves_marks_failed_and_does_not_notify(monkeypatch, tmp_path
     monkeypatch.setattr(
         scheduler,
         "mark_job_run",
-        lambda job_id, success, error=None, run_at=None: calls.append(
-            ("mark", job_id, success, error, run_at)
+        lambda job_id, success, error=None, run_at=None, delivery_error=None: (
+            calls.append(("mark", job_id, success, error, run_at, delivery_error))
         ),
     )
     monkeypatch.setattr(
@@ -315,7 +317,7 @@ def test_failed_run_saves_marks_failed_and_does_not_notify(monkeypatch, tmp_path
     ]
     assert calls == [
         ("save", "job-1", "failure doc", RUN_AT),
-        ("mark", "job-1", False, "boom", RUN_AT),
+        ("mark", "job-1", False, "boom", RUN_AT, None),
     ]
 
 
@@ -349,7 +351,7 @@ def test_workdir_jobs_run_sequentially(monkeypatch, tmp_path):
     monkeypatch.setattr(
         scheduler,
         "mark_job_run",
-        lambda job_id, success, error=None, run_at=None: None,
+        lambda job_id, success, error=None, run_at=None, delivery_error=None: None,
     )
 
     scheduler.tick(now_dt=RUN_AT)
@@ -409,7 +411,7 @@ def test_non_workdir_jobs_use_parallel_executor_and_env_max(monkeypatch, tmp_pat
     monkeypatch.setattr(
         scheduler,
         "mark_job_run",
-        lambda job_id, success, error=None, run_at=None: None,
+        lambda job_id, success, error=None, run_at=None, delivery_error=None: None,
     )
     monkeypatch.setattr(scheduler.concurrent.futures, "ThreadPoolExecutor", FakeExecutor)
 
@@ -472,7 +474,7 @@ def test_invalid_env_parallel_uses_due_job_count(monkeypatch, tmp_path):
     monkeypatch.setattr(
         scheduler,
         "mark_job_run",
-        lambda job_id, success, error=None, run_at=None: None,
+        lambda job_id, success, error=None, run_at=None, delivery_error=None: None,
     )
     monkeypatch.setattr(
         scheduler.concurrent.futures,
@@ -507,6 +509,20 @@ def test_lock_busy_returns_skipped(monkeypatch, tmp_path):
             scheduler.fcntl.flock(handle.fileno(), scheduler.fcntl.LOCK_UN)
 
     assert result == scheduler.TickResult(skipped=1)
+
+
+def test_blocking_io_error_after_lock_acquisition_propagates(monkeypatch, tmp_path):
+    import cron.scheduler as scheduler
+
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setattr(
+        scheduler,
+        "get_due_jobs",
+        lambda now_dt=None: (_ for _ in ()).throw(BlockingIOError("storage busy")),
+    )
+
+    with pytest.raises(BlockingIOError, match="storage busy"):
+        scheduler.tick(now_dt=RUN_AT)
 
 
 def test_processing_exception_marks_error_and_returns_failed_result(monkeypatch, tmp_path):
