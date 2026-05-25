@@ -83,6 +83,15 @@ def test_shared_policy_and_output_exports_existing_helpers():
     assert public_tool_ok is tool_ok
 
 
+def test_shared_tool_result_exports_existing_helpers():
+    from agent_tools.shared.tool_result import tool_failure as public_tool_failure
+    from agent_tools.shared.tool_result import tool_success as public_tool_success
+    from agent_tools.tool_result import tool_failure, tool_success
+
+    assert public_tool_success is tool_success
+    assert public_tool_failure is tool_failure
+
+
 def test_agent_core_uses_public_tool_facades_for_runtime_registration():
     from pathlib import Path
 
