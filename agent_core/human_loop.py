@@ -10,6 +10,7 @@ from agent_core.permissions import tool_policy
 from agent_core.permissions.approvals import ApprovalRecord, make_args_digest, record_approval
 from agent_core.permissions.audit import audit_policy_event
 from agent_core.permissions.profiles import resolve_runtime_profile
+from agent_core.policy_tool_middleware import POLICY_ARG_BUILDERS
 from agent_core.session_context import hermes_task_id_from_runtime
 
 
@@ -102,11 +103,19 @@ class FlexibleHumanInTheLoopMiddleware(HumanInTheLoopMiddleware):
         return ""
 
     @staticmethod
-    def _policy_decision_for_tool_call(tool_call: ToolCall, runtime: Runtime[Any]) -> Any:
+    def _policy_args_for_tool_call(tool_call: ToolCall) -> dict[str, Any]:
+        args = tool_call.get("args") or {}
+        builder = POLICY_ARG_BUILDERS.get(tool_call["name"])
+        if builder is None:
+            return tool_policy.canonical_tool_args(tool_call["name"], args)
+        return builder(args)
+
+    @classmethod
+    def _policy_decision_for_tool_call(cls, tool_call: ToolCall, runtime: Runtime[Any]) -> Any:
         task_id = hermes_task_id_from_runtime(runtime)
         return tool_policy.evaluate_tool_call(
             tool_name=tool_call["name"],
-            args=tool_call.get("args") or {},
+            args=cls._policy_args_for_tool_call(tool_call),
             task_id=task_id,
             tool_call_id=tool_call.get("id"),
         )
@@ -134,12 +143,7 @@ class FlexibleHumanInTheLoopMiddleware(HumanInTheLoopMiddleware):
                 task_id=task_id,
                 tool_call_id=tool_call["id"],
                 tool_name=tool_call["name"],
-                args_digest=make_args_digest(
-                    tool_policy.canonical_tool_args(
-                        tool_call["name"],
-                        tool_call.get("args") or {},
-                    )
-                ),
+                args_digest=make_args_digest(self._policy_args_for_tool_call(tool_call)),
                 risk_tags=policy_decision.risk_tags,
                 allow_network_once=policy_decision.requires_network,
             )
