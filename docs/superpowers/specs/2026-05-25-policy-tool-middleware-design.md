@@ -58,7 +58,7 @@ For supported tools, it will:
 3. Evaluate `tool_policy.evaluate_tool_call`.
 4. Return a standard tool error immediately for deny decisions.
 5. For review decisions, consume the recorded approval once.
-6. Store a short-lived per-call grant when approval is consumed.
+6. Store a short-lived per-call execution grant when the call is allowed to proceed.
 7. Invoke the LangChain handler for allowed calls.
 
 For unsupported tools, it simply invokes the handler.
@@ -78,13 +78,13 @@ The arg builder output must stay compatible with `FlexibleHumanInTheLoopMiddlewa
 
 Add a small grant object keyed by `task_id` and `tool_call_id`.
 
-The grant records that `PolicyToolMiddleware` already consumed the human approval for this exact tool call. The first implementation stores:
+The grant records that `PolicyToolMiddleware` already authorized this exact tool call. For review decisions, it also records that middleware already consumed the human approval. The first implementation stores:
 
 - tool name
 - decision/risk metadata needed by wrappers
 - terminal-specific network allowance
 
-Wrappers use this grant to avoid consuming the same approval twice and to apply execution-specific behavior.
+Wrappers use this grant to skip duplicate policy evaluation, avoid consuming the same approval twice, and apply execution-specific behavior. When a wrapper is satisfying a review decision, it must only consume a grant whose risk tags cover the wrapper's required risk tags.
 
 For direct tool implementation calls that bypass middleware, wrappers keep a compatibility fallback to the existing approval consume path. That fallback stays small and isolated so the production path remains middleware-driven.
 
