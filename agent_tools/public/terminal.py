@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field
 
 from agent_core.permissions import tool_policy
 from agent_core.permissions.approvals import consume_approval
-from agent_core.session_context import hermes_task_id_from_runtime
+from agent_core.session_context import RuntimeContext
 from agent_core.terminal_process_policy import background_quota_available, background_quota_guard
 from agent_core.workspace import WORKDIR
 from agent_tools.hermes_terminal_toolkit.terminal import run_process, run_terminal
@@ -62,11 +62,6 @@ def _exit_code_from_payload(payload: dict) -> int | None:
         return int(payload["exit_code"])
     except (KeyError, TypeError, ValueError):
         return None
-
-
-def _tool_call_id_from_runtime(runtime: ToolRuntime | None) -> str | None:
-    value = getattr(runtime, "tool_call_id", None)
-    return str(value) if value else None
 
 
 def _terminal_policy_args(
@@ -126,8 +121,9 @@ def _terminal_impl(
     watch_patterns: list[str] | None = None,
     runtime: ToolRuntime | None = None,
 ) -> str:
-    task_id = hermes_task_id_from_runtime(runtime)
-    tool_call_id = _tool_call_id_from_runtime(runtime)
+    runtime_context = RuntimeContext.from_runtime(runtime)
+    task_id = runtime_context.task_id
+    tool_call_id = runtime_context.tool_call_id
     policy_args = _terminal_policy_args(
         command=command,
         background=background,
@@ -271,8 +267,9 @@ def _process_impl(
     limit: int = 200,
     runtime: ToolRuntime | None = None,
 ) -> str:
-    task_id = hermes_task_id_from_runtime(runtime)
-    tool_call_id = _tool_call_id_from_runtime(runtime)
+    runtime_context = RuntimeContext.from_runtime(runtime)
+    task_id = runtime_context.task_id
+    tool_call_id = runtime_context.tool_call_id
     if action in _PROCESS_ACTIONS_REQUIRING_SESSION:
         if not session_id:
             return tool_error("process", f"session_id is required for {action}", code="invalid_input")
