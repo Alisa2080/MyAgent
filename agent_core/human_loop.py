@@ -87,22 +87,6 @@ class FlexibleHumanInTheLoopMiddleware(HumanInTheLoopMiddleware):
         return decisions
 
     @staticmethod
-    def _resolve_interrupt_config(tool_call: ToolCall, interrupt_on: dict[str, Any]) -> Any:
-        config = interrupt_on.get(tool_call["name"])
-        if not isinstance(config, dict):
-            return config
-
-        commands = config.get("commands")
-        if not commands:
-            return config
-
-        tool_args = tool_call.get("args") or {}
-        if tool_args.get("command") not in commands:
-            return None
-
-        return {key: value for key, value in config.items() if key != "commands"}
-
-    @staticmethod
     def _preview_for_tool_call(tool_call: ToolCall) -> str:
         tool_args = tool_call.get("args") or {}
         for key in ("command", "path"):
@@ -211,7 +195,7 @@ class FlexibleHumanInTheLoopMiddleware(HumanInTheLoopMiddleware):
                 else:
                     continue
             else:
-                config = self._resolve_interrupt_config(tool_call, self.interrupt_on)
+                config = self.interrupt_on.get(tool_call["name"])
                 if config is None:
                     continue
 

@@ -394,6 +394,10 @@ def test_non_policy_tool_still_uses_interrupt_on(monkeypatch):
 
     assert result is not None
     assert seen_payloads
+    action_requests = seen_payloads[0]["action_requests"]
+    assert len(action_requests) == 1
+    assert action_requests[0]["name"] == "memory_manage"
+    assert action_requests[0]["description"] == "Review memory change."
     assert result["messages"][0].tool_calls[0]["id"] == "memory-call"
 
 
