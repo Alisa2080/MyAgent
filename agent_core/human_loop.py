@@ -26,6 +26,14 @@ class FlexibleHumanInTheLoopMiddleware(HumanInTheLoopMiddleware):
     Policy enforcement (allow/deny/review) at execution time is handled by PolicyToolMiddleware.
     """
 
+    OFFICIAL_AFTER_MODEL_BLOCKER = (
+        "LangChain HumanInTheLoopMiddleware.after_model selects interrupted calls "
+        "by tool-name interrupt_on entries, but this project needs per-call policy "
+        "review selection. A single model turn can contain two calls to the same tool "
+        "with different policy outcomes, such as terminal allow and terminal review. "
+        "Using official after_model directly would interrupt both calls."
+    )
+
     def __init__(
         self,
         *args: Any,
@@ -160,6 +168,17 @@ class FlexibleHumanInTheLoopMiddleware(HumanInTheLoopMiddleware):
         )
 
     def after_model(self, state: dict[str, Any], runtime: Runtime[Any]) -> dict[str, Any] | None:
+        """Run the smallest fallback around official HITL helpers.
+
+        The official after_model implementation cannot be used directly because
+        it supports interrupt selection by tool name, not by individual tool call.
+        See OFFICIAL_AFTER_MODEL_BLOCKER for the concrete mixed-call case.
+        """
+        return self._after_model_minimal_fallback(state, runtime)
+
+    def _after_model_minimal_fallback(
+        self, state: dict[str, Any], runtime: Runtime[Any]
+    ) -> dict[str, Any] | None:
         messages = state["messages"]
         if not messages:
             return None

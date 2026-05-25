@@ -1,3 +1,4 @@
+import inspect
 import json
 from types import SimpleNamespace
 
@@ -658,3 +659,26 @@ def test_async_behavior_matches_sync(monkeypatch):
         required_risk_tags=("package_install",),
     )
     assert record_sync is not None
+
+
+def test_after_model_is_thin_wrapper_around_documented_fallback():
+    import agent_core.human_loop as human_loop
+
+    source = inspect.getsource(human_loop.FlexibleHumanInTheLoopMiddleware.after_model)
+
+    assert "_after_model_minimal_fallback" in source
+    assert "revised_tool_calls" not in source
+    assert "decision_idx" not in source
+    assert "artificial_tool_messages" not in source
+    assert "policy_denied" not in source
+    assert "tool_call_deferred" not in source
+
+
+def test_official_after_model_blocker_is_documented():
+    import agent_core.human_loop as human_loop
+
+    blocker = human_loop.FlexibleHumanInTheLoopMiddleware.OFFICIAL_AFTER_MODEL_BLOCKER
+
+    assert "tool-name" in blocker
+    assert "per-call" in blocker
+    assert "same tool" in blocker
