@@ -144,6 +144,47 @@ def test_reviewed_network_command_with_approval_passes_network_once(monkeypatch)
     assert calls[0]["force"] is True
 
 
+def test_terminal_uses_middleware_grant_without_consuming_approval(monkeypatch):
+    from agent_core.permissions.approvals import clear_approvals
+    from agent_core.permissions.approvals import make_args_digest
+    from agent_core.permissions.tool_grants import ToolPolicyGrant, record_tool_policy_grant
+    from agent_core.policy_tool_middleware import terminal_policy_args
+    from agent_core.session_context import hermes_task_id_from_thread_id
+
+    terminal_tools = _terminal_module()
+    clear_approvals()
+    calls = []
+    thread_id = "terminal-grant-thread"
+    tool_call_id = "call-terminal-grant"
+    policy_args = terminal_policy_args({"command": "curl https://example.com"})
+
+    record_tool_policy_grant(
+        ToolPolicyGrant(
+            task_id=hermes_task_id_from_thread_id(thread_id),
+            tool_call_id=tool_call_id,
+            tool_name="terminal",
+            args_digest=make_args_digest(policy_args),
+            risk_tags=("network_access",),
+            allow_network_once=True,
+        )
+    )
+
+    monkeypatch.setattr(
+        terminal_tools,
+        "run_terminal",
+        lambda **kwargs: calls.append(kwargs) or json.dumps({"output": "ok\n", "exit_code": 0, "error": None}),
+    )
+
+    raw = terminal_tools._terminal_impl(
+        command="curl https://example.com",
+        runtime=_runtime(thread_id=thread_id, tool_call_id=tool_call_id),
+    )
+
+    assert json.loads(raw)["ok"] is True
+    assert calls[0]["force"] is True
+    assert calls[0]["allow_network_once"] is True
+
+
 def test_reviewed_dangerous_command_with_approval_bypasses_legacy_guard(monkeypatch):
     from agent_core.permissions.approvals import (
         ApprovalRecord,

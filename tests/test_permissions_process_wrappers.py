@@ -142,6 +142,46 @@ def test_process_submit_with_approval_runs(monkeypatch):
     assert calls[0]["data"] == "exit"
 
 
+def test_process_uses_middleware_grant_without_consuming_approval(monkeypatch):
+    from agent_core.permissions.approvals import make_args_digest
+    from agent_core.permissions.tool_grants import ToolPolicyGrant, record_tool_policy_grant
+    from agent_core.policy_tool_middleware import process_policy_args
+    from agent_core.session_context import hermes_task_id_from_thread_id
+
+    terminal_tools = _terminal_module()
+    calls = []
+    thread_id = "process-grant-thread"
+    tool_call_id = "call-process-grant"
+    policy_args = process_policy_args({"action": "submit", "session_id": "proc_1", "data": "exit"})
+
+    record_tool_policy_grant(
+        ToolPolicyGrant(
+            task_id=hermes_task_id_from_thread_id(thread_id),
+            tool_call_id=tool_call_id,
+            tool_name="process",
+            args_digest=make_args_digest(policy_args),
+            risk_tags=("process_stdin",),
+        )
+    )
+
+    monkeypatch.setattr(terminal_tools.process_registry, "get", lambda session_id: _owning_session(thread_id))
+    monkeypatch.setattr(
+        terminal_tools,
+        "run_process",
+        lambda **kwargs: calls.append(kwargs) or json.dumps({"session_id": "proc_1", "submitted": True}),
+    )
+
+    raw = terminal_tools._process_impl(
+        action="submit",
+        session_id="proc_1",
+        data="exit",
+        runtime=_runtime(thread_id=thread_id, tool_call_id=tool_call_id),
+    )
+
+    assert json.loads(raw)["ok"] is True
+    assert calls[0]["data"] == "exit"
+
+
 def test_process_policy_denial_does_not_run(monkeypatch):
     from agent_core.permissions.models import PolicyDecision
 

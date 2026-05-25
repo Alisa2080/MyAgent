@@ -6,6 +6,8 @@ from pydantic import BaseModel, Field
 
 from agent_core.permissions import tool_policy
 from agent_core.permissions.approvals import consume_approval
+from agent_core.permissions.tool_grants import consume_tool_policy_grant
+from agent_core.policy_tool_middleware import process_policy_args, terminal_policy_args
 from agent_core.session_context import RuntimeContext
 from agent_core.terminal_process_policy import background_quota_available, background_quota_guard
 from agent_core.workspace import WORKDIR
@@ -74,8 +76,7 @@ def _terminal_policy_args(
     notify_on_complete: bool,
     watch_patterns: list[str] | None,
 ) -> dict:
-    return tool_policy.canonical_tool_args(
-        "terminal",
+    return terminal_policy_args(
         {
             "command": command,
             "background": background,
@@ -84,7 +85,7 @@ def _terminal_policy_args(
             "pty": pty,
             "notify_on_complete": notify_on_complete,
             "watch_patterns": watch_patterns,
-        },
+        }
     )
 
 
@@ -97,8 +98,7 @@ def _process_policy_args(
     offset: int,
     limit: int,
 ) -> dict:
-    return tool_policy.canonical_tool_args(
-        "process",
+    return process_policy_args(
         {
             "action": action,
             "session_id": session_id,
@@ -106,7 +106,41 @@ def _process_policy_args(
             "timeout": timeout,
             "offset": offset,
             "limit": limit,
-        },
+        }
+    )
+
+
+def _consume_tool_grant(tool_name: str, policy_args: dict, runtime_context: RuntimeContext):
+    return consume_tool_policy_grant(
+        task_id=runtime_context.task_id,
+        tool_call_id=runtime_context.tool_call_id,
+        tool_name=tool_name,
+        args=policy_args,
+    )
+
+
+def _approval_or_grant_for_review(
+    *,
+    tool_name: str,
+    policy_args: dict,
+    runtime_context: RuntimeContext,
+    required_risk_tags: tuple[str, ...],
+):
+    grant = consume_tool_policy_grant(
+        task_id=runtime_context.task_id,
+        tool_call_id=runtime_context.tool_call_id,
+        tool_name=tool_name,
+        args=policy_args,
+        required_risk_tags=required_risk_tags,
+    )
+    if grant is not None:
+        return grant
+    return consume_approval(
+        task_id=runtime_context.task_id,
+        tool_call_id=runtime_context.tool_call_id,
+        tool_name=tool_name,
+        args=policy_args,
+        required_risk_tags=required_risk_tags,
     )
 
 
@@ -133,35 +167,36 @@ def _terminal_impl(
         notify_on_complete=notify_on_complete,
         watch_patterns=watch_patterns,
     )
-    decision = tool_policy.evaluate_tool_call("terminal", policy_args, task_id, tool_call_id=tool_call_id)
-    allow_network_once = False
-    force = False
-    if decision.outcome == "deny":
-        return tool_error(
-            "terminal",
-            decision.human_message,
-            code="policy_denied",
-            data=decision.data,
-            meta={"backend": "hermes_terminal_toolkit"},
-        )
-    if decision.outcome == "review":
-        approval = consume_approval(
-            task_id=task_id,
-            tool_call_id=tool_call_id,
-            tool_name="terminal",
-            args=policy_args,
-            required_risk_tags=decision.risk_tags,
-        )
-        if approval is None:
+    grant = _consume_tool_grant("terminal", policy_args, runtime_context)
+    allow_network_once = grant.allow_network_once if grant is not None else False
+    force = bool(grant.risk_tags) if grant is not None else False
+    if grant is None:
+        decision = tool_policy.evaluate_tool_call("terminal", policy_args, task_id, tool_call_id=tool_call_id)
+        if decision.outcome == "deny":
             return tool_error(
                 "terminal",
                 decision.human_message,
-                code="approval_required",
+                code="policy_denied",
                 data=decision.data,
                 meta={"backend": "hermes_terminal_toolkit"},
             )
-        allow_network_once = approval.allow_network_once
-        force = True
+        if decision.outcome == "review":
+            approval = _approval_or_grant_for_review(
+                tool_name="terminal",
+                policy_args=policy_args,
+                runtime_context=runtime_context,
+                required_risk_tags=decision.risk_tags,
+            )
+            if approval is None:
+                return tool_error(
+                    "terminal",
+                    decision.human_message,
+                    code="approval_required",
+                    data=decision.data,
+                    meta={"backend": "hermes_terminal_toolkit"},
+                )
+            allow_network_once = approval.allow_network_once
+            force = True
     if background:
         with background_quota_guard(task_id):
             available, current, limit = background_quota_available(task_id)
@@ -290,31 +325,32 @@ def _process_impl(
         offset=offset,
         limit=limit,
     )
-    decision = tool_policy.evaluate_tool_call("process", policy_args, task_id, tool_call_id=tool_call_id)
-    if decision.outcome == "deny":
-        return tool_error(
-            "process",
-            decision.human_message,
-            code="policy_denied",
-            data=decision.data,
-            meta={"backend": "hermes_terminal_toolkit"},
-        )
-    if decision.outcome == "review":
-        approval = consume_approval(
-            task_id=task_id,
-            tool_call_id=tool_call_id,
-            tool_name="process",
-            args=policy_args,
-            required_risk_tags=decision.risk_tags,
-        )
-        if approval is None:
+    grant = _consume_tool_grant("process", policy_args, runtime_context)
+    if grant is None:
+        decision = tool_policy.evaluate_tool_call("process", policy_args, task_id, tool_call_id=tool_call_id)
+        if decision.outcome == "deny":
             return tool_error(
                 "process",
                 decision.human_message,
-                code="approval_required",
+                code="policy_denied",
                 data=decision.data,
                 meta={"backend": "hermes_terminal_toolkit"},
             )
+        if decision.outcome == "review":
+            approval = _approval_or_grant_for_review(
+                tool_name="process",
+                policy_args=policy_args,
+                runtime_context=runtime_context,
+                required_risk_tags=decision.risk_tags,
+            )
+            if approval is None:
+                return tool_error(
+                    "process",
+                    decision.human_message,
+                    code="approval_required",
+                    data=decision.data,
+                    meta={"backend": "hermes_terminal_toolkit"},
+                )
 
     raw = run_process(
         action=action,
