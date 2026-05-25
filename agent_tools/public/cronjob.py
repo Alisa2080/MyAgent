@@ -7,6 +7,7 @@ from typing import Any, Literal
 from langchain.tools import ToolRuntime, tool
 from pydantic import BaseModel, Field
 
+from agent_core.session_context import RuntimeContext
 from agent_tools.shared.tool_output import tool_error, tool_ok
 from cron.jobs import (
     create_job,
@@ -68,10 +69,7 @@ _THREAT_PATTERNS = [
 
 
 def _runtime_thread_id(runtime: ToolRuntime | None) -> str | None:
-    config = getattr(runtime, "config", None)
-    configurable = config.get("configurable") if isinstance(config, dict) else None
-    value = configurable.get("thread_id") if isinstance(configurable, dict) else None
-    return str(value) if value else None
+    return RuntimeContext.from_runtime(runtime).thread_id
 
 
 def _scan_prompt(prompt: str) -> str | None:
