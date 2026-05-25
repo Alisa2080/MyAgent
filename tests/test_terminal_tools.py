@@ -1,6 +1,15 @@
 import json
 from types import SimpleNamespace
 
+from langchain_core.messages import ToolMessage
+
+
+def _artifact(result: ToolMessage) -> dict:
+    assert isinstance(result, ToolMessage)
+    assert result.content
+    assert result.artifact is not None
+    return result.artifact
+
 
 def _allow_terminal_policy(monkeypatch, terminal_tools):
     from agent_core.permissions.models import PolicyDecision
@@ -38,7 +47,7 @@ def test_terminal_injects_runtime_thread_as_task_id(monkeypatch):
         config={"configurable": {"thread_id": "ignored-config-thread"}},
     )
 
-    raw = terminal_tools._terminal_impl(
+    result = terminal_tools._terminal_impl(
         command="printf ok",
         background=False,
         timeout=30,
@@ -48,7 +57,7 @@ def test_terminal_injects_runtime_thread_as_task_id(monkeypatch):
         watch_patterns=None,
         runtime=runtime,
     )
-    payload = json.loads(raw)
+    payload = _artifact(result)
 
     assert payload["ok"] is True
     assert payload["data"]["output"] == "ok\n"
@@ -74,7 +83,7 @@ def test_terminal_preserves_hermes_guard_block_response(monkeypatch):
 
     monkeypatch.setattr(terminal_tools, "run_terminal", fake_run_terminal)
 
-    raw = terminal_tools._terminal_impl(
+    result = terminal_tools._terminal_impl(
         command="rm -rf tmp",
         background=False,
         timeout=None,
@@ -84,7 +93,7 @@ def test_terminal_preserves_hermes_guard_block_response(monkeypatch):
         watch_patterns=None,
         runtime=None,
     )
-    payload = json.loads(raw)
+    payload = _artifact(result)
 
     assert payload["ok"] is False
     assert payload["error"]["code"] == "blocked"
@@ -100,7 +109,7 @@ def test_terminal_foreground_nonzero_exit_is_tool_error(monkeypatch):
 
     monkeypatch.setattr(terminal_tools, "run_terminal", fake_run_terminal)
 
-    raw = terminal_tools._terminal_impl(
+    result = terminal_tools._terminal_impl(
         command="false",
         background=False,
         timeout=None,
@@ -110,11 +119,14 @@ def test_terminal_foreground_nonzero_exit_is_tool_error(monkeypatch):
         watch_patterns=None,
         runtime=None,
     )
-    payload = json.loads(raw)
+    payload = _artifact(result)
 
+    assert result.status == "error"
+    assert result.content == "Command exited with code 2."
     assert payload["ok"] is False
     assert payload["error"]["code"] == "command_failed"
     assert payload["data"]["exit_code"] == 2
+    assert "failed" not in result.content
 
 
 def test_terminal_toolnode_injects_runtime_thread(monkeypatch):
@@ -158,8 +170,10 @@ def test_terminal_toolnode_injects_runtime_thread(monkeypatch):
         config={"configurable": {"thread_id": "toolnode-terminal-thread"}},
     )
 
-    payload = json.loads(result["messages"][-1].content)
-
+    tool_message = result["messages"][-1]
+    assert isinstance(tool_message, ToolMessage)
+    payload = tool_message.artifact
+    assert tool_message.content
     assert payload["ok"] is True
     assert "task_id" not in payload["meta"]
     assert calls[0]["task_id"] == hermes_task_id_from_thread_id("toolnode-terminal-thread")
@@ -180,8 +194,8 @@ def test_terminal_foreground_does_not_check_background_quota(monkeypatch):
     monkeypatch.setattr(terminal_tools, "background_quota_available", fail_quota_check)
     monkeypatch.setattr(terminal_tools, "run_terminal", fake_run_terminal)
 
-    raw = terminal_tools._terminal_impl(command="printf ok", background=False, runtime=None)
-    payload = json.loads(raw)
+    result = terminal_tools._terminal_impl(command="printf ok", background=False, runtime=None)
+    payload = _artifact(result)
 
     assert payload["ok"] is True
     assert calls[0]["background"] is False
@@ -201,8 +215,8 @@ def test_terminal_background_runs_when_quota_available(monkeypatch):
 
     monkeypatch.setattr(terminal_tools, "run_terminal", fake_run_terminal)
 
-    raw = terminal_tools._terminal_impl(command="python -m http.server", background=True, runtime=None)
-    payload = json.loads(raw)
+    result = terminal_tools._terminal_impl(command="python -m http.server", background=True, runtime=None)
+    payload = _artifact(result)
 
     assert payload["ok"] is True
     assert calls[0]["background"] is True
@@ -233,8 +247,8 @@ def test_terminal_background_holds_quota_guard_while_starting(monkeypatch):
     monkeypatch.setattr(terminal_tools, "background_quota_available", lambda task_id: (True, 0, 3))
     monkeypatch.setattr(terminal_tools, "run_terminal", fake_run_terminal)
 
-    raw = terminal_tools._terminal_impl(command="python -m http.server", background=True, runtime=None)
-    payload = json.loads(raw)
+    result = terminal_tools._terminal_impl(command="python -m http.server", background=True, runtime=None)
+    payload = _artifact(result)
 
     assert payload["ok"] is True
 
@@ -247,8 +261,8 @@ def test_terminal_background_rejects_when_task_quota_exceeded(monkeypatch):
     monkeypatch.setattr(terminal_tools, "background_quota_available", lambda task_id: (False, 3, 3))
     monkeypatch.setattr(terminal_tools, "run_terminal", lambda **kwargs: calls.append(kwargs))
 
-    raw = terminal_tools._terminal_impl(command="python -m http.server", background=True, runtime=None)
-    payload = json.loads(raw)
+    result = terminal_tools._terminal_impl(command="python -m http.server", background=True, runtime=None)
+    payload = _artifact(result)
 
     assert payload["ok"] is False
     assert payload["error"]["code"] == "background_quota_exceeded"
@@ -278,7 +292,7 @@ def test_process_list_is_scoped_to_runtime_task_id(monkeypatch):
     monkeypatch.setattr(terminal_tools, "run_process", fake_run_process)
     runtime = SimpleNamespace(execution_info=SimpleNamespace(thread_id="process-thread-1"))
 
-    raw = terminal_tools._process_impl(
+    result = terminal_tools._process_impl(
         action="list",
         session_id="",
         data="",
@@ -287,7 +301,7 @@ def test_process_list_is_scoped_to_runtime_task_id(monkeypatch):
         limit=200,
         runtime=runtime,
     )
-    payload = json.loads(raw)
+    payload = _artifact(result)
 
     assert payload["ok"] is True
     assert payload["data"]["processes"] == []
@@ -303,7 +317,7 @@ def test_process_rejects_cross_task_session(monkeypatch):
     monkeypatch.setattr(terminal_tools.process_registry, "get", lambda session_id: FakeSession())
     runtime = SimpleNamespace(execution_info=SimpleNamespace(thread_id="current-thread"))
 
-    raw = terminal_tools._process_impl(
+    result = terminal_tools._process_impl(
         action="poll",
         session_id="proc_abc",
         data="",
@@ -312,7 +326,7 @@ def test_process_rejects_cross_task_session(monkeypatch):
         limit=200,
         runtime=runtime,
     )
-    payload = json.loads(raw)
+    payload = _artifact(result)
 
     assert payload["ok"] is False
     assert payload["error"]["code"] == "access_denied"
@@ -359,8 +373,10 @@ def test_process_toolnode_injects_runtime_thread_for_list(monkeypatch):
         config={"configurable": {"thread_id": "toolnode-process-thread"}},
     )
 
-    payload = json.loads(result["messages"][-1].content)
-
+    tool_message = result["messages"][-1]
+    assert isinstance(tool_message, ToolMessage)
+    payload = tool_message.artifact
+    assert tool_message.content
     assert payload["ok"] is True
     assert calls[0]["task_id"] == hermes_task_id_from_thread_id("toolnode-process-thread")
 

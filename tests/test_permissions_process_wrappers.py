@@ -3,6 +3,7 @@ from importlib import import_module
 from types import SimpleNamespace
 
 import pytest
+from langchain_core.messages import ToolMessage
 
 
 def _terminal_module():
@@ -14,6 +15,13 @@ def _runtime(*, thread_id: str = "process-policy-thread", tool_call_id: str | No
         execution_info=SimpleNamespace(thread_id=thread_id),
         tool_call_id=tool_call_id,
     )
+
+
+def _artifact(result: ToolMessage) -> dict:
+    assert isinstance(result, ToolMessage)
+    assert result.content
+    assert result.artifact is not None
+    return result.artifact
 
 
 @pytest.fixture(autouse=True)
@@ -43,13 +51,13 @@ def test_process_poll_does_not_need_approval(monkeypatch):
     monkeypatch.setattr(terminal_tools.process_registry, "get", lambda session_id: _owning_session(thread_id))
     monkeypatch.setattr(terminal_tools, "run_process", fake_run_process)
 
-    raw = terminal_tools._process_impl(
+    result = terminal_tools._process_impl(
         action="poll",
         session_id="proc_1",
         runtime=_runtime(thread_id=thread_id, tool_call_id="call-poll"),
     )
 
-    payload = json.loads(raw)
+    payload = _artifact(result)
     assert payload["ok"] is True
     assert calls[0]["action"] == "poll"
     assert calls[0]["session_id"] == "proc_1"
@@ -61,14 +69,14 @@ def test_process_submit_without_approval_is_denied(monkeypatch):
     monkeypatch.setattr(terminal_tools.process_registry, "get", lambda session_id: _owning_session("process-submit"))
     monkeypatch.setattr(terminal_tools, "run_process", lambda **kwargs: calls.append(kwargs))
 
-    raw = terminal_tools._process_impl(
+    result = terminal_tools._process_impl(
         action="submit",
         session_id="proc_1",
         data="exit",
         runtime=_runtime(thread_id="process-submit", tool_call_id="call-submit"),
     )
 
-    payload = json.loads(raw)
+    payload = _artifact(result)
     assert payload["ok"] is False
     assert payload["error"]["code"] == "approval_required"
     assert calls == []
@@ -80,14 +88,14 @@ def test_process_submit_without_tool_call_id_is_denied(monkeypatch):
     monkeypatch.setattr(terminal_tools.process_registry, "get", lambda session_id: _owning_session("process-no-call"))
     monkeypatch.setattr(terminal_tools, "run_process", lambda **kwargs: calls.append(kwargs))
 
-    raw = terminal_tools._process_impl(
+    result = terminal_tools._process_impl(
         action="submit",
         session_id="proc_1",
         data="exit",
         runtime=_runtime(thread_id="process-no-call", tool_call_id=None),
     )
 
-    payload = json.loads(raw)
+    payload = _artifact(result)
     assert payload["ok"] is False
     assert payload["error"]["code"] == "approval_required"
     assert calls == []
@@ -129,14 +137,14 @@ def test_process_submit_with_approval_runs(monkeypatch):
     monkeypatch.setattr(terminal_tools.process_registry, "get", lambda session_id: _owning_session(thread_id))
     monkeypatch.setattr(terminal_tools, "run_process", fake_run_process)
 
-    raw = terminal_tools._process_impl(
+    result = terminal_tools._process_impl(
         action="submit",
         session_id="proc_1",
         data="exit",
         runtime=_runtime(thread_id=thread_id, tool_call_id=tool_call_id),
     )
 
-    payload = json.loads(raw)
+    payload = _artifact(result)
     assert payload["ok"] is True
     assert calls[0]["action"] == "submit"
     assert calls[0]["data"] == "exit"
@@ -171,14 +179,15 @@ def test_process_uses_middleware_grant_without_consuming_approval(monkeypatch):
         lambda **kwargs: calls.append(kwargs) or json.dumps({"session_id": "proc_1", "submitted": True}),
     )
 
-    raw = terminal_tools._process_impl(
+    result = terminal_tools._process_impl(
         action="submit",
         session_id="proc_1",
         data="exit",
         runtime=_runtime(thread_id=thread_id, tool_call_id=tool_call_id),
     )
 
-    assert json.loads(raw)["ok"] is True
+    payload = _artifact(result)
+    assert payload["ok"] is True
     assert calls[0]["data"] == "exit"
 
 
@@ -195,13 +204,13 @@ def test_process_policy_denial_does_not_run(monkeypatch):
     )
     monkeypatch.setattr(terminal_tools, "run_process", lambda **kwargs: calls.append(kwargs))
 
-    raw = terminal_tools._process_impl(
+    result = terminal_tools._process_impl(
         action="poll",
         session_id="proc_1",
         runtime=_runtime(thread_id="process-denied", tool_call_id="call-denied"),
     )
 
-    payload = json.loads(raw)
+    payload = _artifact(result)
     assert payload["ok"] is False
     assert payload["error"]["code"] == "policy_denied"
     assert calls == []

@@ -2,6 +2,8 @@ import json
 from importlib import import_module
 from types import SimpleNamespace
 
+from langchain_core.messages import ToolMessage
+
 
 def _terminal_module():
     return import_module("agent_tools.public.terminal")
@@ -12,6 +14,13 @@ def _runtime(*, thread_id: str, tool_call_id: str | None) -> SimpleNamespace:
         execution_info=SimpleNamespace(thread_id=thread_id),
         tool_call_id=tool_call_id,
     )
+
+
+def _artifact(result: ToolMessage) -> dict:
+    assert isinstance(result, ToolMessage)
+    assert result.content
+    assert result.artifact is not None
+    return result.artifact
 
 
 def test_low_risk_command_runs_without_approval(monkeypatch):
@@ -27,7 +36,7 @@ def test_low_risk_command_runs_without_approval(monkeypatch):
 
     monkeypatch.setattr(terminal_tools, "run_terminal", fake_run_terminal)
 
-    raw = terminal_tools._terminal_impl(
+    result = terminal_tools._terminal_impl(
         command="pwd",
         background=False,
         timeout=None,
@@ -38,7 +47,7 @@ def test_low_risk_command_runs_without_approval(monkeypatch):
         runtime=_runtime(thread_id="task8-low-risk", tool_call_id="call-low-risk"),
     )
 
-    payload = json.loads(raw)
+    payload = _artifact(result)
     assert payload["ok"] is True
     assert calls[0]["command"] == "pwd"
     assert calls[0]["allow_network_once"] is False
@@ -52,7 +61,7 @@ def test_reviewed_command_without_approval_is_denied(monkeypatch):
     calls = []
     monkeypatch.setattr(terminal_tools, "run_terminal", lambda **kwargs: calls.append(kwargs))
 
-    raw = terminal_tools._terminal_impl(
+    result = terminal_tools._terminal_impl(
         command="touch approval-required.txt",
         background=False,
         timeout=None,
@@ -63,7 +72,7 @@ def test_reviewed_command_without_approval_is_denied(monkeypatch):
         runtime=_runtime(thread_id="task8-review", tool_call_id="call-review"),
     )
 
-    payload = json.loads(raw)
+    payload = _artifact(result)
     assert payload["ok"] is False
     assert payload["error"]["code"] == "approval_required"
     assert calls == []
@@ -77,7 +86,7 @@ def test_reviewed_command_without_tool_call_id_is_denied(monkeypatch):
     calls = []
     monkeypatch.setattr(terminal_tools, "run_terminal", lambda **kwargs: calls.append(kwargs))
 
-    raw = terminal_tools._terminal_impl(
+    result = terminal_tools._terminal_impl(
         command="touch approval-required.txt",
         background=False,
         timeout=None,
@@ -88,7 +97,7 @@ def test_reviewed_command_without_tool_call_id_is_denied(monkeypatch):
         runtime=_runtime(thread_id="task8-no-tool-call", tool_call_id=None),
     )
 
-    payload = json.loads(raw)
+    payload = _artifact(result)
     assert payload["ok"] is False
     assert payload["error"]["code"] == "approval_required"
     assert calls == []
@@ -132,12 +141,12 @@ def test_reviewed_network_command_with_approval_passes_network_once(monkeypatch)
 
     monkeypatch.setattr(terminal_tools, "run_terminal", fake_run_terminal)
 
-    raw = terminal_tools._terminal_impl(
+    result = terminal_tools._terminal_impl(
         command="curl https://example.com",
         runtime=_runtime(thread_id=thread_id, tool_call_id=tool_call_id),
     )
 
-    payload = json.loads(raw)
+    payload = _artifact(result)
     assert payload["ok"] is True
     assert calls[0]["allow_network_once"] is True
     assert calls[0]["command"] == "curl https://example.com"
@@ -175,12 +184,13 @@ def test_terminal_uses_middleware_grant_without_consuming_approval(monkeypatch):
         lambda **kwargs: calls.append(kwargs) or json.dumps({"output": "ok\n", "exit_code": 0, "error": None}),
     )
 
-    raw = terminal_tools._terminal_impl(
+    result = terminal_tools._terminal_impl(
         command="curl https://example.com",
         runtime=_runtime(thread_id=thread_id, tool_call_id=tool_call_id),
     )
 
-    assert json.loads(raw)["ok"] is True
+    payload = _artifact(result)
+    assert payload["ok"] is True
     assert calls[0]["force"] is True
     assert calls[0]["allow_network_once"] is True
 
@@ -222,11 +232,11 @@ def test_reviewed_dangerous_command_with_approval_bypasses_legacy_guard(monkeypa
         lambda **kwargs: calls.append(kwargs) or json.dumps({"output": "ok\n", "exit_code": 0, "error": None}),
     )
 
-    raw = terminal_tools._terminal_impl(
+    result = terminal_tools._terminal_impl(
         command="rm -rf node_modules",
         runtime=_runtime(thread_id=thread_id, tool_call_id=tool_call_id),
     )
-    payload = json.loads(raw)
+    payload = _artifact(result)
 
     assert payload["ok"] is True
     assert calls[0]["force"] is True
@@ -240,7 +250,7 @@ def test_hardline_command_is_denied(monkeypatch):
     calls = []
     monkeypatch.setattr(terminal_tools, "run_terminal", lambda **kwargs: calls.append(kwargs))
 
-    raw = terminal_tools._terminal_impl(
+    result = terminal_tools._terminal_impl(
         command="rm -rf /",
         background=False,
         timeout=None,
@@ -251,7 +261,7 @@ def test_hardline_command_is_denied(monkeypatch):
         runtime=_runtime(thread_id="task8-hardline", tool_call_id="call-hardline"),
     )
 
-    payload = json.loads(raw)
+    payload = _artifact(result)
     assert payload["ok"] is False
     assert payload["error"]["code"] == "policy_denied"
     assert calls == []

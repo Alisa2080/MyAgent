@@ -2,6 +2,7 @@ import json
 from typing import Literal
 
 from langchain.tools import ToolRuntime, tool
+from langchain_core.messages import ToolMessage
 from pydantic import BaseModel, Field
 
 from agent_core.permissions import tool_policy
@@ -13,7 +14,7 @@ from agent_core.terminal_process_policy import background_quota_available, backg
 from agent_core.workspace import WORKDIR
 from agent_tools.hermes_terminal_toolkit.terminal import run_process, run_terminal
 from agent_tools.hermes_terminal_toolkit.process_registry import process_registry
-from agent_tools.shared.tool_output import tool_error, tool_ok
+from agent_tools.shared.tool_result import tool_failure, tool_success
 
 
 class TerminalInput(BaseModel):
@@ -40,14 +41,14 @@ class ProcessInput(BaseModel):
     limit: int = Field(default=200, ge=1, description="Maximum log lines to return.")
 
 
-def _decode_hermes_payload(raw: str) -> dict:
+def _decode_hermes_payload(raw: str) -> tuple[dict, str | None]:
     try:
         payload = json.loads(raw)
     except json.JSONDecodeError:
-        return {"error": "Hermes terminal returned invalid JSON.", "raw": raw}
+        return {"raw": raw}, "Hermes terminal returned invalid JSON."
     if not isinstance(payload, dict):
-        return {"error": f"Hermes terminal returned unexpected payload type: {type(payload).__name__}", "raw": raw}
-    return payload
+        return {"raw": raw}, f"Hermes terminal returned unexpected payload type: {type(payload).__name__}"
+    return payload, None
 
 
 def _status_code_from_payload(payload: dict) -> str:
@@ -154,7 +155,7 @@ def _terminal_impl(
     notify_on_complete: bool = False,
     watch_patterns: list[str] | None = None,
     runtime: ToolRuntime | None = None,
-) -> str:
+) -> ToolMessage:
     runtime_context = RuntimeContext.from_runtime(runtime)
     task_id = runtime_context.task_id
     tool_call_id = runtime_context.tool_call_id
@@ -173,12 +174,13 @@ def _terminal_impl(
     if grant is None:
         decision = tool_policy.evaluate_tool_call("terminal", policy_args, task_id, tool_call_id=tool_call_id)
         if decision.outcome == "deny":
-            return tool_error(
+            return tool_failure(
                 "terminal",
                 decision.human_message,
                 code="policy_denied",
                 data=decision.data,
                 meta={"backend": "hermes_terminal_toolkit"},
+                runtime=runtime,
             )
         if decision.outcome == "review":
             approval = _approval_or_grant_for_review(
@@ -188,12 +190,13 @@ def _terminal_impl(
                 required_risk_tags=decision.risk_tags,
             )
             if approval is None:
-                return tool_error(
+                return tool_failure(
                     "terminal",
                     decision.human_message,
                     code="approval_required",
                     data=decision.data,
                     meta={"backend": "hermes_terminal_toolkit"},
+                    runtime=runtime,
                 )
             allow_network_once = approval.allow_network_once
             force = True
@@ -201,12 +204,13 @@ def _terminal_impl(
         with background_quota_guard(task_id):
             available, current, limit = background_quota_available(task_id)
             if not available:
-                return tool_error(
+                return tool_failure(
                     "terminal",
                     f"Background process quota exceeded for this session ({current}/{limit}).",
                     code="background_quota_exceeded",
                     data={"current": current, "limit": limit},
                     meta={"backend": "hermes_terminal_toolkit"},
+                    runtime=runtime,
                 )
             raw = run_terminal(
                 command=command,
@@ -233,30 +237,52 @@ def _terminal_impl(
             force=force,
             allow_network_once=allow_network_once,
         )
-    payload = _decode_hermes_payload(raw)
+    payload, decode_error = _decode_hermes_payload(raw)
+    if decode_error:
+        return tool_failure(
+            "terminal",
+            decode_error,
+            code="invalid_response",
+            data=payload,
+            meta={"backend": "hermes_terminal_toolkit"},
+            runtime=runtime,
+            content="Tool returned invalid response.",
+        )
     if payload.get("error"):
-        return tool_error(
+        return tool_failure(
             "terminal",
             str(payload["error"]),
             code=_status_code_from_payload(payload),
             data=payload,
             meta={"backend": "hermes_terminal_toolkit"},
+            runtime=runtime,
         )
     exit_code = _exit_code_from_payload(payload)
     if not background and exit_code not in (None, 0):
         code = "timeout" if exit_code == 124 else "command_failed"
-        return tool_error(
+        return tool_failure(
             "terminal",
             f"Command exited with code {exit_code}.",
             code=code,
             data=payload,
             meta={"backend": "hermes_terminal_toolkit"},
+            runtime=runtime,
         )
-    return tool_ok(
+    message = "Terminal command completed." if not background else "Background process started."
+    content = (
+        f"Background process started: {payload.get('session_id')}."
+        if background and payload.get("session_id")
+        else f"Command completed with exit code {exit_code}."
+        if not background and exit_code is not None
+        else message
+    )
+    return tool_success(
         "terminal",
         data=payload,
-        message="Terminal command completed." if not background else "Background process started.",
+        message=message,
         meta={"backend": "hermes_terminal_toolkit"},
+        runtime=runtime,
+        content=content,
     )
 
 
@@ -270,7 +296,7 @@ def terminal(
     pty: bool = False,
     notify_on_complete: bool = False,
     watch_patterns: list[str] | None = None,
-) -> str:
+) -> ToolMessage:
     """Execute shell commands through Hermes terminal with runtime-scoped task isolation."""
     return _terminal_impl(
         command=command,
@@ -301,20 +327,21 @@ def _process_impl(
     offset: int = 0,
     limit: int = 200,
     runtime: ToolRuntime | None = None,
-) -> str:
+) -> ToolMessage:
     runtime_context = RuntimeContext.from_runtime(runtime)
     task_id = runtime_context.task_id
     tool_call_id = runtime_context.tool_call_id
     if action in _PROCESS_ACTIONS_REQUIRING_SESSION:
         if not session_id:
-            return tool_error("process", f"session_id is required for {action}", code="invalid_input")
+            return tool_failure("process", f"session_id is required for {action}", code="invalid_input", runtime=runtime)
         if not _session_belongs_to_task(session_id, task_id):
-            return tool_error(
+            return tool_failure(
                 "process",
                 "Process session does not belong to the current runtime task id.",
                 code="access_denied",
                 data={"session_id": session_id},
                 meta={"backend": "hermes_terminal_toolkit"},
+                runtime=runtime,
             )
 
     policy_args = _process_policy_args(
@@ -329,12 +356,13 @@ def _process_impl(
     if grant is None:
         decision = tool_policy.evaluate_tool_call("process", policy_args, task_id, tool_call_id=tool_call_id)
         if decision.outcome == "deny":
-            return tool_error(
+            return tool_failure(
                 "process",
                 decision.human_message,
                 code="policy_denied",
                 data=decision.data,
                 meta={"backend": "hermes_terminal_toolkit"},
+                runtime=runtime,
             )
         if decision.outcome == "review":
             approval = _approval_or_grant_for_review(
@@ -344,12 +372,13 @@ def _process_impl(
                 required_risk_tags=decision.risk_tags,
             )
             if approval is None:
-                return tool_error(
+                return tool_failure(
                     "process",
                     decision.human_message,
                     code="approval_required",
                     data=decision.data,
                     meta={"backend": "hermes_terminal_toolkit"},
+                    runtime=runtime,
                 )
 
     raw = run_process(
@@ -361,20 +390,33 @@ def _process_impl(
         limit=limit,
         task_id=task_id,
     )
-    payload = _decode_hermes_payload(raw)
+    payload, decode_error = _decode_hermes_payload(raw)
+    if decode_error:
+        return tool_failure(
+            "process",
+            decode_error,
+            code="invalid_response",
+            data=payload,
+            meta={"backend": "hermes_terminal_toolkit"},
+            runtime=runtime,
+            content="Tool returned invalid response.",
+        )
     if payload.get("error"):
-        return tool_error(
+        return tool_failure(
             "process",
             str(payload["error"]),
             code=_status_code_from_payload(payload),
             data=payload,
             meta={"backend": "hermes_terminal_toolkit"},
+            runtime=runtime,
         )
-    return tool_ok(
+    return tool_success(
         "process",
         data=payload,
         message="Process action completed.",
         meta={"backend": "hermes_terminal_toolkit"},
+        runtime=runtime,
+        content=f"Process action completed: {action}.",
     )
 
 
@@ -387,7 +429,7 @@ def process(
     timeout: int | None = None,
     offset: int = 0,
     limit: int = 200,
-) -> str:
+) -> ToolMessage:
     """Manage Hermes background processes scoped to the current runtime task id."""
     return _process_impl(
         action=action,
