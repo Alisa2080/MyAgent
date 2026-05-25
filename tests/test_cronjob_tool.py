@@ -87,6 +87,30 @@ def test_cronjob_create_captures_runtime_thread(monkeypatch):
     assert created["deliver"] is None
 
 
+def test_cronjob_create_ignores_execution_info_thread_without_config_thread(monkeypatch):
+    cronjob_tool = _cronjob_tool()
+
+    created = {}
+
+    def fake_create_job(**kwargs):
+        created.update(kwargs)
+        return _job(skills=[], prompt=kwargs["prompt"], workdir=None, last_run_at=None, last_status=None)
+
+    runtime = SimpleNamespace(execution_info=SimpleNamespace(thread_id="runtime-only-thread"))
+    monkeypatch.setattr(cronjob_tool, "create_job", fake_create_job)
+
+    result = cronjob_tool._cronjob_impl(
+        action="create",
+        prompt="write report",
+        schedule="30m",
+        runtime=runtime,
+    )
+
+    assert result["success"] is True
+    assert created["origin"] is None
+    assert created["deliver"] is None
+
+
 def test_cronjob_rejects_platform_delivery():
     cronjob_tool = _cronjob_tool()
 

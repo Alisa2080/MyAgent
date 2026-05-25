@@ -69,7 +69,8 @@ _THREAT_PATTERNS = [
 
 
 def _runtime_thread_id(runtime: ToolRuntime | None) -> str | None:
-    return RuntimeContext.from_runtime(runtime).thread_id
+    config = getattr(runtime, "config", None)
+    return RuntimeContext.from_config(config).thread_id
 
 
 def _scan_prompt(prompt: str) -> str | None:

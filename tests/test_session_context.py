@@ -96,6 +96,29 @@ def test_runtime_context_falls_back_to_config_thread_id():
     assert ctx.is_default_task is False
 
 
+def test_runtime_context_from_config_uses_config_thread_id():
+    ctx = RuntimeContext.from_config({"configurable": {"thread_id": "thread-from-config"}})
+
+    assert ctx.thread_id == "thread-from-config"
+    assert ctx.task_id == hermes_task_id_from_thread_id("thread-from-config")
+    assert ctx.tool_call_id is None
+    assert ctx.thread_source == "config"
+    assert ctx.has_thread is True
+    assert ctx.is_default_task is False
+
+
+def test_runtime_context_from_config_falls_back_for_missing_or_non_dict_config():
+    for config in (None, "not-a-dict", {}, {"configurable": "not-a-dict"}, {"configurable": {}}):
+        ctx = RuntimeContext.from_config(config)
+
+        assert ctx.thread_id is None
+        assert ctx.task_id == "default"
+        assert ctx.tool_call_id is None
+        assert ctx.thread_source == "fallback"
+        assert ctx.has_thread is False
+        assert ctx.is_default_task is True
+
+
 def test_runtime_context_falls_back_to_default_without_runtime():
     ctx = RuntimeContext.from_runtime(None)
 
