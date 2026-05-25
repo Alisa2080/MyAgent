@@ -686,3 +686,15 @@ def test_official_after_model_blocker_is_documented():
     assert "tool-name" in blocker
     assert "per-call" in blocker
     assert "same tool" in blocker
+
+
+def test_human_loop_does_not_own_policy_deny_or_deferred_messages():
+    import agent_core.human_loop as human_loop
+
+    source = inspect.getsource(human_loop.FlexibleHumanInTheLoopMiddleware)
+
+    assert "policy_denied" not in source
+    assert "tool_call_deferred" not in source
+    assert "_tool_message_for_denial" not in source
+    assert "_tool_message_for_deferred_call" not in source
+    assert "_complete_artificial_tool_messages" not in source
