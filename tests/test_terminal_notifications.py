@@ -28,6 +28,35 @@ def test_drain_routes_completion_event_by_task_id(monkeypatch):
     assert queue.empty()
 
 
+def test_drain_uses_runtime_context_for_thread_task_id(monkeypatch):
+    import agent_core.terminal_notifications as notifications
+
+    queue = Queue()
+    queue.put(
+        {
+            "type": "completion",
+            "task_id": "context-task",
+            "session_id": "proc_context",
+            "command": "python job.py",
+        }
+    )
+
+    class FakeRuntimeContext:
+        @classmethod
+        def from_thread_id(cls, thread_id):
+            assert thread_id == "thread-context"
+            return SimpleNamespace(task_id="context-task")
+
+    monkeypatch.setattr(notifications, "RuntimeContext", FakeRuntimeContext, raising=False)
+    monkeypatch.setattr(notifications.process_registry, "completion_queue", queue)
+    monkeypatch.setattr(notifications, "_pending_events_by_task", {})
+
+    events = notifications.drain_terminal_notifications_for_thread_id("thread-context")
+
+    assert [event["session_id"] for event in events] == ["proc_context"]
+    assert queue.empty()
+
+
 def test_drain_routes_completion_event_by_registry_session_when_task_id_missing(monkeypatch):
     import agent_core.terminal_notifications as notifications
     from agent_core.session_context import hermes_task_id_from_thread_id

@@ -6,7 +6,7 @@ import threading
 import time
 from typing import Any
 
-from agent_core.session_context import hermes_task_id_from_thread_id
+from agent_core.session_context import RuntimeContext
 from agent_tools.hermes_terminal_toolkit.process_registry import process_registry
 
 _GLOBAL_TASK_ID = "__global__"
@@ -33,7 +33,7 @@ def _event_task_id(event: dict[str, Any]) -> str | None:
 
     thread_id = event.get("thread_id")
     if isinstance(thread_id, str) and thread_id:
-        return hermes_task_id_from_thread_id(thread_id)
+        return RuntimeContext.from_thread_id(thread_id).task_id
 
     session_id = event.get("session_id")
     if isinstance(session_id, str) and session_id:
@@ -144,7 +144,7 @@ def drain_terminal_notifications_for_thread_id(
         return []
 
     _drain_completion_queue(max_drain=max_drain)
-    task_id = hermes_task_id_from_thread_id(thread_id)
+    task_id = RuntimeContext.from_thread_id(thread_id).task_id
     events: list[dict[str, Any]] = []
 
     with _pending_events_lock:

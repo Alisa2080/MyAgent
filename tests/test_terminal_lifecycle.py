@@ -99,6 +99,29 @@ def test_cleanup_terminal_session_for_thread_id_kills_processes_and_cleans_env(m
     assert cleaned == [task_id]
 
 
+def test_cleanup_terminal_session_for_thread_id_uses_runtime_context(monkeypatch):
+    import agent_core.terminal_lifecycle as lifecycle
+
+    killed = []
+    cleaned = []
+
+    class FakeRuntimeContext:
+        @classmethod
+        def from_thread_id(cls, thread_id):
+            assert thread_id == "cleanup-thread"
+            return SimpleNamespace(task_id="context-task")
+
+    monkeypatch.setattr(lifecycle, "RuntimeContext", FakeRuntimeContext, raising=False)
+    monkeypatch.setattr(lifecycle.process_registry, "kill_all", lambda task_id=None: killed.append(task_id) or 1)
+    monkeypatch.setattr(lifecycle, "cleanup_vm", lambda task_id: cleaned.append(task_id))
+
+    result = lifecycle.cleanup_terminal_session_for_thread_id("cleanup-thread")
+
+    assert result == {"task_id": "context-task", "killed_processes": 1, "environment_cleaned": True}
+    assert killed == ["context-task"]
+    assert cleaned == ["context-task"]
+
+
 def test_cleanup_terminal_session_for_runtime_uses_runtime_thread(monkeypatch):
     import agent_core.terminal_lifecycle as lifecycle
 
@@ -246,6 +269,36 @@ def test_cleanup_task_resources_for_thread_id_uses_hashed_task_id(monkeypatch):
         "cleanup_reason": "resume_finished",
     }
     assert calls == [(task_id, "resume_finished")]
+
+
+def test_cleanup_task_resources_for_thread_id_uses_runtime_context(monkeypatch):
+    import agent_core.terminal_lifecycle as lifecycle
+
+    calls = []
+
+    class FakeRuntimeContext:
+        @classmethod
+        def from_thread_id(cls, thread_id):
+            assert thread_id == "thread-cleanup"
+            return SimpleNamespace(task_id="context-task")
+
+    monkeypatch.setattr(lifecycle, "RuntimeContext", FakeRuntimeContext, raising=False)
+    monkeypatch.setattr(
+        lifecycle,
+        "cleanup_task_resources_for_task_id",
+        lambda task_id, reason="turn_finished": calls.append((task_id, reason))
+        or {"task_id": task_id, "cleaned": True, "persistent": False, "cleanup_reason": reason},
+    )
+
+    result = lifecycle.cleanup_task_resources_for_thread_id("thread-cleanup", reason="resume_finished")
+
+    assert result == {
+        "task_id": "context-task",
+        "cleaned": True,
+        "persistent": False,
+        "cleanup_reason": "resume_finished",
+    }
+    assert calls == [("context-task", "resume_finished")]
 
 
 def test_cleanup_task_resources_for_thread_id_requires_thread_id():

@@ -1,5 +1,6 @@
 import contextlib
 from queue import Queue
+from types import SimpleNamespace
 
 import pytest
 
@@ -35,6 +36,45 @@ def test_invoke_agent_with_terminal_notifications_runs_initial_turn_only_without
             {"configurable": {"thread_id": "thread-1"}},
         )
     ]
+
+
+def test_invoke_agent_uses_runtime_context_for_config_thread(monkeypatch):
+    import agent_core.agent_runner as runner
+
+    scoped_threads = []
+
+    class FakeRuntimeContext:
+        @classmethod
+        def from_config(cls, config):
+            assert config == {"configurable": {"thread_id": "original-thread"}}
+            return SimpleNamespace(thread_id="context-thread")
+
+    class FakeAgent:
+        def invoke(self, input_data, config=None):
+            return {"messages": ["initial"]}
+
+    @contextlib.contextmanager
+    def fake_terminal_execution_scope(thread_id):
+        scoped_threads.append(thread_id)
+        yield
+
+    monkeypatch.setattr(runner, "RuntimeContext", FakeRuntimeContext, raising=False)
+    monkeypatch.setattr(runner, "terminal_execution_scope", fake_terminal_execution_scope)
+    monkeypatch.setattr(
+        runner,
+        "cleanup_task_resources_for_thread_id",
+        lambda thread_id, reason="turn_finished": None,
+    )
+    monkeypatch.setattr(runner, "drain_terminal_notifications_for_thread_id", lambda thread_id: [])
+
+    result = runner.invoke_agent_with_terminal_notifications(
+        FakeAgent(),
+        {"messages": [{"role": "user", "content": "start"}]},
+        {"configurable": {"thread_id": "original-thread"}},
+    )
+
+    assert result == {"messages": ["initial"]}
+    assert scoped_threads == ["context-thread"]
 
 
 def test_invoke_agent_with_terminal_notifications_resumes_same_thread(monkeypatch):

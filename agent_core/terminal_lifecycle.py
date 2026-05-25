@@ -5,7 +5,7 @@ import threading
 from contextlib import contextmanager
 from typing import Any
 
-from agent_core.session_context import hermes_task_id_from_runtime, hermes_task_id_from_thread_id
+from agent_core.session_context import RuntimeContext
 from agent_tools.hermes_terminal_toolkit.interrupt import set_interrupt
 from agent_tools.hermes_terminal_toolkit.process_registry import process_registry
 from agent_tools.hermes_terminal_toolkit.terminal_tool import cleanup_vm, is_persistent_env
@@ -37,7 +37,7 @@ def recover_terminal_processes() -> int:
 
 def cleanup_terminal_session_for_thread_id(thread_id: str | None) -> dict:
     """Explicitly end a terminal session: kill scoped processes and clean environment."""
-    task_id = hermes_task_id_from_thread_id(thread_id)
+    task_id = RuntimeContext.from_thread_id(thread_id).task_id
     killed = process_registry.kill_all(task_id=task_id)
     cleanup_vm(task_id)
     return {
@@ -49,7 +49,7 @@ def cleanup_terminal_session_for_thread_id(thread_id: str | None) -> dict:
 
 def cleanup_terminal_session_for_runtime(runtime: Any | None) -> dict:
     """Explicitly end the terminal session associated with a ToolRuntime-like object."""
-    task_id = hermes_task_id_from_runtime(runtime)
+    task_id = RuntimeContext.from_runtime(runtime).task_id
     killed = process_registry.kill_all(task_id=task_id)
     cleanup_vm(task_id)
     return {
@@ -114,7 +114,7 @@ def cleanup_task_resources_for_thread_id(thread_id: str | None, *, reason: str =
             "cleanup_reason": reason,
             "error": "thread_id is required for automatic terminal resource cleanup",
         }
-    task_id = hermes_task_id_from_thread_id(thread_id)
+    task_id = RuntimeContext.from_thread_id(thread_id).task_id
     return cleanup_task_resources_for_task_id(task_id, reason=reason)
 
 

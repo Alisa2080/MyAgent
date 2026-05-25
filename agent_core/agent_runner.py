@@ -4,6 +4,7 @@ import logging
 import os
 from typing import Any
 
+from agent_core.session_context import RuntimeContext
 from agent_core.terminal_lifecycle import (
     cleanup_task_resources_for_thread_id,
     terminal_execution_scope,
@@ -21,13 +22,7 @@ logger = logging.getLogger(__name__)
 
 
 def _thread_id_from_config(config: dict[str, Any] | None) -> str | None:
-    if not isinstance(config, dict):
-        return None
-    configurable = config.get("configurable")
-    if not isinstance(configurable, dict):
-        return None
-    value = configurable.get("thread_id")
-    return str(value) if value else None
+    return RuntimeContext.from_config(config).thread_id
 
 
 def max_terminal_auto_resumes() -> int:
