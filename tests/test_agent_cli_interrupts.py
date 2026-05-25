@@ -91,3 +91,63 @@ def test_build_resume_value_rejects_all_requests():
             {"type": "reject", "message": "Rejected by user."},
         ]
     }
+
+
+from agent_cli.rendering import format_interrupt_summary, latest_ai_text
+
+
+def test_format_interrupt_summary_includes_tool_preview():
+    summary = format_interrupt_summary([
+        {"name": "terminal", "args": {"command": "pytest tests"}}
+    ])
+
+    assert "Approval required" in summary
+    assert "terminal" in summary
+    assert "pytest tests" in summary
+
+
+def test_format_interrupt_summary_handles_non_dict_request():
+    summary = format_interrupt_summary(["not-dict"])
+
+    assert "not-dict" in summary
+
+
+def test_latest_ai_text_reads_last_ai_message():
+    result = {
+        "messages": [
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": "hello"},
+        ]
+    }
+
+    assert latest_ai_text(result) == "hello"
+
+
+def test_latest_ai_text_reads_langchain_text_content_block():
+    result = {
+        "messages": [
+            {
+                "role": "assistant",
+                "content": [{"type": "text", "text": "hello"}],
+            }
+        ]
+    }
+
+    assert latest_ai_text(result) == "hello"
+
+
+def test_latest_ai_text_reads_mixed_text_content_blocks():
+    result = {
+        "messages": [
+            {
+                "role": "assistant",
+                "content": ["a", {"type": "text", "text": "b"}],
+            }
+        ]
+    }
+
+    text = latest_ai_text(result)
+
+    assert "a" in text
+    assert "b" in text
+    assert "['a'" not in text
