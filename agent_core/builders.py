@@ -50,7 +50,7 @@ HUMAN_INTERRUPT_ON = {
 POLICY_REVIEW_TOOLS = {"terminal", "process", "write_file", "patch"}
 
 
-def build_agent(*, include_cron_tools: bool = False):
+def build_agent(*, include_cron_tools: bool = False, checkpointer=None):
     install_process_signal_handlers()
     memory_store.load_from_disk()
     recover_terminal_processes()
@@ -106,4 +106,5 @@ def build_agent(*, include_cron_tools: bool = False):
             ModelRetryMiddleware(max_retries=2),
         ],
         tools=tools,
+        checkpointer=checkpointer,
     )
