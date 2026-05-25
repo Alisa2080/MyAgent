@@ -11,7 +11,7 @@ from agent_core.permissions import tool_policy
 from agent_core.permissions.approvals import consume_approval, make_args_digest
 from agent_core.permissions.tool_grants import ToolPolicyGrant, record_tool_policy_grant
 from agent_core.session_context import RuntimeContext
-from agent_tools.shared.tool_output import tool_error
+from agent_tools.shared.tool_result import tool_failure
 
 
 def terminal_policy_args(args: dict[str, Any]) -> dict[str, Any]:
@@ -84,16 +84,12 @@ class PolicyToolMiddleware(AgentMiddleware):
         )
 
         if decision.outcome == "deny":
-            return self._tool_message(
-                tool_name=tool_name,
-                tool_call_id=tool_call_id,
-                content=tool_error(
-                    tool_name,
-                    decision.human_message,
-                    code="policy_denied",
-                    data=decision.data,
-                ),
-                status="error",
+            return tool_failure(
+                tool_name,
+                decision.human_message,
+                code="policy_denied",
+                data=decision.data,
+                runtime=request.runtime,
             )
 
         if decision.outcome == "allow":
@@ -117,16 +113,12 @@ class PolicyToolMiddleware(AgentMiddleware):
             required_risk_tags=decision.risk_tags,
         )
         if approval is None:
-            return self._tool_message(
-                tool_name=tool_name,
-                tool_call_id=tool_call_id,
-                content=tool_error(
-                    tool_name,
-                    decision.human_message,
-                    code="approval_required",
-                    data=decision.data,
-                ),
-                status="error",
+            return tool_failure(
+                tool_name,
+                decision.human_message,
+                code="approval_required",
+                data=decision.data,
+                runtime=request.runtime,
             )
 
         record_tool_policy_grant(
@@ -140,18 +132,3 @@ class PolicyToolMiddleware(AgentMiddleware):
             )
         )
         return None
-
-    @staticmethod
-    def _tool_message(
-        *,
-        tool_name: str,
-        tool_call_id: str | None,
-        content: str,
-        status: str,
-    ) -> ToolMessage:
-        return ToolMessage(
-            content=content,
-            name=tool_name,
-            tool_call_id=tool_call_id or "",
-            status=status,
-        )

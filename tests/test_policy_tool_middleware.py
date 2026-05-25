@@ -71,10 +71,12 @@ def test_policy_tool_middleware_short_circuits_deny():
         lambda received: calls.append(received),
     )
 
-    payload = json.loads(result.content)
-    assert payload["ok"] is False
-    assert payload["error"]["code"] == "policy_denied"
     assert result.status == "error"
+    assert result.content
+    assert result.artifact["ok"] is False
+    assert result.artifact["tool"] == "terminal"
+    assert result.artifact["error"]["code"] == "policy_denied"
+    assert result.artifact["data"] is not None
     assert calls == []
 
 
@@ -92,9 +94,10 @@ def test_policy_tool_middleware_requires_approval_for_review():
         lambda received: ToolMessage(content="unused", tool_call_id="x"),
     )
 
-    payload = json.loads(result.content)
-    assert payload["ok"] is False
-    assert payload["error"]["code"] == "approval_required"
+    assert result.status == "error"
+    assert result.artifact["ok"] is False
+    assert result.artifact["tool"] == "terminal"
+    assert result.artifact["error"]["code"] == "approval_required"
 
 
 def test_policy_tool_middleware_consumes_approval_and_records_grant():
@@ -234,10 +237,10 @@ def test_policy_tool_middleware_async_short_circuits_deny():
 
         result = await middleware.awrap_tool_call(request, handler)
 
-        payload = json.loads(result.content)
-        assert payload["ok"] is False
-        assert payload["error"]["code"] == "policy_denied"
         assert result.status == "error"
+        assert result.artifact["ok"] is False
+        assert result.artifact["tool"] == "terminal"
+        assert result.artifact["error"]["code"] == "policy_denied"
         assert calls == []
 
     asyncio.run(run())
@@ -308,10 +311,10 @@ def test_policy_tool_middleware_async_requires_approval_for_review():
 
         result = await middleware.awrap_tool_call(request, handler)
 
-        payload = json.loads(result.content)
-        assert payload["ok"] is False
-        assert payload["error"]["code"] == "approval_required"
         assert result.status == "error"
+        assert result.artifact["ok"] is False
+        assert result.artifact["tool"] == "terminal"
+        assert result.artifact["error"]["code"] == "approval_required"
         assert calls == []
 
     asyncio.run(run())
