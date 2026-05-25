@@ -99,6 +99,82 @@ def test_policy_deny_does_not_interrupt(monkeypatch):
     assert middleware.after_model({"messages": [message]}, _runtime()) is None
 
 
+def test_mixed_same_tool_policy_only_interrupts_review_call(monkeypatch):
+    import agent_core.human_loop as human_loop
+    from agent_core.permissions.approvals import clear_approvals, consume_approval
+    from agent_core.permissions.models import PolicyDecision
+    from agent_core.session_context import hermes_task_id_from_thread_id
+
+    clear_approvals()
+    seen_payloads = []
+
+    def fake_interrupt(payload):
+        seen_payloads.append(payload)
+        return {"type": "approve"}
+
+    def fake_evaluate_tool_call(**kwargs):
+        if kwargs["args"]["command"] == "pwd":
+            return PolicyDecision.allow("read_tool")
+        return PolicyDecision.review(
+            "package_install",
+            risk_tags=("package_install",),
+            message="Package install requires review.",
+        )
+
+    monkeypatch.setattr(human_loop, "interrupt", fake_interrupt)
+    monkeypatch.setattr(human_loop.tool_policy, "evaluate_tool_call", fake_evaluate_tool_call)
+
+    middleware = human_loop.FlexibleHumanInTheLoopMiddleware(
+        interrupt_on={},
+        policy_tools={"terminal"},
+    )
+    message = AIMessage(
+        content="",
+        tool_calls=[
+            {"name": "terminal", "args": {"command": "pwd"}, "id": "allow-call"},
+            {
+                "name": "terminal",
+                "args": {"command": "pip install rich"},
+                "id": "review-call",
+            },
+        ],
+    )
+
+    result = middleware.after_model({"messages": [message]}, _runtime())
+
+    assert result is not None
+    assert len(seen_payloads) == 1
+    action_requests = seen_payloads[0]["action_requests"]
+    assert [request["args"]["command"] for request in action_requests] == [
+        "pip install rich"
+    ]
+    assert [tool_call["id"] for tool_call in result["messages"][0].tool_calls] == [
+        "allow-call",
+        "review-call",
+    ]
+
+    assert (
+        consume_approval(
+            task_id=hermes_task_id_from_thread_id("thread-1"),
+            tool_call_id="allow-call",
+            tool_name="terminal",
+            args=_terminal_policy_args("pwd"),
+            required_risk_tags=("package_install",),
+        )
+        is None
+    )
+    assert (
+        consume_approval(
+            task_id=hermes_task_id_from_thread_id("thread-1"),
+            tool_call_id="review-call",
+            tool_name="terminal",
+            args=_terminal_policy_args("pip install rich"),
+            required_risk_tags=("package_install",),
+        )
+        is not None
+    )
+
+
 def test_policy_review_records_approval(monkeypatch):
     import agent_core.human_loop as human_loop
     from agent_core.permissions.approvals import clear_approvals, consume_approval
