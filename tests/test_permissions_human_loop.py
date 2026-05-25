@@ -63,7 +63,7 @@ def test_policy_allow_does_not_interrupt(monkeypatch):
     assert middleware.after_model({"messages": [message]}, _runtime()) is None
 
 
-def test_policy_deny_synthesizes_tool_message(monkeypatch):
+def test_policy_deny_does_not_interrupt(monkeypatch):
     import agent_core.human_loop as human_loop
     from agent_core.permissions.models import PolicyDecision
 
@@ -96,15 +96,7 @@ def test_policy_deny_synthesizes_tool_message(monkeypatch):
         ],
     )
 
-    result = middleware.after_model({"messages": [message]}, _runtime())
-
-    assert result is not None
-    _assert_tool_outputs_match_calls(result)
-    ai_message, tool_message = result["messages"]
-    assert ai_message.tool_calls[0]["id"] == "call-1"
-    payload = json.loads(tool_message.content)
-    assert payload["error"]["code"] == "policy_denied"
-    assert payload["error"]["message"] == "Blocked hardline command."
+    assert middleware.after_model({"messages": [message]}, _runtime()) is None
 
 
 def test_policy_review_records_approval(monkeypatch):
@@ -189,57 +181,6 @@ def test_policy_audit_redacts_secret_preview(caplog):
     assert "sk-test1234567890abcdef" not in logged
     assert "api_key=secretvalue" not in logged
     assert "api_key=***" in logged
-
-
-def test_policy_mixed_deny_and_review_preserves_approved_call(monkeypatch):
-    import agent_core.human_loop as human_loop
-    from agent_core.permissions.models import PolicyDecision
-
-    def fake_evaluate_tool_call(**kwargs):
-        if kwargs["args"]["command"] == "rm -rf /":
-            return PolicyDecision.deny(
-                "hardline_destructive_command",
-                risk_tags=("hardline_destructive_command",),
-                message="Blocked hardline command.",
-            )
-        return PolicyDecision.review(
-            "package_install",
-            risk_tags=("package_install",),
-            message="Package install requires review.",
-        )
-
-    monkeypatch.setattr(human_loop, "interrupt", lambda _payload: {"type": "approve"})
-    monkeypatch.setattr(human_loop.tool_policy, "evaluate_tool_call", fake_evaluate_tool_call)
-
-    middleware = human_loop.FlexibleHumanInTheLoopMiddleware(
-        interrupt_on={},
-        policy_tools={"terminal"},
-    )
-    message = AIMessage(
-        content="",
-        tool_calls=[
-            {"name": "terminal", "args": {"command": "rm -rf /"}, "id": "deny-call"},
-            {"name": "terminal", "args": {"command": "pip install rich"}, "id": "review-call"},
-        ],
-    )
-
-    result = middleware.after_model({"messages": [message]}, _runtime())
-
-    assert result is not None
-    _assert_tool_outputs_match_calls(result)
-    assert [tool_call["id"] for tool_call in result["messages"][0].tool_calls] == [
-        "deny-call",
-        "review-call",
-    ]
-    messages_by_call_id = {
-        message.tool_call_id: message
-        for message in result["messages"][1:]
-        if isinstance(message, ToolMessage)
-    }
-    payload = json.loads(messages_by_call_id["deny-call"].content)
-    assert payload["error"]["code"] == "policy_denied"
-    payload = json.loads(messages_by_call_id["review-call"].content)
-    assert payload["error"]["code"] == "tool_call_deferred"
 
 
 def test_non_policy_tool_still_uses_interrupt_on(monkeypatch):
@@ -435,3 +376,110 @@ def test_policy_respond_does_not_record_approval(monkeypatch):
         )
         is None
     )
+
+
+def test_lenient_resume_formats_approved(monkeypatch):
+    import agent_core.human_loop as human_loop
+    from agent_core.permissions.approvals import clear_approvals, consume_approval
+    from agent_core.permissions.models import PolicyDecision
+    from agent_core.session_context import hermes_task_id_from_thread_id
+
+    for resume_form in [
+        {"decisions": [{"type": "approve"}]},
+        [{"type": "approve"}],
+        {"type": "approve"},
+        "approve",
+        "0",
+        "yes",
+    ]:
+        clear_approvals()
+        monkeypatch.setattr(
+            human_loop,
+            "interrupt",
+            lambda _payload, f=resume_form: f,
+        )
+        monkeypatch.setattr(
+            human_loop.tool_policy,
+            "evaluate_tool_call",
+            lambda **_kwargs: PolicyDecision.review(
+                "package_install",
+                risk_tags=("package_install",),
+                message="Package install requires review.",
+            ),
+        )
+
+        middleware = human_loop.FlexibleHumanInTheLoopMiddleware(
+            interrupt_on={},
+            policy_tools={"terminal"},
+        )
+        message = AIMessage(
+            content="",
+            tool_calls=[{"name": "terminal", "args": {"command": "pip install rich"}, "id": "call-1"}],
+        )
+
+        result = middleware.after_model({"messages": [message]}, _runtime())
+        assert result is not None
+        record = consume_approval(
+            task_id=hermes_task_id_from_thread_id("thread-1"),
+            tool_call_id="call-1",
+            tool_name="terminal",
+            args=_terminal_policy_args("pip install rich"),
+            required_risk_tags=("package_install",),
+        )
+        assert record is not None, f"Failed for resume form: {resume_form}"
+
+
+def test_async_behavior_matches_sync(monkeypatch):
+    import asyncio
+
+    import agent_core.human_loop as human_loop
+    from agent_core.permissions.approvals import clear_approvals, consume_approval
+    from agent_core.permissions.models import PolicyDecision
+    from agent_core.session_context import hermes_task_id_from_thread_id
+
+    clear_approvals()
+    monkeypatch.setattr(
+        human_loop,
+        "interrupt",
+        lambda _payload: {"type": "approve"},
+    )
+    monkeypatch.setattr(
+        human_loop.tool_policy,
+        "evaluate_tool_call",
+        lambda **_kwargs: PolicyDecision.review(
+            "package_install",
+            risk_tags=("package_install",),
+            message="Package install requires review.",
+        ),
+    )
+
+    middleware = human_loop.FlexibleHumanInTheLoopMiddleware(
+        interrupt_on={},
+        policy_tools={"terminal"},
+    )
+    message = AIMessage(
+        content="",
+        tool_calls=[{"name": "terminal", "args": {"command": "pip install rich"}, "id": "call-1"}],
+    )
+
+    sync_result = middleware.after_model({"messages": [message]}, _runtime())
+
+    clear_approvals()
+
+    async def test_async():
+        return await middleware.aafter_model({"messages": [message]}, _runtime())
+
+    async_result = asyncio.get_event_loop().run_until_complete(test_async())
+
+    assert sync_result is not None
+    assert async_result is not None
+    assert sync_result["messages"][0].tool_calls[0]["id"] == async_result["messages"][0].tool_calls[0]["id"]
+
+    record_sync = consume_approval(
+        task_id=hermes_task_id_from_thread_id("thread-1"),
+        tool_call_id="call-1",
+        tool_name="terminal",
+        args=_terminal_policy_args("pip install rich"),
+        required_risk_tags=("package_install",),
+    )
+    assert record_sync is not None

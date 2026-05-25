@@ -11,11 +11,19 @@ from agent_core.permissions.approvals import ApprovalRecord, make_args_digest, r
 from agent_core.permissions.audit import audit_policy_event
 from agent_core.permissions.profiles import resolve_runtime_profile
 from agent_core.session_context import hermes_task_id_from_runtime
-from agent_tools.shared.tool_output import tool_error
 
 
 class FlexibleHumanInTheLoopMiddleware(HumanInTheLoopMiddleware):
-    """Human-in-the-loop middleware with lenient LangSmith resume handling."""
+    """Human-in-the-loop middleware with lenient LangSmith resume handling.
+
+    This middleware is a thin adapter around LangChain's official HumanInTheLoopMiddleware.
+    It adds:
+    - lenient LangSmith resume value parsing
+    - dynamic selection of policy-controlled tool calls that need human review
+    - approval and audit recording after a human approves a policy review
+
+    Policy enforcement (allow/deny/review) at execution time is handled by PolicyToolMiddleware.
+    """
 
     def __init__(
         self,
@@ -104,41 +112,6 @@ class FlexibleHumanInTheLoopMiddleware(HumanInTheLoopMiddleware):
         )
 
     @staticmethod
-    def _tool_message_for_denial(tool_call: ToolCall, message: str) -> ToolMessage:
-        return ToolMessage(
-            content=tool_error(tool_call["name"], message, code="policy_denied"),
-            name=tool_call["name"],
-            tool_call_id=tool_call["id"],
-            status="error",
-        )
-
-    @staticmethod
-    def _tool_message_for_deferred_call(tool_call: ToolCall) -> ToolMessage:
-        return ToolMessage(
-            content=tool_error(
-                tool_call["name"],
-                "Tool call deferred because another tool call in the same model turn "
-                "was handled by policy review. Retry this tool call in a new turn.",
-                code="tool_call_deferred",
-            ),
-            name=tool_call["name"],
-            tool_call_id=tool_call["id"],
-            status="error",
-        )
-
-    def _complete_artificial_tool_messages(
-        self,
-        tool_calls: list[ToolCall],
-        tool_messages: list[ToolMessage],
-    ) -> list[ToolMessage]:
-        messages_by_call_id = {message.tool_call_id: message for message in tool_messages}
-        return [
-            messages_by_call_id.get(tool_call["id"])
-            or self._tool_message_for_deferred_call(tool_call)
-            for tool_call in tool_calls
-        ]
-
-    @staticmethod
     def _review_config_for_policy_decision(decision: Any) -> dict[str, Any]:
         return {
             "allowed_decisions": ["approve", "edit", "reject", "respond"],
@@ -196,14 +169,11 @@ class FlexibleHumanInTheLoopMiddleware(HumanInTheLoopMiddleware):
         interrupt_indices: list[int] = []
         interrupt_configs: dict[int, Any] = {}
         policy_decisions: dict[int, Any] = {}
-        denied_indices: set[int] = set()
-        denied_messages: list[ToolMessage] = []
         task_id = hermes_task_id_from_runtime(runtime)
 
         for idx, tool_call in enumerate(last_ai_msg.tool_calls):
             if tool_call["name"] in self.policy_tools:
                 policy_decision = self._policy_decision_for_tool_call(tool_call, runtime)
-                policy_decisions[idx] = policy_decision
                 audit_policy_event(
                     profile=resolve_runtime_profile(),
                     tool_name=tool_call["name"],
@@ -212,19 +182,11 @@ class FlexibleHumanInTheLoopMiddleware(HumanInTheLoopMiddleware):
                     preview=self._preview_for_tool_call(tool_call),
                 )
 
-                if policy_decision.outcome == "allow":
+                if policy_decision.outcome == "review":
+                    policy_decisions[idx] = policy_decision
+                    config = self._review_config_for_policy_decision(policy_decision)
+                else:
                     continue
-                if policy_decision.outcome == "deny":
-                    denied_indices.add(idx)
-                    denied_messages.append(
-                        self._tool_message_for_denial(
-                            tool_call,
-                            policy_decision.human_message,
-                        )
-                    )
-                    continue
-
-                config = self._review_config_for_policy_decision(policy_decision)
             else:
                 config = self._resolve_interrupt_config(tool_call, self.interrupt_on)
                 if config is None:
@@ -239,16 +201,6 @@ class FlexibleHumanInTheLoopMiddleware(HumanInTheLoopMiddleware):
             interrupt_configs[idx] = config
 
         if not action_requests:
-            if denied_messages:
-                return {
-                    "messages": [
-                        last_ai_msg,
-                        *self._complete_artificial_tool_messages(
-                            last_ai_msg.tool_calls,
-                            denied_messages,
-                        ),
-                    ]
-                }
             return None
 
         raw_response = interrupt(
@@ -270,9 +222,6 @@ class FlexibleHumanInTheLoopMiddleware(HumanInTheLoopMiddleware):
         decision_idx = 0
 
         for idx, tool_call in enumerate(last_ai_msg.tool_calls):
-            if idx in denied_indices:
-                revised_tool_calls.append(tool_call)
-                continue
             if idx in interrupt_indices:
                 config = interrupt_configs[idx]
                 decision = decisions[decision_idx]
@@ -294,13 +243,11 @@ class FlexibleHumanInTheLoopMiddleware(HumanInTheLoopMiddleware):
                 revised_tool_calls.append(tool_call)
 
         last_ai_msg.tool_calls = revised_tool_calls
-        tool_messages = [*artificial_tool_messages, *denied_messages]
-        if tool_messages:
-            tool_messages = self._complete_artificial_tool_messages(
-                revised_tool_calls,
-                tool_messages,
-            )
-        return {"messages": [last_ai_msg, *tool_messages]}
+        if artificial_tool_messages:
+            return {"messages": [last_ai_msg, *artificial_tool_messages]}
+        if interrupt_indices:
+            return {"messages": [last_ai_msg]}
+        return None
 
     async def aafter_model(
         self, state: dict[str, Any], runtime: Runtime[Any]
