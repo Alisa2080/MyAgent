@@ -357,6 +357,64 @@ def test_write_file_uses_middleware_grant_for_review_path(monkeypatch):
     assert calls[0]["approved_write_roots"] == ["/tmp/approved"]
 
 
+def test_write_file_consumes_middleware_grant_for_allow_path(monkeypatch):
+    import json
+    from types import SimpleNamespace
+
+    from agent_core.permissions.approvals import make_args_digest
+    from agent_core.permissions.tool_grants import (
+        ToolPolicyGrant,
+        consume_tool_policy_grant,
+        record_tool_policy_grant,
+    )
+    from agent_core.policy_tool_middleware import write_file_policy_args
+    from agent_core.session_context import hermes_task_id_from_thread_id
+    from agent_tools.public import files
+
+    thread_id = "write-allow-grant-thread"
+    tool_call_id = "call-write-allow-grant"
+    runtime = SimpleNamespace(
+        execution_info=SimpleNamespace(thread_id=thread_id),
+        tool_call_id=tool_call_id,
+    )
+    task_id = hermes_task_id_from_thread_id(thread_id)
+    policy_args = write_file_policy_args({"path": "/workspace/out.txt", "content": "ok"})
+
+    record_tool_policy_grant(
+        ToolPolicyGrant(
+            task_id=task_id,
+            tool_call_id=tool_call_id,
+            tool_name="write_file",
+            args_digest=make_args_digest(policy_args),
+            risk_tags=(),
+        )
+    )
+
+    monkeypatch.setattr(
+        files.file_policy,
+        "classify_file_write",
+        lambda *args, **kwargs: files.PolicyDecision.allow("workspace_write"),
+    )
+    monkeypatch.setattr(
+        files,
+        "write_file_tool",
+        lambda **kwargs: json.dumps({"success": True, "message": "File written."}),
+    )
+
+    raw = files._write_file_impl(path="/workspace/out.txt", content="ok", runtime=runtime)
+
+    assert json.loads(raw)["ok"] is True
+    assert (
+        consume_tool_policy_grant(
+            task_id=task_id,
+            tool_call_id=tool_call_id,
+            tool_name="write_file",
+            args=policy_args,
+        )
+        is None
+    )
+
+
 def test_patch_uses_middleware_grant_for_review_path(monkeypatch):
     import json
     from types import SimpleNamespace
@@ -425,6 +483,93 @@ def test_patch_uses_middleware_grant_for_review_path(monkeypatch):
 
     assert json.loads(raw)["ok"] is True
     assert calls[0]["approved_write_roots"] == ["/tmp/approved"]
+
+
+def test_patch_review_requires_union_of_risk_tags(monkeypatch):
+    import json
+    from types import SimpleNamespace
+
+    from agent_core.permissions.approvals import make_args_digest
+    from agent_core.permissions.tool_grants import ToolPolicyGrant, record_tool_policy_grant
+    from agent_core.policy_tool_middleware import patch_policy_args
+    from agent_core.session_context import hermes_task_id_from_thread_id
+    from agent_tools.public import files
+
+    calls = []
+    thread_id = "patch-union-grant-thread"
+    tool_call_id = "call-patch-union-grant"
+    runtime = SimpleNamespace(
+        execution_info=SimpleNamespace(thread_id=thread_id),
+        tool_call_id=tool_call_id,
+    )
+    task_id = hermes_task_id_from_thread_id(thread_id)
+    policy_args = patch_policy_args(
+        {
+            "mode": "patch",
+            "path": None,
+            "old_string": None,
+            "new_string": None,
+            "replace_all": False,
+            "patch": "ignored",
+        }
+    )
+
+    monkeypatch.setattr(
+        files,
+        "_patch_paths_to_classify",
+        lambda *args, **kwargs: (["/tmp/a", "/tmp/b"], None),
+    )
+    monkeypatch.setattr(
+        files.file_policy,
+        "classify_file_write",
+        lambda path, **kwargs: files.PolicyDecision.review(
+            "external_file_write",
+            risk_tags=("risk_a",) if path == "/tmp/a" else ("risk_b",),
+            message="Approval required before patching outside the workspace.",
+        ),
+    )
+    monkeypatch.setattr(
+        files.file_policy,
+        "approved_write_root_for_path",
+        lambda path, **kwargs: f"{path}-root",
+    )
+    monkeypatch.setattr(
+        files,
+        "patch_tool",
+        lambda **kwargs: calls.append(kwargs) or json.dumps({"success": True, "message": "Patch applied."}),
+    )
+
+    record_tool_policy_grant(
+        ToolPolicyGrant(
+            task_id=task_id,
+            tool_call_id=tool_call_id,
+            tool_name="patch",
+            args_digest=make_args_digest(policy_args),
+            risk_tags=("risk_a",),
+        )
+    )
+
+    raw = files._patch_impl(mode="patch", patch="ignored", runtime=runtime)
+
+    payload = json.loads(raw)
+    assert payload["ok"] is False
+    assert payload["error"]["code"] == "approval_required"
+    assert calls == []
+
+    record_tool_policy_grant(
+        ToolPolicyGrant(
+            task_id=task_id,
+            tool_call_id=tool_call_id,
+            tool_name="patch",
+            args_digest=make_args_digest(policy_args),
+            risk_tags=("risk_a", "risk_b"),
+        )
+    )
+
+    raw = files._patch_impl(mode="patch", patch="ignored", runtime=runtime)
+
+    assert json.loads(raw)["ok"] is True
+    assert calls[0]["approved_write_roots"] == ["/tmp/a-root", "/tmp/b-root"]
 
 
 def test_shell_file_operations_allows_workspace_writes_for_docker_safe_root(

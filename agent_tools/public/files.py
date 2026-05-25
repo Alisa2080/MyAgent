@@ -234,6 +234,12 @@ def _approval_roots_for_file_decision(
     resolved_path: str | None = None,
 ) -> list[str] | str:
     if decision.outcome == "allow":
+        consume_tool_policy_grant(
+            task_id=task_id,
+            tool_call_id=_tool_call_id_from_runtime(runtime),
+            tool_name=tool_name,
+            args=args,
+        )
         return []
     if decision.outcome == "deny":
         return decision.human_message
@@ -285,6 +291,14 @@ def _unique_items(items: list[str]) -> list[str]:
         unique.append(item)
         seen.add(item)
     return unique
+
+
+def _review_risk_tags(decisions: list[PolicyDecision]) -> tuple[str, ...]:
+    risk_tags: list[str] = []
+    for decision in decisions:
+        if decision.outcome == "review":
+            risk_tags.extend(decision.risk_tags)
+    return tuple(_unique_items(risk_tags))
 
 
 def _patch_paths_to_classify(
@@ -567,6 +581,7 @@ def _patch_impl(
     approved_roots: list[str] = []
     review = next((decision for decision in decisions if decision.outcome == "review"), None)
     if review is not None:
+        review_risk_tags = _review_risk_tags(decisions)
         approval_args = patch_policy_args(
             {
                 "mode": mode,
@@ -582,14 +597,14 @@ def _patch_impl(
             tool_call_id=_tool_call_id_from_runtime(runtime),
             tool_name="patch",
             args=approval_args,
-            required_risk_tags=review.risk_tags,
+            required_risk_tags=review_risk_tags,
         )
         if grant is None and consume_approval(
             task_id=task_id,
             tool_call_id=_tool_call_id_from_runtime(runtime),
             tool_name="patch",
             args=approval_args,
-            required_risk_tags=review.risk_tags,
+            required_risk_tags=review_risk_tags,
         ) is None:
             return tool_error(
                 "patch",
