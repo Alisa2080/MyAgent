@@ -1,5 +1,4 @@
 import asyncio
-import json
 from types import SimpleNamespace
 
 from langchain_core.messages import ToolMessage
@@ -126,13 +125,15 @@ def test_policy_tool_middleware_consumes_approval_and_records_grant():
     result = middleware.wrap_tool_call(
         request,
         lambda received: ToolMessage(
-            content='{"ok": true}',
+            content="Command completed.",
             name="terminal",
             tool_call_id="call-network",
+            status="success",
+            artifact={"ok": True, "tool": "terminal", "message": "Command completed.", "data": None, "error": None, "meta": {}},
         ),
     )
 
-    assert json.loads(result.content)["ok"] is True
+    assert result.artifact["ok"] is True
     grant = consume_tool_policy_grant(
         task_id=hermes_task_id_from_thread_id("thread-network"),
         tool_call_id="call-network",
@@ -184,13 +185,15 @@ def test_policy_tool_middleware_ignores_unsupported_tool():
     result = middleware.wrap_tool_call(
         request,
         lambda received: ToolMessage(
-            content='{"ok": true}',
+            content="File read.",
             name="read_file",
             tool_call_id="call-read",
+            status="success",
+            artifact={"ok": True, "tool": "read_file", "message": "File read.", "data": None, "error": None, "meta": {}},
         ),
     )
 
-    assert json.loads(result.content)["ok"] is True
+    assert result.artifact["ok"] is True
 
 
 def test_policy_tool_middleware_async_passes_allow_to_handler():
@@ -202,14 +205,16 @@ def test_policy_tool_middleware_async_passes_allow_to_handler():
         async def handler(received):
             calls.append(received)
             return ToolMessage(
-                content='{"ok": true}',
+                content="Command completed.",
                 name="terminal",
                 tool_call_id="call-async-allow",
+                status="success",
+                artifact={"ok": True, "tool": "terminal", "message": "Command completed.", "data": None, "error": None, "meta": {}},
             )
 
         result = await middleware.awrap_tool_call(request, handler)
 
-        assert json.loads(result.content)["ok"] is True
+        assert result.artifact["ok"] is True
         assert calls == [request]
         args = canonical_tool_args("terminal", {"command": "pwd"})
         grant = consume_tool_policy_grant(
@@ -272,14 +277,16 @@ def test_policy_tool_middleware_async_consumes_approval_and_records_grant():
 
         async def handler(received):
             return ToolMessage(
-                content='{"ok": true}',
+                content="Command completed.",
                 name="terminal",
                 tool_call_id="call-async-network",
+                status="success",
+                artifact={"ok": True, "tool": "terminal", "message": "Command completed.", "data": None, "error": None, "meta": {}},
             )
 
         result = await middleware.awrap_tool_call(request, handler)
 
-        assert json.loads(result.content)["ok"] is True
+        assert result.artifact["ok"] is True
         grant = consume_tool_policy_grant(
             task_id=hermes_task_id_from_thread_id("thread-async-network"),
             tool_call_id="call-async-network",
@@ -329,14 +336,16 @@ def test_policy_tool_middleware_async_ignores_unsupported_tool():
         async def handler(received):
             calls.append(received)
             return ToolMessage(
-                content='{"ok": true}',
+                content="File read.",
                 name="read_file",
                 tool_call_id="call-async-read",
+                status="success",
+                artifact={"ok": True, "tool": "read_file", "message": "File read.", "data": None, "error": None, "meta": {}},
             )
 
         result = await middleware.awrap_tool_call(request, handler)
 
-        assert json.loads(result.content)["ok"] is True
+        assert result.artifact["ok"] is True
         assert calls == [request]
 
     asyncio.run(run())
