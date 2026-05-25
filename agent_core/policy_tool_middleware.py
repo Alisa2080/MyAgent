@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 from langchain.agents.middleware import AgentMiddleware, ToolCallRequest
@@ -48,14 +48,30 @@ class PolicyToolMiddleware(AgentMiddleware):
         request: ToolCallRequest,
         handler: Callable[[ToolCallRequest], ToolMessage | Command[Any]],
     ) -> ToolMessage | Command[Any]:
+        gated = self._gate_tool_call(request)
+        if gated is not None:
+            return gated
+        return handler(request)
+
+    async def awrap_tool_call(
+        self,
+        request: ToolCallRequest,
+        handler: Callable[[ToolCallRequest], Awaitable[ToolMessage | Command[Any]]],
+    ) -> ToolMessage | Command[Any]:
+        gated = self._gate_tool_call(request)
+        if gated is not None:
+            return gated
+        return await handler(request)
+
+    def _gate_tool_call(self, request: ToolCallRequest) -> ToolMessage | None:
         tool_call = request.tool_call
         tool_name = tool_call["name"]
         if tool_name not in self.policy_tools:
-            return handler(request)
+            return None
 
         builder = POLICY_ARG_BUILDERS.get(tool_name)
         if builder is None:
-            return handler(request)
+            return None
 
         runtime_context = RuntimeContext.from_runtime(request.runtime)
         tool_call_id = tool_call.get("id") or runtime_context.tool_call_id
@@ -91,7 +107,7 @@ class PolicyToolMiddleware(AgentMiddleware):
                         risk_tags=decision.risk_tags,
                     )
                 )
-            return handler(request)
+            return None
 
         approval = consume_approval(
             task_id=runtime_context.task_id,
@@ -123,7 +139,7 @@ class PolicyToolMiddleware(AgentMiddleware):
                 allow_network_once=approval.allow_network_once,
             )
         )
-        return handler(request)
+        return None
 
     @staticmethod
     def _tool_message(

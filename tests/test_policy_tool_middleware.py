@@ -1,3 +1,4 @@
+import asyncio
 import json
 from types import SimpleNamespace
 
@@ -187,6 +188,155 @@ def test_policy_tool_middleware_ignores_unsupported_tool():
     )
 
     assert json.loads(result.content)["ok"] is True
+
+
+def test_policy_tool_middleware_async_passes_allow_to_handler():
+    async def run():
+        middleware = PolicyToolMiddleware(policy_tools={"terminal"})
+        request = _request("terminal", {"command": "pwd"}, tool_call_id="call-async-allow")
+        calls = []
+
+        async def handler(received):
+            calls.append(received)
+            return ToolMessage(
+                content='{"ok": true}',
+                name="terminal",
+                tool_call_id="call-async-allow",
+            )
+
+        result = await middleware.awrap_tool_call(request, handler)
+
+        assert json.loads(result.content)["ok"] is True
+        assert calls == [request]
+        args = canonical_tool_args("terminal", {"command": "pwd"})
+        grant = consume_tool_policy_grant(
+            task_id=hermes_task_id_from_thread_id("policy-thread"),
+            tool_call_id="call-async-allow",
+            tool_name="terminal",
+            args=args,
+        )
+        assert grant is not None
+        assert grant.args_digest == make_args_digest(args)
+        assert grant.risk_tags == ()
+
+    asyncio.run(run())
+
+
+def test_policy_tool_middleware_async_short_circuits_deny():
+    async def run():
+        middleware = PolicyToolMiddleware(policy_tools={"terminal"})
+        calls = []
+        request = _request("terminal", {"command": "rm -rf /"}, tool_call_id="call-async-deny")
+
+        async def handler(received):
+            calls.append(received)
+            return ToolMessage(content="unused", name="terminal", tool_call_id="unused")
+
+        result = await middleware.awrap_tool_call(request, handler)
+
+        payload = json.loads(result.content)
+        assert payload["ok"] is False
+        assert payload["error"]["code"] == "policy_denied"
+        assert result.status == "error"
+        assert calls == []
+
+    asyncio.run(run())
+
+
+def test_policy_tool_middleware_async_consumes_approval_and_records_grant():
+    async def run():
+        clear_approvals()
+        middleware = PolicyToolMiddleware(policy_tools={"terminal"})
+        request = _request(
+            "terminal",
+            {"command": "curl https://example.com"},
+            thread_id="thread-async-network",
+            tool_call_id="call-async-network",
+        )
+        args = canonical_tool_args("terminal", {"command": "curl https://example.com"})
+        record_approval(
+            ApprovalRecord(
+                approval_id="approval-async-network",
+                decision_id="decision-async-network",
+                task_id=hermes_task_id_from_thread_id("thread-async-network"),
+                tool_call_id="call-async-network",
+                tool_name="terminal",
+                args_digest=make_args_digest(args),
+                risk_tags=("network_access",),
+                allow_network_once=True,
+            )
+        )
+
+        async def handler(received):
+            return ToolMessage(
+                content='{"ok": true}',
+                name="terminal",
+                tool_call_id="call-async-network",
+            )
+
+        result = await middleware.awrap_tool_call(request, handler)
+
+        assert json.loads(result.content)["ok"] is True
+        grant = consume_tool_policy_grant(
+            task_id=hermes_task_id_from_thread_id("thread-async-network"),
+            tool_call_id="call-async-network",
+            tool_name="terminal",
+            args=args,
+        )
+        assert grant is not None
+        assert grant.args_digest == make_args_digest(args)
+        assert grant.allow_network_once is True
+        assert grant.risk_tags == ("network_access",)
+
+    asyncio.run(run())
+
+
+def test_policy_tool_middleware_async_requires_approval_for_review():
+    async def run():
+        clear_approvals()
+        middleware = PolicyToolMiddleware(policy_tools={"terminal"})
+        request = _request(
+            "terminal",
+            {"command": "touch approval-required.txt"},
+            tool_call_id="call-async-review",
+        )
+        calls = []
+
+        async def handler(received):
+            calls.append(received)
+            return ToolMessage(content="unused", tool_call_id="unused")
+
+        result = await middleware.awrap_tool_call(request, handler)
+
+        payload = json.loads(result.content)
+        assert payload["ok"] is False
+        assert payload["error"]["code"] == "approval_required"
+        assert result.status == "error"
+        assert calls == []
+
+    asyncio.run(run())
+
+
+def test_policy_tool_middleware_async_ignores_unsupported_tool():
+    async def run():
+        middleware = PolicyToolMiddleware(policy_tools={"terminal"})
+        request = _request("read_file", {"path": "README.md"}, tool_call_id="call-async-read")
+        calls = []
+
+        async def handler(received):
+            calls.append(received)
+            return ToolMessage(
+                content='{"ok": true}',
+                name="read_file",
+                tool_call_id="call-async-read",
+            )
+
+        result = await middleware.awrap_tool_call(request, handler)
+
+        assert json.loads(result.content)["ok"] is True
+        assert calls == [request]
+
+    asyncio.run(run())
 
 
 def test_build_agent_registers_policy_tool_middleware(monkeypatch):
