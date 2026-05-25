@@ -187,3 +187,23 @@ def test_policy_tool_middleware_ignores_unsupported_tool():
     )
 
     assert json.loads(result.content)["ok"] is True
+
+
+def test_build_agent_registers_policy_tool_middleware(monkeypatch):
+    from agent_core import builders
+    from agent_core.policy_tool_middleware import PolicyToolMiddleware
+
+    captured = {}
+
+    monkeypatch.setattr(builders, "install_process_signal_handlers", lambda: None)
+    monkeypatch.setattr(builders.memory_store, "load_from_disk", lambda: None)
+    monkeypatch.setattr(builders, "recover_terminal_processes", lambda: None)
+    monkeypatch.setattr(builders.memory_store, "format_for_system_prompt", lambda name: "")
+    monkeypatch.setattr(builders, "load_project_instruction_blocks", lambda workdir: [])
+    monkeypatch.setattr(builders, "build_tool_call_limit_middleware", lambda include_task=True: [])
+    monkeypatch.setattr(builders, "create_agent", lambda **kwargs: captured.update(kwargs) or "agent")
+
+    assert builders.build_agent() == "agent"
+
+    middleware = captured["middleware"]
+    assert any(isinstance(item, PolicyToolMiddleware) for item in middleware)
