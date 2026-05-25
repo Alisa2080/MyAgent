@@ -13,7 +13,7 @@ from agent_core.permissions import file_policy, tool_policy
 from agent_core.permissions.approvals import consume_approval
 from agent_core.permissions.constants import UNRESOLVED_BACKEND_WRITE_PATH
 from agent_core.permissions.models import PolicyDecision
-from agent_core.session_context import hermes_task_id_from_runtime
+from agent_core.session_context import RuntimeContext
 from agent_core.workspace import WORKDIR, safe_path
 from agent_tools.file_toolkit.backend_paths import (
     allowed_workspace_roots_for_task,
@@ -134,13 +134,16 @@ def _wrap_file_tool_result(
     return tool_ok(tool_name, data=payload or None, message=message, meta=meta)
 
 
+def _runtime_context(runtime: ToolRuntime | None) -> RuntimeContext:
+    return RuntimeContext.from_runtime(runtime)
+
+
 def _task_id_from_runtime(runtime: ToolRuntime | None) -> str:
-    return hermes_task_id_from_runtime(runtime)
+    return _runtime_context(runtime).task_id
 
 
 def _tool_call_id_from_runtime(runtime: ToolRuntime | None) -> str | None:
-    tool_call_id = getattr(runtime, "tool_call_id", None)
-    return str(tool_call_id) if tool_call_id else None
+    return _runtime_context(runtime).tool_call_id
 
 
 def _allowed_workspace_roots_for_task(task_id: str) -> list[str]:
