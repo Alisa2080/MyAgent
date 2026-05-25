@@ -9,10 +9,12 @@ from typing import Literal
 from langchain.tools import ToolRuntime, tool
 from pydantic import BaseModel, Field
 
-from agent_core.permissions import file_policy, tool_policy
+from agent_core.permissions import file_policy
 from agent_core.permissions.approvals import consume_approval
 from agent_core.permissions.constants import UNRESOLVED_BACKEND_WRITE_PATH
 from agent_core.permissions.models import PolicyDecision
+from agent_core.permissions.tool_grants import consume_tool_policy_grant
+from agent_core.policy_tool_middleware import patch_policy_args, write_file_policy_args
 from agent_core.session_context import RuntimeContext
 from agent_core.workspace import WORKDIR, safe_path
 from agent_tools.file_toolkit.backend_paths import (
@@ -235,6 +237,16 @@ def _approval_roots_for_file_decision(
         return []
     if decision.outcome == "deny":
         return decision.human_message
+
+    grant = consume_tool_policy_grant(
+        task_id=task_id,
+        tool_call_id=_tool_call_id_from_runtime(runtime),
+        tool_name=tool_name,
+        args=args,
+        required_risk_tags=decision.risk_tags,
+    )
+    if grant is not None:
+        return [file_policy.approved_write_root_for_path(path, task_id=task_id, resolved_path=resolved_path)]
 
     approval = consume_approval(
         task_id=task_id,
@@ -492,10 +504,7 @@ def _write_file_impl(path: str, content: str, runtime: ToolRuntime | None = None
     approved_roots = _approval_roots_for_file_decision(
         tool_name="write_file",
         path=path,
-        args=tool_policy.canonical_tool_args(
-            "write_file",
-            {"path": path, "content": content},
-        ),
+        args=write_file_policy_args({"path": path, "content": content}),
         task_id=task_id,
         runtime=runtime,
         decision=decision,
@@ -558,8 +567,7 @@ def _patch_impl(
     approved_roots: list[str] = []
     review = next((decision for decision in decisions if decision.outcome == "review"), None)
     if review is not None:
-        approval_args = tool_policy.canonical_tool_args(
-            "patch",
+        approval_args = patch_policy_args(
             {
                 "mode": mode,
                 "path": path,
@@ -567,16 +575,22 @@ def _patch_impl(
                 "new_string": new_string,
                 "replace_all": replace_all,
                 "patch": patch,
-            },
+            }
         )
-        approval = consume_approval(
+        grant = consume_tool_policy_grant(
             task_id=task_id,
             tool_call_id=_tool_call_id_from_runtime(runtime),
             tool_name="patch",
             args=approval_args,
             required_risk_tags=review.risk_tags,
         )
-        if approval is None:
+        if grant is None and consume_approval(
+            task_id=task_id,
+            tool_call_id=_tool_call_id_from_runtime(runtime),
+            tool_name="patch",
+            args=approval_args,
+            required_risk_tags=review.risk_tags,
+        ) is None:
             return tool_error(
                 "patch",
                 "Approval required before patching outside the workspace.",
