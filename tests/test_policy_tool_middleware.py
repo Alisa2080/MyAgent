@@ -206,4 +206,12 @@ def test_build_agent_registers_policy_tool_middleware(monkeypatch):
     assert builders.build_agent() == "agent"
 
     middleware = captured["middleware"]
-    assert any(isinstance(item, PolicyToolMiddleware) for item in middleware)
+    policy_index = next(
+        i for i, item in enumerate(middleware) if isinstance(item, PolicyToolMiddleware)
+    )
+    tool_retry_index = next(
+        i for i, item in enumerate(middleware) if isinstance(item, builders.ToolRetryMiddleware)
+    )
+
+    assert policy_index < tool_retry_index
+    assert middleware[policy_index].policy_tools == builders.POLICY_REVIEW_TOOLS
