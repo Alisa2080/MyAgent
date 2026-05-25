@@ -4,7 +4,7 @@ Date: 2026-05-25
 
 ## Goal
 
-Reduce the maintenance surface of `agent_core.human_loop.FlexibleHumanInTheLoopMiddleware` by making LangChain's official `HumanInTheLoopMiddleware` the owner of the human-review state machine again.
+Reduce the maintenance surface of `agent_core.human_loop.FlexibleHumanInTheLoopMiddleware` by making LangChain's official `HumanInTheLoopMiddleware.after_model` the owner of the human-review state machine again.
 
 The project-specific human-loop layer should only provide the behavior that LangChain does not provide directly:
 
@@ -50,7 +50,7 @@ This makes the middleware fragile across LangChain upgrades. If LangChain change
 
 Use a thin extension around official HITL behavior.
 
-`FlexibleHumanInTheLoopMiddleware` should continue to inherit from `HumanInTheLoopMiddleware`, but it should stop owning the full HITL state machine. The implementation should prefer official helper methods and official `after_model` behavior wherever LangChain exposes a usable hook.
+`FlexibleHumanInTheLoopMiddleware` should continue to inherit from `HumanInTheLoopMiddleware`, but it should stop owning the full HITL state machine. The implementation must first attempt to make custom `after_model` a thin wrapper around `super().after_model(state, runtime)`. A copied decision loop is allowed only after the implementation proves that the installed LangChain API cannot safely support the required dynamic review injection, lenient resume normalization, or approve-side-effect capture.
 
 The intended responsibilities are:
 
@@ -60,6 +60,23 @@ The intended responsibilities are:
 4. After an approved policy review, record the project approval and audit metadata.
 
 All final execution-time policy enforcement belongs to `PolicyToolMiddleware`.
+
+## Preferred Implementation Path
+
+Use a super-wrapper design.
+
+`FlexibleHumanInTheLoopMiddleware.after_model`, if it exists at all, should do only these steps:
+
+1. Build a per-call policy review context for the current model turn.
+2. Temporarily expose policy `review` decisions as official HITL interrupt configs.
+3. Run `super().after_model(state, runtime)` so LangChain owns request construction, decision validation, tool-call rebuilding, and artificial `ToolMessage` creation.
+4. Capture normalized human decisions from the official interrupt path.
+5. Record approval and audit side effects for policy review decisions whose human decision is `approve`.
+6. Restore any temporary state before returning.
+
+The method should not contain a custom loop that rebuilds `revised_tool_calls`, advances `decision_idx`, or appends `artificial_tool_messages`. Those are official HITL responsibilities.
+
+The implementation should use the least invasive adapter available in the installed LangChain version. If a scoped interrupt adapter is needed to normalize resume values and capture decisions, it must be local to the current middleware call and must not leave global monkeypatch state behind.
 
 ## Architecture
 
@@ -75,7 +92,7 @@ LangChain's `HumanInTheLoopMiddleware` remains responsible for:
 - AI message tool-call updates
 - artificial `ToolMessage` creation for reject/respond decisions
 
-The project should not duplicate these mechanics unless the installed LangChain version lacks the hook needed for dynamic review selection or response normalization.
+The project should not duplicate these mechanics unless the installed LangChain version lacks the hook needed for dynamic review selection, response normalization, or decision capture.
 
 ### Flexible Human Loop
 
@@ -180,15 +197,23 @@ Internally, these should be normalized into the official decision list shape bef
 
 ## Fallback Boundary
 
-The preferred implementation is a thin integration with official `HumanInTheLoopMiddleware.after_model`.
+The preferred implementation is a thin integration with official `HumanInTheLoopMiddleware.after_model`. The implementation must try this path first.
 
-If the current LangChain API does not expose enough hooks to add dynamic review selection or normalize resume values without overriding `after_model`, the fallback is a smaller custom `after_model` that:
+If the current LangChain API does not expose enough hooks to add dynamic review selection, normalize resume values, or capture approved policy decisions around `super().after_model`, the fallback is a smaller custom `after_model` that:
 
 - delegates action/config creation to official `_create_action_and_config`
 - delegates decision handling to official `_process_decision`
 - handles only dynamic policy review selection, lenient response normalization, and approval/audit recording
 
 The fallback must still avoid reintroducing policy deny handling, deferred tool messages, or execution-time policy enforcement.
+
+When using the fallback, the implementation must document the specific blocker in code or in the implementation plan. Acceptable blockers include:
+
+- no safe way to pass dynamic per-call interrupt configs into official `after_model`
+- no safe way to normalize nonstandard resume values before official decision processing
+- no safe way to know which captured decision corresponds to which policy review after official processing
+
+The fallback is not acceptable merely because it is easier to implement.
 
 ## Error Handling
 
@@ -217,23 +242,29 @@ Update or add tests that prove:
 - lenient resume forms still work
 - async behavior matches sync behavior
 - builder ordering keeps `FlexibleHumanInTheLoopMiddleware` before `PolicyToolMiddleware`
+- `FlexibleHumanInTheLoopMiddleware` does not synthesize `policy_denied` or deferred tool messages
+- if the super-wrapper path is implemented, official `HumanInTheLoopMiddleware.after_model` is invoked for interrupted calls
+- if fallback remains, tests make the copied responsibilities explicit and prevent policy deny/deferred logic from returning
 
 Tests should avoid depending on copied LangChain internals beyond the public or protected methods the project intentionally uses.
 
 ## Migration Plan
 
-1. Add or adjust tests to encode the new responsibility split.
-2. Refactor `FlexibleHumanInTheLoopMiddleware` to remove policy deny and deferred-message handling.
-3. Reuse official HITL helpers or official `after_model` where the installed API permits.
-4. Keep approval/audit recording only around approved policy reviews.
-5. Verify the existing `PolicyToolMiddleware` tests still cover deny/review/allow execution behavior.
-6. Remove tests that assert human-loop ownership of policy deny or deferred tool messages.
+1. Add or adjust tests to encode the desired super-wrapper behavior.
+2. Inspect the installed LangChain `HumanInTheLoopMiddleware.after_model` and identify the narrowest safe hook for dynamic interrupt config, lenient resume normalization, and decision capture.
+3. Attempt the super-wrapper implementation first.
+4. If the super-wrapper is blocked, document the blocker and keep only the smallest fallback loop that delegates to official `_create_action_and_config` and `_process_decision`.
+5. Keep approval/audit recording only around approved policy reviews.
+6. Verify the existing `PolicyToolMiddleware` tests still cover deny/review/allow execution behavior.
+7. Remove tests that assert human-loop ownership of policy deny or deferred tool messages.
 
 ## Success Criteria
 
 - `FlexibleHumanInTheLoopMiddleware` no longer owns execution-time policy deny/review/allow enforcement.
 - `PolicyToolMiddleware` is the only policy-controlled execution gate for `terminal`, `process`, `write_file`, and `patch`.
-- Official LangChain HITL behavior owns decision processing wherever possible.
+- Official LangChain `HumanInTheLoopMiddleware.after_model` owns decision processing, tool-call rebuilding, and artificial `ToolMessage` creation unless a documented LangChain API blocker makes a minimal fallback necessary.
+- `FlexibleHumanInTheLoopMiddleware.after_model` is removed or reduced to a thin wrapper around `super().after_model(state, runtime)`.
+- The implementation does not contain a custom `revised_tool_calls` / `decision_idx` / `artificial_tool_messages` loop unless it is part of the documented fallback.
 - LangSmith resume compatibility is preserved.
 - Approval and audit recording semantics are preserved for approved policy reviews.
 - Public tool schemas and user-visible approval semantics remain stable.
