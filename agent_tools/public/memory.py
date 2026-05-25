@@ -1,10 +1,11 @@
 import json
 
 from langchain.tools import tool
+from langchain_core.messages import ToolMessage
 from pydantic import BaseModel, Field
 
 from agent_core.memory import memory_store, memory_tool as run_memory_tool
-from agent_tools.shared.tool_output import tool_error, tool_ok
+from agent_tools.shared.tool_result import tool_failure, tool_success
 
 
 class MemoryManageInput(BaseModel):
@@ -15,7 +16,7 @@ class MemoryManageInput(BaseModel):
 
 
 @tool("memory_manage", args_schema=MemoryManageInput)
-def memory_manage(action: str, target: str, content: str = "", old_text: str = "") -> str:
+def memory_manage(action: str, target: str, content: str = "", old_text: str = "") -> ToolMessage:
     """Save, replace, or remove durable memory. target must be 'memory' or 'user'."""
     try:
         raw = run_memory_tool(
@@ -35,12 +36,12 @@ def memory_manage(action: str, target: str, content: str = "", old_text: str = "
                 "Memory change was written to disk. It will not modify the current session's "
                 "frozen system prompt and will be available after the next agent session starts."
             )
-            return tool_ok("memory_manage", data=result or None, message=message or "Memory updated.", meta=meta)
+            return tool_success("memory_manage", data=result or None, message=message or "Memory updated.", meta=meta)
 
         meta["system_prompt_note"] = (
             "No memory change was written. The current session's frozen system prompt is unchanged."
         )
-        return tool_error(
+        return tool_failure(
             "memory_manage",
             str(error_message or "Memory operation failed."),
             code="memory_error",
@@ -48,4 +49,4 @@ def memory_manage(action: str, target: str, content: str = "", old_text: str = "
             meta=meta,
         )
     except Exception as exc:
-        return tool_error("memory_manage", str(exc))
+        return tool_failure("memory_manage", str(exc))

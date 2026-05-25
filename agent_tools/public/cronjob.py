@@ -5,10 +5,11 @@ from pathlib import Path
 from typing import Any, Literal
 
 from langchain.tools import ToolRuntime, tool
+from langchain_core.messages import ToolMessage
 from pydantic import BaseModel, Field
 
 from agent_core.session_context import RuntimeContext
-from agent_tools.shared.tool_output import tool_error, tool_ok
+from agent_tools.shared.tool_result import tool_failure, tool_success
 from cron.jobs import (
     create_job,
     get_job,
@@ -312,7 +313,7 @@ def cronjob(
     context_from: list[str] | None = None,
     enabled_toolsets: list[str] | None = None,
     workdir: str | None = None,
-) -> str:
+) -> ToolMessage:
     """Manage unattended scheduled cron jobs. Only local and origin delivery are supported."""
     result = _cronjob_impl(
         action=action,
@@ -335,10 +336,17 @@ def cronjob(
         workdir=workdir,
     )
     if result.get("success"):
-        return tool_ok("cronjob", data=result, message=result.get("message", "Cron job action completed."))
-    return tool_error(
+        return tool_success(
+            "cronjob",
+            data=result,
+            message=result.get("message", "Cron job action completed."),
+            runtime=runtime,
+            content=result.get("message", f"Cron job action completed: {action}."),
+        )
+    return tool_failure(
         "cronjob",
         result.get("error", "Cron job action failed."),
         code=result.get("code", "cron_error"),
         data=result,
+        runtime=runtime,
     )

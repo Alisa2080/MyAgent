@@ -3,10 +3,11 @@ import shutil
 from pathlib import Path
 
 from langchain.tools import tool
+from langchain_core.messages import ToolMessage
 
 from agent_core.schemas import SkillManageInput
 from agent_tools.public.skills import SKILLS_DIR, load_skill_metadata
-from agent_tools.shared.tool_output import tool_error, tool_ok
+from agent_tools.shared.tool_result import tool_failure, tool_success
 
 VALID_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
 MAX_NAME_LENGTH = 64
@@ -103,34 +104,34 @@ def skill_manage(
       old_string: str = "",
       new_string: str = "",
       replace_all: bool = False,
-  ) -> str:
+  ) -> ToolMessage:
     """Manage reusable skills. Actions: create, patch, edit, delete, write_file, remove_file."""
     action = (action or "").strip()
     name = (name or "").strip()
 
     name_error = validate_skill_name(name)
     if name_error:
-        return tool_error("skill_manage", name_error, code="invalid_name")
+        return tool_failure("skill_manage", name_error, code="invalid_name")
 
     if action == "create":
         cat_error = validate_category(category or None)
         if cat_error:
-            return tool_error("skill_manage", cat_error, code="invalid_category")
+            return tool_failure("skill_manage", cat_error, code="invalid_category")
 
         content_error = validate_skill_content(content, expected_name=name, require_template=True)
         if content_error:
-            return tool_error("skill_manage", content_error, code="invalid_content")
+            return tool_failure("skill_manage", content_error, code="invalid_content")
 
         skill_dir = SKILLS_DIR / category / name if category else SKILLS_DIR / name
         skill_file = skill_dir / "SKILL.md"
 
         if skill_file.exists():
-            return tool_error("skill_manage", f"Skill already exists: {name}", code="already_exists")
+            return tool_failure("skill_manage", f"Skill already exists: {name}", code="already_exists")
 
         skill_dir.mkdir(parents=True, exist_ok=True)
         skill_file.write_text(content, encoding="utf-8")
 
-        return tool_ok(
+        return tool_success(
             "skill_manage",
             data={"name": name, "path": str(skill_file)},
             message="Skill created.",
@@ -139,30 +140,30 @@ def skill_manage(
     if action == "patch":
         skill_dir = find_skill_dir(name)
         if not skill_dir:
-            return tool_error("skill_manage", f"Skill not found: {name}", code="not_found")
+            return tool_failure("skill_manage", f"Skill not found: {name}", code="not_found")
 
         target = skill_dir / "SKILL.md"
         if file_path:
             resolved = resolve_support_file(skill_dir, file_path)
             if isinstance(resolved, str):
-                return tool_error("skill_manage", resolved, code="invalid_path")
+                return tool_failure("skill_manage", resolved, code="invalid_path")
             target = resolved
 
         if not target.exists():
-            return tool_error("skill_manage", f"File not found: {file_path or 'SKILL.md'}", code="not_found")
+            return tool_failure("skill_manage", f"File not found: {file_path or 'SKILL.md'}", code="not_found")
 
         if not old_string:
-            return tool_error("skill_manage", "old_string is required for patch.", code="invalid_input")
+            return tool_failure("skill_manage", "old_string is required for patch.", code="invalid_input")
         if new_string is None:
-            return tool_error("skill_manage", "new_string is required for patch.", code="invalid_input")
+            return tool_failure("skill_manage", "new_string is required for patch.", code="invalid_input")
 
         text = target.read_text(encoding="utf-8")
         count = text.count(old_string)
 
         if count == 0:
-            return tool_error("skill_manage", "old_string not found.", code="not_found")
+            return tool_failure("skill_manage", "old_string not found.", code="not_found")
         if count > 1 and not replace_all:
-            return tool_error(
+            return tool_failure(
                 "skill_manage",
                 "old_string occurs multiple times. Provide more context or set replace_all=true.",
                 code="ambiguous_match",
@@ -173,11 +174,11 @@ def skill_manage(
         if target.name == "SKILL.md":
             content_error = validate_skill_content(updated)
             if content_error:
-                return tool_error("skill_manage", content_error, code="invalid_content")
+                return tool_failure("skill_manage", content_error, code="invalid_content")
 
         target.write_text(updated, encoding="utf-8")
 
-        return tool_ok(
+        return tool_success(
             "skill_manage",
             data={
                 "name": name,
@@ -190,16 +191,16 @@ def skill_manage(
     if action == "write_file":
         skill_dir = find_skill_dir(name)
         if not skill_dir:
-            return tool_error("skill_manage", f"Skill not found: {name}", code="not_found")
+            return tool_failure("skill_manage", f"Skill not found: {name}", code="not_found")
 
         resolved = resolve_support_file(skill_dir, file_path)
         if isinstance(resolved, str):
-            return tool_error("skill_manage", resolved, code="invalid_path")
+            return tool_failure("skill_manage", resolved, code="invalid_path")
 
         resolved.parent.mkdir(parents=True, exist_ok=True)
         resolved.write_text(file_content or "", encoding="utf-8")
 
-        return tool_ok(
+        return tool_success(
             "skill_manage",
             data={"name": name, "file": str(resolved)},
             message="Supporting file written.",
@@ -208,18 +209,18 @@ def skill_manage(
     if action == "remove_file":
         skill_dir = find_skill_dir(name)
         if not skill_dir:
-            return tool_error("skill_manage", f"Skill not found: {name}", code="not_found")
+            return tool_failure("skill_manage", f"Skill not found: {name}", code="not_found")
 
         resolved = resolve_support_file(skill_dir, file_path)
         if isinstance(resolved, str):
-            return tool_error("skill_manage", resolved, code="invalid_path")
+            return tool_failure("skill_manage", resolved, code="invalid_path")
 
         if not resolved.exists() or not resolved.is_file():
-            return tool_error("skill_manage", "File not found.", code="not_found")
+            return tool_failure("skill_manage", "File not found.", code="not_found")
 
         resolved.unlink()
 
-        return tool_ok(
+        return tool_success(
             "skill_manage",
             data={"name": name, "file": str(resolved)},
             message="Supporting file removed.",
@@ -228,23 +229,23 @@ def skill_manage(
     if action == "edit":
         skill_dir = find_skill_dir(name)
         if not skill_dir:
-            return tool_error("skill_manage", f"Skill not found: {name}", code="not_found")
+            return tool_failure("skill_manage", f"Skill not found: {name}", code="not_found")
 
         if not is_local_skill_dir(skill_dir):
-            return tool_error("skill_manage", "Only local skills can be edited.", code="access_denied")
+            return tool_failure("skill_manage", "Only local skills can be edited.", code="access_denied")
 
         content_error = validate_skill_content(content)
         if content_error:
-            return tool_error("skill_manage", content_error, code="invalid_content")
+            return tool_failure("skill_manage", content_error, code="invalid_content")
 
         skill_file = skill_dir / "SKILL.md"
         if not skill_file.exists():
-            return tool_error("skill_manage", "SKILL.md not found.", code="not_found")
+            return tool_failure("skill_manage", "SKILL.md not found.", code="not_found")
 
         old_content = skill_file.read_text(encoding="utf-8")
         skill_file.write_text(content, encoding="utf-8")
 
-        return tool_ok(
+        return tool_success(
             "skill_manage",
             data={
                 "name": name,
@@ -258,24 +259,24 @@ def skill_manage(
     if action == "delete":
         skill_dir = find_skill_dir(name)
         if not skill_dir:
-            return tool_error("skill_manage", f"Skill not found: {name}", code="not_found")
+            return tool_failure("skill_manage", f"Skill not found: {name}", code="not_found")
 
         if not is_local_skill_dir(skill_dir):
-            return tool_error("skill_manage", "Only local skills can be deleted.", code="access_denied")
+            return tool_failure("skill_manage", "Only local skills can be deleted.", code="access_denied")
 
         skill_file = skill_dir / "SKILL.md"
         if not skill_file.exists():
-            return tool_error("skill_manage", "SKILL.md not found.", code="not_found")
+            return tool_failure("skill_manage", "SKILL.md not found.", code="not_found")
 
         shutil.rmtree(skill_dir)
 
-        return tool_ok(
+        return tool_success(
             "skill_manage",
             data={"name": name, "deleted_dir": str(skill_dir)},
             message="Skill deleted.",
         )
 
-    return tool_error(
+    return tool_failure(
         "skill_manage",
         "Unknown action. Use create, patch, edit, delete, write_file, or remove_file.",
         code="invalid_action",

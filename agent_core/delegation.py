@@ -2,6 +2,7 @@ import logging
 
 from langchain.agents import create_agent
 from langchain.tools import tool
+from langchain_core.messages import ToolMessage
 
 from agent_core.message_utils import extract_text_from_agent_response
 from agent_core.model_config import SMALL_MODEL
@@ -18,6 +19,7 @@ from agent_tools.public.files import file_info, list_directory, patch, read_file
 from agent_tools.public.skills import skill_manage, skill_view, skills_list
 from agent_tools.public.terminal import process, terminal
 from agent_tools.public.web import web_fetch, web_search
+from agent_tools.shared.tool_result import tool_failure, tool_success
 
 logger = logging.getLogger(__name__)
 
@@ -57,7 +59,7 @@ def build_task_subagent():
 
 
 @tool("task", args_schema=TaskInput)
-def task(prompt: str, description: str = "subtask") -> str:
+def task(prompt: str, description: str = "subtask") -> ToolMessage:
     """Spawn a fresh-context read-only subagent for analysis, exploration, or review."""
     logger.info("task: starting delegated subagent task=%s", description)
     try:
@@ -80,9 +82,24 @@ def task(prompt: str, description: str = "subtask") -> str:
         summary = extract_text_from_agent_response(response)
         if not summary:
             logger.warning("task: delegated subagent task=%s returned no final text", description)
-            return "(no summary)"
+            return tool_success(
+                "task",
+                message="Subagent completed with no summary.",
+                data={"description": description, "summary": "(no summary)"},
+                content="Subagent completed with no summary.",
+            )
         logger.info("task: completed delegated subagent task=%s", description)
-        return summary
+        return tool_success(
+            "task",
+            message="Subagent task completed.",
+            data={"description": description, "summary": summary},
+            content=f"Subagent task completed: {description}.",
+        )
     except Exception as exc:
         logger.exception("task: delegated subagent task=%s failed: %s", description, exc)
-        return f"Subagent task failed ({description}): {exc}"
+        return tool_failure(
+            "task",
+            f"Subagent task failed ({description}): {exc}",
+            code="subagent_failed",
+            data={"description": description},
+        )

@@ -4,11 +4,12 @@ from typing import Any
 
 import dotenv
 from langchain.tools import tool
+from langchain_core.messages import ToolMessage
 from pydantic import BaseModel, Field
 from tinyfish import TinyFish
 
 from agent_tools.shared.common import truncate
-from agent_tools.shared.tool_output import tool_error, tool_ok
+from agent_tools.shared.tool_result import tool_failure, tool_success
 
 dotenv.load_dotenv()
 
@@ -38,13 +39,13 @@ def _safe_get(obj: Any, field: str, default: Any = "") -> Any:
 
 
 @tool("web_search", args_schema=SearchInput)
-def web_search(query: str, limit: int = 5) -> str:
+def web_search(query: str, limit: int = 5) -> ToolMessage:
     """Search the web with TinyFish. Returns JSON: status, message, data."""
     try:
         client = _get_client()
         response = client.search.query(query=query)
     except Exception as exc:
-        return tool_error("web_search", f"web_search failed: {exc}")
+        return tool_failure("web_search", f"web_search failed: {exc}")
     raw_results = (_safe_get(response, "results", []) or [])[: max(limit, 0)]
     results = []
     for item in raw_results:
@@ -55,21 +56,22 @@ def web_search(query: str, limit: int = 5) -> str:
                 "snippet": _safe_get(item, "snippet", "") or _safe_get(item, "text", ""),
             }
         )
-    return tool_ok(
+    return tool_success(
         "web_search",
         data={"query": query, "results": results, "total": len(results)},
         message="Search completed.",
+        content=f"Search completed with {len(results)} result(s).",
     )
 
 
 @tool("web_fetch", args_schema=FetchInput)
-def web_fetch(urls: list[str], max_chars_per_url: int = 4000) -> str:
+def web_fetch(urls: list[str], max_chars_per_url: int = 4000) -> ToolMessage:
     """Fetch page contents with TinyFish. Returns JSON: status, message, data."""
     try:
         client = _get_client()
         response = client.fetch.get_contents(urls=urls)
     except Exception as exc:
-        return tool_error("web_fetch", f"web_fetch failed: {exc}")
+        return tool_failure("web_fetch", f"web_fetch failed: {exc}")
     raw_results = _safe_get(response, "results", []) or []
     results = []
     for item in raw_results:
@@ -82,8 +84,9 @@ def web_fetch(urls: list[str], max_chars_per_url: int = 4000) -> str:
                 "truncated": len(text) > max(max_chars_per_url, 0),
             }
         )
-    return tool_ok(
+    return tool_success(
         "web_fetch",
         data={"urls": urls, "results": results, "total": len(results)},
         message="Fetch completed.",
+        content=f"Fetched {len(results)} URL(s).",
     )
