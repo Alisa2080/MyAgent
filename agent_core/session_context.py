@@ -99,5 +99,8 @@ def _thread_id_from_config(runtime: Any | None) -> str | None:
 
 
 def _tool_call_id_from_runtime(runtime: Any | None) -> str | None:
-    value = getattr(runtime, "tool_call_id", None)
+    try:
+        value = getattr(runtime, "tool_call_id", None)
+    except Exception:
+        return None
     return str(value) if value else None

@@ -39,6 +39,20 @@ def test_runtime_execution_info_thread_id_is_used():
     assert hermes_task_id_from_runtime(runtime) == hermes_task_id_from_thread_id("thread-from-runtime")
 
 
+def test_runtime_task_id_ignores_raising_tool_call_id_property():
+    class RuntimeWithRaisingToolCallId:
+        execution_info = SimpleNamespace(thread_id="thread-from-runtime")
+
+        @property
+        def tool_call_id(self):
+            raise RuntimeError("tool call id unavailable")
+
+    runtime = RuntimeWithRaisingToolCallId()
+
+    assert hermes_task_id_from_runtime(runtime) == hermes_task_id_from_thread_id("thread-from-runtime")
+    assert RuntimeContext.from_runtime(runtime).tool_call_id is None
+
+
 def test_runtime_config_thread_id_is_fallback_when_execution_info_missing():
     runtime = SimpleNamespace(
         execution_info=None,
