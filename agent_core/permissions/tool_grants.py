@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import threading
 from dataclasses import dataclass
+from typing import Any
 
+from agent_core.permissions.approvals import make_args_digest
 from agent_core.permissions.models import RiskTag
 
 
@@ -11,6 +13,7 @@ class ToolPolicyGrant:
     task_id: str
     tool_call_id: str
     tool_name: str
+    args_digest: str
     risk_tags: tuple[RiskTag, ...]
     allow_network_once: bool = False
 
@@ -32,6 +35,7 @@ def consume_tool_policy_grant(
     task_id: str,
     tool_call_id: str | None,
     tool_name: str,
+    args: dict[str, Any] | None = None,
     required_risk_tags: tuple[RiskTag, ...] = (),
 ) -> ToolPolicyGrant | None:
     if not tool_call_id:
@@ -42,6 +46,8 @@ def consume_tool_policy_grant(
         if grant is None:
             return None
         if grant.tool_name != tool_name:
+            return None
+        if args is not None and grant.args_digest != make_args_digest(args):
             return None
         if not set(required_risk_tags).issubset(set(grant.risk_tags)):
             return None

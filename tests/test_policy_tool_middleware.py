@@ -9,7 +9,11 @@ from agent_core.permissions.approvals import (
     make_args_digest,
     record_approval,
 )
-from agent_core.permissions.tool_grants import consume_tool_policy_grant
+from agent_core.permissions.tool_grants import (
+    ToolPolicyGrant,
+    consume_tool_policy_grant,
+    record_tool_policy_grant,
+)
 from agent_core.permissions.tool_policy import canonical_tool_args
 from agent_core.policy_tool_middleware import PolicyToolMiddleware
 from agent_core.session_context import hermes_task_id_from_thread_id
@@ -44,12 +48,15 @@ def test_policy_tool_middleware_passes_allow_to_handler():
 
     assert result.content == '{"ok": true}'
     assert calls == [request]
+    args = canonical_tool_args("terminal", {"command": "pwd"})
     grant = consume_tool_policy_grant(
         task_id=hermes_task_id_from_thread_id("policy-thread"),
         tool_call_id="call-policy",
         tool_name="terminal",
+        args=args,
     )
     assert grant is not None
+    assert grant.args_digest == make_args_digest(args)
     assert grant.risk_tags == ()
 
 
@@ -126,10 +133,44 @@ def test_policy_tool_middleware_consumes_approval_and_records_grant():
         task_id=hermes_task_id_from_thread_id("thread-network"),
         tool_call_id="call-network",
         tool_name="terminal",
+        args=args,
     )
     assert grant is not None
+    assert grant.args_digest == make_args_digest(args)
     assert grant.allow_network_once is True
     assert grant.risk_tags == ("network_access",)
+
+
+def test_tool_policy_grant_args_digest_mismatch_does_not_consume():
+    task_id = hermes_task_id_from_thread_id("thread-digest")
+    grant = ToolPolicyGrant(
+        task_id=task_id,
+        tool_call_id="call-digest",
+        tool_name="write_file",
+        args_digest=make_args_digest({"path": "a.txt"}),
+        risk_tags=(),
+    )
+    record_tool_policy_grant(grant)
+
+    assert (
+        consume_tool_policy_grant(
+            task_id=task_id,
+            tool_call_id="call-digest",
+            tool_name="write_file",
+            args={"path": "b.txt"},
+        )
+        is None
+    )
+
+    assert (
+        consume_tool_policy_grant(
+            task_id=task_id,
+            tool_call_id="call-digest",
+            tool_name="write_file",
+            args={"path": "a.txt"},
+        )
+        == grant
+    )
 
 
 def test_policy_tool_middleware_ignores_unsupported_tool():

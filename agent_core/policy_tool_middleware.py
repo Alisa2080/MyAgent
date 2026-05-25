@@ -8,7 +8,7 @@ from langchain_core.messages import ToolMessage
 from langgraph.types import Command
 
 from agent_core.permissions import tool_policy
-from agent_core.permissions.approvals import consume_approval
+from agent_core.permissions.approvals import consume_approval, make_args_digest
 from agent_core.permissions.tool_grants import ToolPolicyGrant, record_tool_policy_grant
 from agent_core.session_context import RuntimeContext
 from agent_tools.shared.tool_output import tool_error
@@ -87,6 +87,7 @@ class PolicyToolMiddleware(AgentMiddleware):
                         task_id=runtime_context.task_id,
                         tool_call_id=tool_call_id,
                         tool_name=tool_name,
+                        args_digest=make_args_digest(policy_args),
                         risk_tags=decision.risk_tags,
                     )
                 )
@@ -117,6 +118,7 @@ class PolicyToolMiddleware(AgentMiddleware):
                 task_id=runtime_context.task_id,
                 tool_call_id=tool_call_id or "",
                 tool_name=tool_name,
+                args_digest=make_args_digest(policy_args),
                 risk_tags=approval.risk_tags,
                 allow_network_once=approval.allow_network_once,
             )
