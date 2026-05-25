@@ -3,6 +3,16 @@ from types import SimpleNamespace
 
 import pytest
 
+from langchain_core.messages import ToolMessage
+
+
+def _artifact(result: ToolMessage) -> dict:
+    assert isinstance(result, ToolMessage)
+    assert result.content
+    assert result.artifact is not None
+    assert isinstance(result.artifact, dict)
+    return result.artifact
+
 
 def _runtime(thread_id: str = "file-policy-thread", tool_call_id: str | None = None):
     return SimpleNamespace(
@@ -31,10 +41,12 @@ def test_workspace_write_does_not_need_approval(monkeypatch):
 
     monkeypatch.setattr(files, "write_file_tool", fake_write_file_tool)
 
-    raw = files._write_file_impl("notes.txt", "hello", runtime=_runtime())
-    payload = json.loads(raw)
+    result = files._write_file_impl("notes.txt", "hello", runtime=_runtime())
+    payload = _artifact(result)
 
+    assert result.status == "success"
     assert payload["ok"] is True
+    assert payload["data"]["path"] == "notes.txt"
     assert calls[0]["path"] == "notes.txt"
 
 
@@ -60,9 +72,10 @@ def test_workspace_escape_without_approval_is_denied(monkeypatch, tmp_path):
         ),
     )
 
-    raw = files._write_file_impl(target, "hello", runtime=_runtime())
-    payload = json.loads(raw)
+    result = files._write_file_impl(target, "hello", runtime=_runtime())
+    payload = _artifact(result)
 
+    assert result.status == "error"
     assert payload["ok"] is False
     assert payload["error"]["code"] == "approval_required"
     assert calls == []
@@ -115,23 +128,25 @@ def test_workspace_escape_with_approval_passes_approved_roots(monkeypatch, tmp_p
         lambda *_args, **_kwargs: str(tmp_path),
     )
 
-    raw = files._write_file_impl(
+    result = files._write_file_impl(
         target,
         "hello",
         runtime=_runtime(tool_call_id="call-escape"),
     )
-    payload = json.loads(raw)
+    payload = _artifact(result)
 
+    assert result.status == "success"
     assert payload["ok"] is True
     assert calls[0]["approved_write_roots"] == [str(tmp_path)]
 
-    second_raw = files._write_file_impl(
+    second_result = files._write_file_impl(
         target,
         "hello",
         runtime=_runtime(tool_call_id="call-escape"),
     )
-    second_payload = json.loads(second_raw)
+    second_payload = _artifact(second_result)
 
+    assert second_result.status == "error"
     assert second_payload["ok"] is False
     assert second_payload["error"]["code"] == "approval_required"
     assert len(calls) == 1
@@ -148,9 +163,10 @@ def test_sensitive_path_is_denied_without_consuming_approval(monkeypatch):
 
     monkeypatch.setattr(files, "write_file_tool", fake_write_file_tool)
 
-    raw = files._write_file_impl("/root/.ssh/id_rsa", "secret", runtime=_runtime())
-    payload = json.loads(raw)
+    result = files._write_file_impl("/root/.ssh/id_rsa", "secret", runtime=_runtime())
+    payload = _artifact(result)
 
+    assert result.status == "error"
     assert payload["ok"] is False
     assert payload["error"]["code"] == "policy_denied"
     assert calls == []
@@ -170,9 +186,10 @@ def test_backend_realpath_resolution_failure_is_denied_by_policy(monkeypatch):
     )
     monkeypatch.setattr(files, "_get_file_ops", lambda task_id: FakeOps())
 
-    raw = files._write_file_impl("/workspace/notes.txt", "hello", runtime=_runtime())
-    payload = json.loads(raw)
+    result = files._write_file_impl("/workspace/notes.txt", "hello", runtime=_runtime())
+    payload = _artifact(result)
 
+    assert result.status == "error"
     assert payload["ok"] is False
     assert payload["error"]["code"] == "policy_denied"
     assert payload["data"]["resolved_path"].endswith("unresolved_write_path__")
@@ -200,15 +217,16 @@ def test_patch_workspace_escape_without_approval_is_denied(monkeypatch, tmp_path
         lambda **kwargs: calls.append(kwargs) or json.dumps({"status": "success"}),
     )
 
-    raw = files._patch_impl(
+    result = files._patch_impl(
         mode="replace",
         path=target,
         old_string="old",
         new_string="new",
         runtime=_runtime(),
     )
-    payload = json.loads(raw)
+    payload = _artifact(result)
 
+    assert result.status == "error"
     assert payload["ok"] is False
     assert payload["error"]["code"] == "approval_required"
     assert calls == []
@@ -267,27 +285,29 @@ def test_patch_workspace_escape_with_approval_passes_approved_roots(monkeypatch,
         lambda **kwargs: calls.append(kwargs) or json.dumps({"status": "success"}),
     )
 
-    raw = files._patch_impl(
+    result = files._patch_impl(
         mode="replace",
         path=target,
         old_string="old",
         new_string="new",
         runtime=_runtime(tool_call_id="call-patch"),
     )
-    payload = json.loads(raw)
+    payload = _artifact(result)
 
+    assert result.status == "success"
     assert payload["ok"] is True
     assert calls[0]["approved_write_roots"] == [str(tmp_path)]
 
-    second_raw = files._patch_impl(
+    second_result = files._patch_impl(
         mode="replace",
         path=target,
         old_string="old",
         new_string="new",
         runtime=_runtime(tool_call_id="call-patch"),
     )
-    second_payload = json.loads(second_raw)
+    second_payload = _artifact(second_result)
 
+    assert second_result.status == "error"
     assert second_payload["ok"] is False
     assert second_payload["error"]["code"] == "approval_required"
     assert len(calls) == 1

@@ -1,6 +1,16 @@
 import json
 from types import SimpleNamespace
 
+from langchain_core.messages import ToolMessage
+
+
+def _artifact(result: ToolMessage) -> dict:
+    assert isinstance(result, ToolMessage)
+    assert result.content
+    assert result.artifact is not None
+    assert isinstance(result.artifact, dict)
+    return result.artifact
+
 
 class FakeEnv:
     def __init__(self, cwd, env_type, configured_cwd=None):
@@ -41,7 +51,12 @@ def _invoke_toolnode(tool, tool_name, args, thread_id):
         config={"configurable": {"thread_id": thread_id}},
     )
 
-    return json.loads(result["messages"][-1].content)
+    tool_message = result["messages"][-1]
+    assert isinstance(tool_message, ToolMessage)
+    payload = tool_message.artifact
+    assert tool_message.content
+    assert "{" not in tool_message.content[:1]
+    return payload
 
 
 def test_file_tool_schemas_do_not_expose_task_id():
@@ -92,9 +107,10 @@ def test_read_file_injects_runtime_thread_as_task_id(monkeypatch):
         config={"configurable": {"thread_id": "ignored-config-thread"}},
     )
 
-    raw = file_tools._read_file_impl(path="README.md", offset=1, limit=20, runtime=runtime)
-    payload = json.loads(raw)
+    result = file_tools._read_file_impl(path="README.md", offset=1, limit=20, runtime=runtime)
+    payload = _artifact(result)
 
+    assert result.status == "success"
     assert payload["ok"] is True
     assert "task_id" not in payload.get("meta", {})
     assert calls[0]["path"] == "README.md"
@@ -143,9 +159,10 @@ def test_file_tool_impl_falls_back_to_default_task_id_without_runtime(monkeypatc
 
     monkeypatch.setattr(file_tools, "read_file_tool", fake_read_file_tool)
 
-    raw = file_tools._read_file_impl(path="README.md", offset=1, limit=5, runtime=None)
-    payload = json.loads(raw)
+    result = file_tools._read_file_impl(path="README.md", offset=1, limit=5, runtime=None)
+    payload = _artifact(result)
 
+    assert result.status == "success"
     assert payload["ok"] is True
     assert calls[0]["task_id"] == "default"
 
@@ -176,9 +193,10 @@ def test_read_file_rejects_live_cwd_outside_workspace(monkeypatch, tmp_path):
     )
     monkeypatch.setattr(file_tools, "read_file_tool", fake_read_file_tool)
 
-    raw = file_tools._read_file_impl(path="leak.txt", offset=1, limit=20, runtime=runtime)
-    payload = json.loads(raw)
+    result = file_tools._read_file_impl(path="leak.txt", offset=1, limit=20, runtime=runtime)
+    payload = _artifact(result)
 
+    assert result.status == "error"
     assert payload["ok"] is False
     assert payload["error"]["code"] == "invalid_path"
     assert calls == []
@@ -199,9 +217,10 @@ def test_write_file_injects_runtime_thread_as_task_id(monkeypatch):
 
     runtime = SimpleNamespace(execution_info=SimpleNamespace(thread_id="file-write-thread"))
 
-    raw = file_tools._write_file_impl(path="notes.txt", content="hello", runtime=runtime)
-    payload = json.loads(raw)
+    result = file_tools._write_file_impl(path="notes.txt", content="hello", runtime=runtime)
+    payload = _artifact(result)
 
+    assert result.status == "success"
     assert payload["ok"] is True
     assert "task_id" not in payload.get("meta", {})
     assert calls[0]["path"] == "notes.txt"
@@ -240,9 +259,10 @@ def test_write_file_rejects_live_cwd_outside_workspace(monkeypatch, tmp_path):
     )
     monkeypatch.setattr(file_tools, "write_file_tool", fake_write_file_tool)
 
-    raw = file_tools._write_file_impl(path="leak.txt", content="leak", runtime=runtime)
-    payload = json.loads(raw)
+    result = file_tools._write_file_impl(path="leak.txt", content="leak", runtime=runtime)
+    payload = _artifact(result)
 
+    assert result.status == "error"
     assert payload["ok"] is False
     assert payload["error"]["code"] == "approval_required"
     assert calls == []
@@ -288,9 +308,10 @@ def test_write_file_denies_local_backend_configured_cwd_outside_workspace(
         lambda **kwargs: calls.append(kwargs) or json.dumps({"bytes_written": 4}),
     )
 
-    raw = file_tools._write_file_impl(path="leak.txt", content="leak", runtime=runtime)
-    payload = json.loads(raw)
+    result = file_tools._write_file_impl(path="leak.txt", content="leak", runtime=runtime)
+    payload = _artifact(result)
 
+    assert result.status == "error"
     assert payload["ok"] is False
     assert payload["error"]["code"] == "approval_required"
     assert calls == []
@@ -329,9 +350,10 @@ def test_write_file_allows_live_cwd_inside_workspace_and_forwards_original_path(
     )
     monkeypatch.setattr(file_tools, "write_file_tool", fake_write_file_tool)
 
-    raw = file_tools._write_file_impl(path="notes.txt", content="hello", runtime=runtime)
-    payload = json.loads(raw)
+    result = file_tools._write_file_impl(path="notes.txt", content="hello", runtime=runtime)
+    payload = _artifact(result)
 
+    assert result.status == "success"
     assert payload["ok"] is True
     assert resolve_calls == [("notes.txt", expected_task_id)]
     assert calls == [
@@ -384,9 +406,10 @@ def test_write_file_allows_docker_workspace_resolved_path_and_forwards_original_
     monkeypatch.setattr(file_tools, "write_file_tool", fake_write_file_tool)
     monkeypatch.setattr(file_tools, "_get_file_ops", lambda task_id: FakeFileOps())
 
-    raw = file_tools._write_file_impl(path="notes.txt", content="hello", runtime=runtime)
-    payload = json.loads(raw)
+    result = file_tools._write_file_impl(path="notes.txt", content="hello", runtime=runtime)
+    payload = _artifact(result)
 
+    assert result.status == "success"
     assert payload["ok"] is True
     assert resolve_calls == [("notes.txt", expected_task_id)]
     assert calls == [
@@ -424,13 +447,14 @@ def test_write_file_allows_active_ssh_cwd_path_and_forwards_original_path(
     monkeypatch.setattr(file_tools, "write_file_tool", fake_write_file_tool)
     monkeypatch.setattr(file_tools, "_get_file_ops", lambda task_id: FakeFileOps())
 
-    raw = file_tools._write_file_impl(
+    result = file_tools._write_file_impl(
         path="/home/remote/project/notes.txt",
         content="hello",
         runtime=runtime,
     )
-    payload = json.loads(raw)
+    payload = _artifact(result)
 
+    assert result.status == "success"
     assert payload["ok"] is True
     assert calls == [
         {
@@ -467,13 +491,14 @@ def test_write_file_rejects_ssh_absolute_path_outside_active_cwd(monkeypatch):
 
     monkeypatch.setattr(file_tools, "_get_file_ops", lambda task_id: FakeFileOps())
 
-    raw = file_tools._write_file_impl(
+    result = file_tools._write_file_impl(
         path="/home/remote/other/leak.txt",
         content="leak",
         runtime=runtime,
     )
-    payload = json.loads(raw)
+    payload = _artifact(result)
 
+    assert result.status == "error"
     assert payload["ok"] is False
     assert payload["error"]["code"] == "approval_required"
     assert calls == []
@@ -513,9 +538,10 @@ def test_read_file_allows_docker_workspace_resolved_path_and_forwards_original_p
     )
     monkeypatch.setattr(file_tools, "read_file_tool", fake_read_file_tool)
 
-    raw = file_tools._read_file_impl(path="notes.txt", offset=1, limit=20, runtime=runtime)
-    payload = json.loads(raw)
+    result = file_tools._read_file_impl(path="notes.txt", offset=1, limit=20, runtime=runtime)
+    payload = _artifact(result)
 
+    assert result.status == "success"
     assert payload["ok"] is True
     assert resolve_calls == [("notes.txt", expected_task_id)]
     assert calls == [
@@ -546,14 +572,15 @@ def test_read_file_allows_singularity_active_cwd_path(monkeypatch):
 
     monkeypatch.setattr(file_tools, "read_file_tool", fake_read_file_tool)
 
-    raw = file_tools._read_file_impl(
+    result = file_tools._read_file_impl(
         path="/analysis/project/notes.txt",
         offset=1,
         limit=20,
         runtime=runtime,
     )
-    payload = json.loads(raw)
+    payload = _artifact(result)
 
+    assert result.status == "success"
     assert payload["ok"] is True
     assert calls == [
         {
@@ -597,14 +624,15 @@ def test_read_file_rejects_docker_skill_cache_path(monkeypatch):
         lambda **kwargs: calls.append(kwargs) or json.dumps({"content": "blocked\n"}),
     )
 
-    raw = file_tools._read_file_impl(
+    result = file_tools._read_file_impl(
         path="skills/.hub/index-cache/prompt.md",
         offset=1,
         limit=20,
         runtime=runtime,
     )
-    payload = json.loads(raw)
+    payload = _artifact(result)
 
+    assert result.status == "error"
     assert payload["ok"] is False
     assert payload["error"]["code"] == "access_denied"
     assert calls == []
@@ -650,9 +678,10 @@ def test_list_directory_uses_active_docker_backend_not_host_safe_path(monkeypatc
     )
     monkeypatch.setattr(file_tools, "_get_file_ops", lambda task_id: FakeFileOps(), raising=False)
 
-    raw = file_tools._list_directory_impl(path=".", recursive=False, include_hidden=False, limit=10, runtime=runtime)
-    payload = json.loads(raw)
+    result = file_tools._list_directory_impl(path=".", recursive=False, include_hidden=False, limit=10, runtime=runtime)
+    payload = _artifact(result)
 
+    assert result.status == "success"
     assert payload["ok"] is True
     assert payload["data"] == {
         "path": ".",
@@ -702,9 +731,10 @@ def test_file_info_uses_active_ssh_backend_not_host_path_info(monkeypatch):
     )
     monkeypatch.setattr(file_tools, "_get_file_ops", lambda task_id: FakeFileOps(), raising=False)
 
-    raw = file_tools._file_info_impl(path="notes.txt", runtime=runtime)
-    payload = json.loads(raw)
+    result = file_tools._file_info_impl(path="notes.txt", runtime=runtime)
+    payload = _artifact(result)
 
+    assert result.status == "success"
     assert payload["ok"] is True
     assert payload["data"]["path"] == "/home/remote/project/notes.txt"
     assert payload["data"]["type"] == "file"
@@ -730,9 +760,10 @@ def test_list_directory_rejects_ssh_path_outside_active_cwd_without_backend_exec
     )
     monkeypatch.setattr(file_tools, "_get_file_ops", lambda task_id: calls.append(task_id), raising=False)
 
-    raw = file_tools._list_directory_impl(path="/etc", recursive=False, include_hidden=False, limit=10, runtime=runtime)
-    payload = json.loads(raw)
+    result = file_tools._list_directory_impl(path="/etc", recursive=False, include_hidden=False, limit=10, runtime=runtime)
+    payload = _artifact(result)
 
+    assert result.status == "error"
     assert payload["ok"] is False
     assert payload["error"]["code"] == "invalid_path"
     assert calls == []
@@ -780,7 +811,7 @@ def test_search_files_injects_runtime_thread_as_task_id(monkeypatch):
 
     runtime = SimpleNamespace(execution_info=SimpleNamespace(thread_id="file-search-thread"))
 
-    raw = file_tools._search_files_impl(
+    result = file_tools._search_files_impl(
         pattern="TODO",
         target="content",
         path=".",
@@ -791,8 +822,9 @@ def test_search_files_injects_runtime_thread_as_task_id(monkeypatch):
         context=0,
         runtime=runtime,
     )
-    payload = json.loads(raw)
+    payload = _artifact(result)
 
+    assert result.status == "success"
     assert payload["ok"] is True
     assert "task_id" not in payload.get("meta", {})
     assert calls[0]["pattern"] == "TODO"
@@ -830,7 +862,7 @@ def test_search_files_rejects_internal_skill_cache_path(monkeypatch):
         lambda **kwargs: calls.append(kwargs) or json.dumps({"matches": []}),
     )
 
-    raw = file_tools._search_files_impl(
+    result = file_tools._search_files_impl(
         pattern="system",
         target="content",
         path="skills/.hub/index-cache",
@@ -841,8 +873,9 @@ def test_search_files_rejects_internal_skill_cache_path(monkeypatch):
         context=0,
         runtime=runtime,
     )
-    payload = json.loads(raw)
+    payload = _artifact(result)
 
+    assert result.status == "error"
     assert payload["ok"] is False
     assert payload["error"]["code"] == "access_denied"
     assert calls == []
@@ -905,7 +938,7 @@ def test_patch_injects_runtime_thread_as_task_id(monkeypatch):
 
     runtime = SimpleNamespace(execution_info=SimpleNamespace(thread_id="file-patch-thread"))
 
-    raw = file_tools._patch_impl(
+    result = file_tools._patch_impl(
         mode="replace",
         path="notes.txt",
         old_string="old",
@@ -914,8 +947,9 @@ def test_patch_injects_runtime_thread_as_task_id(monkeypatch):
         patch=None,
         runtime=runtime,
     )
-    payload = json.loads(raw)
+    payload = _artifact(result)
 
+    assert result.status == "success"
     assert payload["ok"] is True
     assert "task_id" not in payload.get("meta", {})
     assert calls[0]["mode"] == "replace"
@@ -969,9 +1003,10 @@ def test_patch_move_file_rejects_live_cwd_outside_workspace_source(
     )
     monkeypatch.setattr(file_tools, "patch_tool", fake_patch_tool)
 
-    raw = file_tools._patch_impl(mode="patch", patch=patch_content, runtime=runtime)
-    payload = json.loads(raw)
+    result = file_tools._patch_impl(mode="patch", patch=patch_content, runtime=runtime)
+    payload = _artifact(result)
 
+    assert result.status == "error"
     assert payload["ok"] is False
     assert payload["error"]["code"] == "approval_required"
     assert calls == []
@@ -1023,9 +1058,10 @@ def test_patch_move_file_rejects_live_cwd_outside_workspace_destination(
     )
     monkeypatch.setattr(file_tools, "patch_tool", fake_patch_tool)
 
-    raw = file_tools._patch_impl(mode="patch", patch=patch_content, runtime=runtime)
-    payload = json.loads(raw)
+    result = file_tools._patch_impl(mode="patch", patch=patch_content, runtime=runtime)
+    payload = _artifact(result)
 
+    assert result.status == "error"
     assert payload["ok"] is False
     assert payload["error"]["code"] == "approval_required"
     assert calls == []

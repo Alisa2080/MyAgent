@@ -4,6 +4,15 @@ from pathlib import Path
 import pytest
 
 from agent_tools.file_toolkit import file_tools
+from langchain_core.messages import ToolMessage
+
+
+def _artifact(result: ToolMessage) -> dict:
+    assert isinstance(result, ToolMessage)
+    assert result.content
+    assert result.artifact is not None
+    assert isinstance(result.artifact, dict)
+    return result.artifact
 
 
 class FakeEnv:
@@ -351,9 +360,11 @@ def test_write_file_uses_middleware_grant_for_review_path(monkeypatch):
         lambda **kwargs: calls.append(kwargs) or json.dumps({"success": True, "message": "File written."}),
     )
 
-    raw = files._write_file_impl(path="/tmp/out.txt", content="ok", runtime=runtime)
+    result = files._write_file_impl(path="/tmp/out.txt", content="ok", runtime=runtime)
+    payload = _artifact(result)
 
-    assert json.loads(raw)["ok"] is True
+    assert result.status == "success"
+    assert payload["ok"] is True
     assert calls[0]["approved_write_roots"] == ["/tmp/approved"]
 
 
@@ -401,9 +412,11 @@ def test_write_file_consumes_middleware_grant_for_allow_path(monkeypatch):
         lambda **kwargs: json.dumps({"success": True, "message": "File written."}),
     )
 
-    raw = files._write_file_impl(path="/workspace/out.txt", content="ok", runtime=runtime)
+    result = files._write_file_impl(path="/workspace/out.txt", content="ok", runtime=runtime)
+    payload = _artifact(result)
 
-    assert json.loads(raw)["ok"] is True
+    assert result.status == "success"
+    assert payload["ok"] is True
     assert (
         consume_tool_policy_grant(
             task_id=task_id,
@@ -473,15 +486,17 @@ def test_patch_uses_middleware_grant_for_review_path(monkeypatch):
         lambda **kwargs: calls.append(kwargs) or json.dumps({"success": True, "message": "Patch applied."}),
     )
 
-    raw = files._patch_impl(
+    result = files._patch_impl(
         mode="replace",
         path="/tmp/out.txt",
         old_string="old",
         new_string="new",
         runtime=runtime,
     )
+    payload = _artifact(result)
 
-    assert json.loads(raw)["ok"] is True
+    assert result.status == "success"
+    assert payload["ok"] is True
     assert calls[0]["approved_write_roots"] == ["/tmp/approved"]
 
 
@@ -538,15 +553,17 @@ def test_patch_consumes_middleware_grant_for_allow_path(monkeypatch):
         lambda **kwargs: json.dumps({"success": True, "message": "Patch applied."}),
     )
 
-    raw = files._patch_impl(
+    result = files._patch_impl(
         mode="replace",
         path="/workspace/out.txt",
         old_string="old",
         new_string="new",
         runtime=runtime,
     )
+    payload = _artifact(result)
 
-    assert json.loads(raw)["ok"] is True
+    assert result.status == "success"
+    assert payload["ok"] is True
     assert (
         consume_tool_policy_grant(
             task_id=task_id,
@@ -622,11 +639,11 @@ def test_patch_review_requires_union_of_risk_tags(monkeypatch):
         )
     )
 
-    raw = files._patch_impl(mode="patch", patch="ignored", runtime=runtime)
-
-    payload = json.loads(raw)
-    assert payload["ok"] is False
-    assert payload["error"]["code"] == "approval_required"
+    first_result = files._patch_impl(mode="patch", patch="ignored", runtime=runtime)
+    first_payload = _artifact(first_result)
+    assert first_result.status == "error"
+    assert first_payload["ok"] is False
+    assert first_payload["error"]["code"] == "approval_required"
     assert calls == []
 
     record_tool_policy_grant(
@@ -639,9 +656,11 @@ def test_patch_review_requires_union_of_risk_tags(monkeypatch):
         )
     )
 
-    raw = files._patch_impl(mode="patch", patch="ignored", runtime=runtime)
+    second_result = files._patch_impl(mode="patch", patch="ignored", runtime=runtime)
+    second_payload = _artifact(second_result)
 
-    assert json.loads(raw)["ok"] is True
+    assert second_result.status == "success"
+    assert second_payload["ok"] is True
     assert calls[0]["approved_write_roots"] == ["/tmp/a-root", "/tmp/b-root"]
 
 

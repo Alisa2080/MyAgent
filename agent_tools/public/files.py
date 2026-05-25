@@ -32,7 +32,12 @@ from agent_tools.file_toolkit.file_tools import (
 )
 from agent_tools.file_toolkit.patch_parser import parse_v4a_patch
 from agent_tools.shared.common import DEFAULT_EXCLUDE_DIRS, path_info, relative_path
-from agent_tools.shared.tool_output import tool_error, tool_ok
+from agent_tools.shared.tool_result import (
+    ToolMessage,
+    from_legacy_json,
+    tool_failure,
+    tool_success,
+)
 
 
 class ListDirectoryInput(BaseModel):
@@ -83,57 +88,40 @@ class FileInfoInput(BaseModel):
     path: str = Field(description="Path to the file or directory to inspect.")
 
 
-def _extract_meta(payload: dict, *keys: str) -> dict:
-    meta: dict = {}
-
-    warning = payload.pop("_warning", None)
-    if warning:
-        meta["warnings"] = warning if isinstance(warning, list) else [warning]
-
-    hint = payload.pop("_hint", None)
-    if hint:
-        meta["hint"] = hint
-
-    for key in keys:
-        if key in payload:
-            meta[key] = payload.pop(key)
-
-    return meta
-
-
 def _wrap_file_tool_result(
     tool_name: str,
     raw: str,
     *,
     success_message: str,
     meta_keys: tuple[str, ...] = (),
-) -> str:
-    try:
-        payload = json.loads(raw)
-    except json.JSONDecodeError:
-        return tool_error(
-            tool_name,
-            "Tool returned invalid JSON.",
-            code="invalid_response",
-            meta={"raw": raw},
-        )
+    runtime: ToolRuntime | None = None,
+    summary=None,
+) -> ToolMessage:
+    return from_legacy_json(
+        tool_name,
+        raw,
+        success_message=success_message,
+        meta_keys=meta_keys,
+        runtime=runtime,
+        summary=summary,
+    )
 
-    message = payload.pop("message", success_message)
-    payload.pop("status", None)
-    payload.pop("success", None)
-    meta = _extract_meta(payload, *meta_keys)
-    error_message = payload.pop("error", None)
 
-    if error_message:
-        return tool_error(
-            tool_name,
-            str(error_message),
-            code="tool_error",
-            data=payload or None,
-            meta=meta,
-        )
+def _read_file_summary(payload: dict, meta: dict) -> str:
+    path = payload.get("path") or "file"
+    start = payload.get("start_line") or payload.get("offset")
+    end = payload.get("end_line")
+    if start and end:
+        return f"Read {path} lines {start}-{end}."
+    return f"Read {path}."
 
-    return tool_ok(tool_name, data=payload or None, message=message, meta=meta)
+
+def _search_files_summary(payload: dict, meta: dict) -> str:
+    total = payload.get("total") or payload.get("match_count") or payload.get("count")
+    if total is not None:
+        suffix = " Output was truncated." if meta.get("truncated") else ""
+        return f"Search completed with {total} result(s).{suffix}"
+    return "Search completed."
 
 
 def _runtime_context(runtime: ToolRuntime | None) -> RuntimeContext:
@@ -362,13 +350,24 @@ def _list_directory_backend(
     include_hidden: bool,
     limit: int,
     task_id: str,
-) -> str:
+    runtime: ToolRuntime | None = None,
+) -> ToolMessage:
     file_ops = _get_file_ops(task_id)
     quoted = file_ops._escape_shell_arg(resolved_path)
     if file_ops._exec(f"if [ ! -e {quoted} ]; then exit 1; fi", timeout=10).exit_code != 0:
-        return tool_error("list_directory", f"Directory not found: {path}", code="not_found")
+        return tool_failure(
+            "list_directory",
+            f"Directory not found: {path}",
+            code="not_found",
+            runtime=runtime,
+        )
     if file_ops._exec(f"if [ ! -d {quoted} ]; then exit 1; fi", timeout=10).exit_code != 0:
-        return tool_error("list_directory", f"Not a directory: {path}", code="not_directory")
+        return tool_failure(
+            "list_directory",
+            f"Not a directory: {path}",
+            code="not_directory",
+            runtime=runtime,
+        )
 
     depth_arg = "" if recursive else "-maxdepth 1"
     result = file_ops._exec(
@@ -376,7 +375,12 @@ def _list_directory_backend(
         timeout=30,
     )
     if result.exit_code != 0:
-        return tool_error("list_directory", "Failed to list directory.", code="tool_error")
+        return tool_failure(
+            "list_directory",
+            "Failed to list directory.",
+            code="tool_error",
+            runtime=runtime,
+        )
 
     entries: list[tuple[str, str]] = []
     for line in result.stdout.splitlines():
@@ -393,11 +397,13 @@ def _list_directory_backend(
         for entry_type, entry_path in entries[:max_entries]
     ]
     total = len(entries)
-    return tool_ok(
+    return tool_success(
         "list_directory",
         data={"path": path, "entries": items, "total": total},
         message="Directory listed.",
         meta={"truncated": total > len(items)},
+        runtime=runtime,
+        content="Directory listed.",
     )
 
 
@@ -407,12 +413,12 @@ def _list_directory_impl(
     include_hidden: bool = False,
     limit: int = 200,
     runtime: ToolRuntime | None = None,
-) -> str:
+) -> ToolMessage:
     task_id = _task_id_from_runtime(runtime)
     read_error = _ensure_read_allowed_for_task(path, task_id)
     if read_error:
         code = "access_denied" if read_error.startswith("Access denied:") else "invalid_path"
-        return tool_error("list_directory", read_error, code=code)
+        return tool_failure("list_directory", read_error, code=code, runtime=runtime)
 
     ctx = get_backend_path_context(task_id)
     resolved_path = resolve_path_for_policy(path, task_id)
@@ -424,14 +430,25 @@ def _list_directory_impl(
             include_hidden=include_hidden,
             limit=limit,
             task_id=task_id,
+            runtime=runtime,
         )
 
     try:
         dir_path = safe_path(path)
         if not dir_path.exists():
-            return tool_error("list_directory", f"Directory not found: {path}", code="not_found")
+            return tool_failure(
+                "list_directory",
+                f"Directory not found: {path}",
+                code="not_found",
+                runtime=runtime,
+            )
         if not dir_path.is_dir():
-            return tool_error("list_directory", f"Not a directory: {path}", code="not_directory")
+            return tool_failure(
+                "list_directory",
+                f"Not a directory: {path}",
+                code="not_directory",
+                runtime=runtime,
+            )
 
         if recursive:
             entries = []
@@ -462,14 +479,16 @@ def _list_directory_impl(
             if len(items) < max_entries:
                 items.append({"type": "directory" if entry.is_dir() else "file", "path": relative_path(entry)})
 
-        return tool_ok(
+        return tool_success(
             "list_directory",
             data={"path": path, "entries": items, "total": total},
             message="Directory listed.",
             meta={"truncated": total > len(items)},
+            runtime=runtime,
+            content="Directory listed.",
         )
     except Exception as exc:
-        return tool_error("list_directory", str(exc))
+        return tool_failure("list_directory", str(exc), runtime=runtime)
 
 
 @tool("list_directory", args_schema=ListDirectoryInput)
@@ -479,7 +498,7 @@ def list_directory(
     recursive: bool = False,
     include_hidden: bool = False,
     limit: int = 200,
-) -> str:
+) -> ToolMessage:
     """List files and directories inside the workspace."""
     return _list_directory_impl(
         path=path,
@@ -490,28 +509,30 @@ def list_directory(
     )
 
 
-def _read_file_impl(path: str, offset: int = 1, limit: int = 500, runtime: ToolRuntime | None = None) -> str:
+def _read_file_impl(path: str, offset: int = 1, limit: int = 500, runtime: ToolRuntime | None = None) -> ToolMessage:
     task_id = _task_id_from_runtime(runtime)
     read_error = _ensure_read_allowed_for_task(path, task_id)
     if read_error:
         code = "access_denied" if read_error.startswith("Access denied:") else "invalid_path"
-        return tool_error("read_file", read_error, code=code)
+        return tool_failure("read_file", read_error, code=code, runtime=runtime)
     raw = read_file_tool(path=path, offset=offset, limit=limit, task_id=task_id)
     return _wrap_file_tool_result(
         "read_file",
         raw,
         success_message="File read.",
         meta_keys=("truncated",),
+        runtime=runtime,
+        summary=_read_file_summary,
     )
 
 
 @tool("read_file", args_schema=ReadFileInput)
-def read_file(path: str, runtime: ToolRuntime, offset: int = 1, limit: int = 500) -> str:
+def read_file(path: str, runtime: ToolRuntime, offset: int = 1, limit: int = 500) -> ToolMessage:
     """Read a text file with line numbers and pagination."""
     return _read_file_impl(path=path, offset=offset, limit=limit, runtime=runtime)
 
 
-def _write_file_impl(path: str, content: str, runtime: ToolRuntime | None = None) -> str:
+def _write_file_impl(path: str, content: str, runtime: ToolRuntime | None = None) -> ToolMessage:
     task_id = _task_id_from_runtime(runtime)
     resolved_path = _resolved_write_path_for_policy(path, task_id)
     decision = file_policy.classify_file_write(path, task_id=task_id, resolved_path=resolved_path)
@@ -525,21 +546,22 @@ def _write_file_impl(path: str, content: str, runtime: ToolRuntime | None = None
         resolved_path=resolved_path,
     )
     if isinstance(approved_roots, str):
-        return tool_error(
+        return tool_failure(
             "write_file",
             approved_roots,
             code=_file_policy_error_code(decision),
             data=decision.data,
+            runtime=runtime,
         )
     kwargs = {"path": path, "content": content, "task_id": task_id}
     if approved_roots:
         kwargs["approved_write_roots"] = approved_roots
     raw = write_file_tool(**kwargs)
-    return _wrap_file_tool_result("write_file", raw, success_message="File written.")
+    return _wrap_file_tool_result("write_file", raw, success_message="File written.", runtime=runtime)
 
 
 @tool("write_file", args_schema=WriteFileInput)
-def write_file(path: str, content: str, runtime: ToolRuntime) -> str:
+def write_file(path: str, content: str, runtime: ToolRuntime) -> ToolMessage:
     """Write complete content to a workspace file, replacing existing content."""
     return _write_file_impl(path=path, content=content, runtime=runtime)
 
@@ -552,14 +574,14 @@ def _patch_impl(
     replace_all: bool = False,
     patch: str | None = None,
     runtime: ToolRuntime | None = None,
-) -> str:
+) -> ToolMessage:
     task_id = _task_id_from_runtime(runtime)
     if mode == "replace":
         if not path:
-            return tool_error("patch", "path is required for replace mode.", code="invalid_input")
+            return tool_failure("patch", "path is required for replace mode.", code="invalid_input", runtime=runtime)
     paths_to_classify, parse_error = _patch_paths_to_classify(mode, path, patch)
     if parse_error:
-        return tool_error("patch", f"Failed to parse patch: {parse_error}", code="invalid_input")
+        return tool_failure("patch", f"Failed to parse patch: {parse_error}", code="invalid_input", runtime=runtime)
 
     resolved_paths = [
         _resolved_write_path_for_policy(path_to_classify, task_id)
@@ -571,11 +593,12 @@ def _patch_impl(
     ]
     denied = next((decision for decision in decisions if decision.outcome == "deny"), None)
     if denied is not None:
-        return tool_error(
+        return tool_failure(
             "patch",
             denied.human_message,
             code="policy_denied",
             data=denied.data,
+            runtime=runtime,
         )
 
     approval_args = patch_policy_args(
@@ -606,11 +629,12 @@ def _patch_impl(
             args=approval_args,
             required_risk_tags=review_risk_tags,
         ) is None:
-            return tool_error(
+            return tool_failure(
                 "patch",
                 "Approval required before patching outside the workspace.",
                 code="approval_required",
                 data=review.data,
+                runtime=runtime,
             )
         approved_roots = _unique_items(
             [
@@ -648,7 +672,7 @@ def _patch_impl(
     if approved_roots:
         kwargs["approved_write_roots"] = approved_roots
     raw = patch_tool(**kwargs)
-    return _wrap_file_tool_result("patch", raw, success_message="Patch applied.")
+    return _wrap_file_tool_result("patch", raw, success_message="Patch applied.", runtime=runtime)
 
 
 @tool("patch", args_schema=PatchInput)
@@ -660,7 +684,7 @@ def patch(
     new_string: str | None = None,
     replace_all: bool = False,
     patch: str | None = None,
-) -> str:
+) -> ToolMessage:
     """Apply targeted file edits. Prefer replace mode for small edits."""
     return _patch_impl(
         mode=mode,
@@ -683,12 +707,12 @@ def _search_files_impl(
     output_mode: str = "content",
     context: int = 0,
     runtime: ToolRuntime | None = None,
-) -> str:
+) -> ToolMessage:
     task_id = _task_id_from_runtime(runtime)
     read_error = _ensure_read_allowed_for_task(path, task_id)
     if read_error:
         code = "access_denied" if read_error.startswith("Access denied:") else "invalid_path"
-        return tool_error("search_files", read_error, code=code)
+        return tool_failure("search_files", read_error, code=code, runtime=runtime)
     raw = search_tool(
         pattern=pattern,
         target=target,
@@ -705,6 +729,8 @@ def _search_files_impl(
         raw,
         success_message="Search completed.",
         meta_keys=("truncated",),
+        runtime=runtime,
+        summary=_search_files_summary,
     )
 
 
@@ -719,7 +745,7 @@ def search_files(
     offset: int = 0,
     output_mode: str = "content",
     context: int = 0,
-) -> str:
+) -> ToolMessage:
     """Search workspace file contents or find files by name."""
     return _search_files_impl(
         pattern=pattern,
@@ -734,23 +760,41 @@ def search_files(
     )
 
 
-def _file_info_backend(path: str, resolved_path: str, *, task_id: str) -> str:
+def _file_info_backend(path: str, resolved_path: str, *, task_id: str, runtime: ToolRuntime | None = None) -> ToolMessage:
     file_ops = _get_file_ops(task_id)
     quoted = file_ops._escape_shell_arg(resolved_path)
     if file_ops._exec(f"if [ ! -e {quoted} ]; then exit 1; fi", timeout=10).exit_code != 0:
-        return tool_error("file_info", f"Path not found: {path}", code="not_found", data={"path": path})
+        return tool_failure(
+            "file_info",
+            f"Path not found: {path}",
+            code="not_found",
+            data={"path": path},
+            runtime=runtime,
+        )
 
     result = file_ops._exec(
         f"stat -c '%n\\t%F\\t%s\\t%Y\\t%Z' {quoted}",
         timeout=10,
     )
     if result.exit_code != 0 or not result.stdout.strip():
-        return tool_error("file_info", "Failed to inspect path.", code="tool_error", data={"path": path})
+        return tool_failure(
+            "file_info",
+            "Failed to inspect path.",
+            code="tool_error",
+            data={"path": path},
+            runtime=runtime,
+        )
 
     stat_line = result.stdout.splitlines()[0]
     parts = stat_line.split("\t", 4)
     if len(parts) != 5:
-        return tool_error("file_info", "Unexpected stat output.", code="tool_error", data={"path": path})
+        return tool_failure(
+            "file_info",
+            "Unexpected stat output.",
+            code="tool_error",
+            data={"path": path},
+            runtime=runtime,
+        )
 
     backend_path, type_text, size_text, modified, created = parts
     info = {
@@ -770,31 +814,49 @@ def _file_info_backend(path: str, resolved_path: str, *, task_id: str) -> str:
                 info["entries"] = int(entries_result.stdout.strip() or "0")
             except ValueError:
                 info["entries"] = 0
-    return tool_ok("file_info", data=info, message="Path inspected.")
+    return tool_success(
+        "file_info",
+        data=info,
+        message="Path inspected.",
+        runtime=runtime,
+        content=f"Inspected {path}.",
+    )
 
 
-def _file_info_impl(path: str, runtime: ToolRuntime | None = None) -> str:
+def _file_info_impl(path: str, runtime: ToolRuntime | None = None) -> ToolMessage:
     task_id = _task_id_from_runtime(runtime)
     read_error = _ensure_read_allowed_for_task(path, task_id)
     if read_error:
         code = "access_denied" if read_error.startswith("Access denied:") else "invalid_path"
-        return tool_error("file_info", read_error, code=code, data={"path": path})
+        return tool_failure("file_info", read_error, code=code, data={"path": path}, runtime=runtime)
 
     ctx = get_backend_path_context(task_id)
     resolved_path = resolve_path_for_policy(path, task_id)
     if ctx.env_type != "local":
-        return _file_info_backend(path, resolved_path, task_id=task_id)
+        return _file_info_backend(path, resolved_path, task_id=task_id, runtime=runtime)
 
     try:
         target = safe_path(path)
         if not target.exists():
-            return tool_error("file_info", f"Path not found: {path}", code="not_found", data={"path": path})
-        return tool_ok("file_info", data=path_info(target), message="Path inspected.")
+            return tool_failure(
+                "file_info",
+                f"Path not found: {path}",
+                code="not_found",
+                data={"path": path},
+                runtime=runtime,
+            )
+        return tool_success(
+            "file_info",
+            data=path_info(target),
+            message="Path inspected.",
+            runtime=runtime,
+            content=f"Inspected {path}.",
+        )
     except Exception as exc:
-        return tool_error("file_info", str(exc))
+        return tool_failure("file_info", str(exc), runtime=runtime)
 
 
 @tool("file_info", args_schema=FileInfoInput)
-def file_info(path: str, runtime: ToolRuntime) -> str:
+def file_info(path: str, runtime: ToolRuntime) -> ToolMessage:
     """Return metadata for a workspace file or directory."""
     return _file_info_impl(path=path, runtime=runtime)
