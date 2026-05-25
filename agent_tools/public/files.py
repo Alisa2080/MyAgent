@@ -578,20 +578,20 @@ def _patch_impl(
             data=denied.data,
         )
 
+    approval_args = patch_policy_args(
+        {
+            "mode": mode,
+            "path": path,
+            "old_string": old_string,
+            "new_string": new_string,
+            "replace_all": replace_all,
+            "patch": patch,
+        }
+    )
     approved_roots: list[str] = []
     review = next((decision for decision in decisions if decision.outcome == "review"), None)
     if review is not None:
         review_risk_tags = _review_risk_tags(decisions)
-        approval_args = patch_policy_args(
-            {
-                "mode": mode,
-                "path": path,
-                "old_string": old_string,
-                "new_string": new_string,
-                "replace_all": replace_all,
-                "patch": patch,
-            }
-        )
         grant = consume_tool_policy_grant(
             task_id=task_id,
             tool_call_id=_tool_call_id_from_runtime(runtime),
@@ -627,6 +627,13 @@ def _patch_impl(
                 )
                 if decision.outcome == "review"
             ]
+        )
+    else:
+        consume_tool_policy_grant(
+            task_id=task_id,
+            tool_call_id=_tool_call_id_from_runtime(runtime),
+            tool_name="patch",
+            args=approval_args,
         )
 
     kwargs = {

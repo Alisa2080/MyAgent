@@ -485,6 +485,79 @@ def test_patch_uses_middleware_grant_for_review_path(monkeypatch):
     assert calls[0]["approved_write_roots"] == ["/tmp/approved"]
 
 
+def test_patch_consumes_middleware_grant_for_allow_path(monkeypatch):
+    import json
+    from types import SimpleNamespace
+
+    from agent_core.permissions.approvals import make_args_digest
+    from agent_core.permissions.tool_grants import (
+        ToolPolicyGrant,
+        consume_tool_policy_grant,
+        record_tool_policy_grant,
+    )
+    from agent_core.policy_tool_middleware import patch_policy_args
+    from agent_core.session_context import hermes_task_id_from_thread_id
+    from agent_tools.public import files
+
+    thread_id = "patch-allow-grant-thread"
+    tool_call_id = "call-patch-allow-grant"
+    runtime = SimpleNamespace(
+        execution_info=SimpleNamespace(thread_id=thread_id),
+        tool_call_id=tool_call_id,
+    )
+    task_id = hermes_task_id_from_thread_id(thread_id)
+    policy_args = patch_policy_args(
+        {
+            "mode": "replace",
+            "path": "/workspace/out.txt",
+            "old_string": "old",
+            "new_string": "new",
+            "replace_all": False,
+            "patch": None,
+        }
+    )
+
+    record_tool_policy_grant(
+        ToolPolicyGrant(
+            task_id=task_id,
+            tool_call_id=tool_call_id,
+            tool_name="patch",
+            args_digest=make_args_digest(policy_args),
+            risk_tags=(),
+        )
+    )
+
+    monkeypatch.setattr(
+        files.file_policy,
+        "classify_file_write",
+        lambda *args, **kwargs: files.PolicyDecision.allow("workspace_write"),
+    )
+    monkeypatch.setattr(
+        files,
+        "patch_tool",
+        lambda **kwargs: json.dumps({"success": True, "message": "Patch applied."}),
+    )
+
+    raw = files._patch_impl(
+        mode="replace",
+        path="/workspace/out.txt",
+        old_string="old",
+        new_string="new",
+        runtime=runtime,
+    )
+
+    assert json.loads(raw)["ok"] is True
+    assert (
+        consume_tool_policy_grant(
+            task_id=task_id,
+            tool_call_id=tool_call_id,
+            tool_name="patch",
+            args=policy_args,
+        )
+        is None
+    )
+
+
 def test_patch_review_requires_union_of_risk_tags(monkeypatch):
     import json
     from types import SimpleNamespace
