@@ -72,7 +72,8 @@ def test_session_history_returns_messages():
         assert isinstance(history, list)
 
 
-def test_session_export_creates_file():
+def test_session_export_empty_history_does_not_create_file():
+    """Empty history should not create a file."""
     with tempfile.TemporaryDirectory() as tmp:
         store = SessionStore(Path(tmp) / "cli.sqlite")
         session = Session(session_store=store, session_id="export-test")
@@ -80,6 +81,5 @@ def test_session_export_creates_file():
         export_path = Path(tmp) / "export.md"
         result = session.export_markdown(export_path)
         
-        assert export_path.exists()
-        assert "export.md" in result
-        assert "export-test" in export_path.read_text()
+        assert not export_path.exists()
+        assert "No messages" in result

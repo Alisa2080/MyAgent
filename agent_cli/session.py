@@ -36,14 +36,17 @@ class Session:
         session_id: str,
         model_name: str | None = None,
         session_store_for_checkpoints: Any = None,
+        workdir: str = ".",
     ):
         self.session_store = session_store
         self.session_id = session_id
         self.model_name = model_name
         self.session_store_for_checkpoints = session_store_for_checkpoints
-        self._record = session_store.create_session(
+        self.workdir = workdir
+        # Use get_or_create to avoid duplicate inserts
+        self._record = session_store.get_or_create_session(
             session_id=session_id,
-            workdir=".",
+            workdir=workdir,
             model=model_name,
         )
 
@@ -62,6 +65,13 @@ class Session:
         from pathlib import Path
 
         messages = self.history()
+        # Filter to user/assistant only
+        messages = [m for m in messages if _is_user_or_assistant(m)]
+        
+        # Don't create file for empty history
+        if not messages:
+            return "No messages to export."
+
         lines = [f"# Session: {self.session_id}", ""]
 
         for msg in messages:
@@ -125,9 +135,17 @@ def update_session_title(session: Session, title: str) -> str:
     return f"Session title set to: {title}\n"
 
 
+def _is_user_or_assistant(msg: dict[str, Any]) -> bool:
+    """Check if message is user or assistant role."""
+    role = msg.get("type", msg.get("role", ""))
+    return role in ("user", "human", "assistant", "ai")
+
+
 def render_history(session: Session, limit: int | None = None) -> str:
     """Render session history as formatted text."""
     messages = session.history(limit=limit)
+    # Filter to user/assistant only
+    messages = [m for m in messages if _is_user_or_assistant(m)]
     if not messages:
         return "No messages in session history.\n"
 

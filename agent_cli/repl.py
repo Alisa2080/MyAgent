@@ -64,6 +64,8 @@ class AgentCLI:
                 session_store=session_store,
                 session_id=session_id,
                 model_name=model_name,
+                session_store_for_checkpoints=checkpointer,
+                workdir=workdir,
             )
         else:
             self.session = None
@@ -94,6 +96,8 @@ class AgentCLI:
             session_store=self.session_store,
             session_id=self.session_id,
             model_name=self.model_name,
+            session_store_for_checkpoints=self.checkpointer,
+            workdir=self.workdir,
         )
         return self.session_id
 
@@ -173,6 +177,8 @@ class AgentCLI:
                 session_store=self.session_store,
                 session_id=self.session_id,
                 model_name=self.model_name,
+                session_store_for_checkpoints=self.checkpointer,
+                workdir=self.workdir,
             )
             return f"Started session: {record.session_id}"
         if command.name == "sessions":
@@ -189,6 +195,8 @@ class AgentCLI:
                 session_store=self.session_store,
                 session_id=self.session_id,
                 model_name=self.model_name,
+                session_store_for_checkpoints=self.checkpointer,
+                workdir=self.workdir,
             )
             return f"Resumed session: {record.session_id}"
         if command.name == "status":

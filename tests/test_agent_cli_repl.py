@@ -358,4 +358,5 @@ def test_run_repl_handles_export_command(monkeypatch, capsys, tmp_path):
 
     assert code == 0
     captured = capsys.readouterr()
-    assert "export.md" in captured.out or "Exported" in captured.out
+    # With empty history, should report "No messages"
+    assert "No messages" in captured.out or "export.md" in captured.out or "Exported" in captured.out

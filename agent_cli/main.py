@@ -33,6 +33,7 @@ def build_parser() -> argparse.ArgumentParser:
     ask.add_argument("--resume", default=None, help="Resume an existing session id.")
 
     subparsers.add_parser("sessions", help="List recent sessions.")
+    subparsers.add_parser("doctor", help="Run CLI health checks.")
     return parser
 
 
@@ -67,6 +68,13 @@ def main(argv: list[str] | None = None) -> int:
 
     if command == "sessions":
         print(format_sessions(store.list_sessions()))
+        return 0
+
+    if command == "doctor":
+        from agent_cli.doctor import render_doctor_output, run_health_checks
+        workdir = str(Path(args.workdir).expanduser().resolve()) if args.workdir else os.getcwd()
+        results = run_health_checks(workdir=workdir)
+        print(render_doctor_output(results))
         return 0
 
     resume_id = getattr(args, "resume", None)
