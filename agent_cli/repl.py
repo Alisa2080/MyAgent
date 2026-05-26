@@ -6,9 +6,16 @@ from collections.abc import Callable
 from typing import Any
 
 from agent_cli.commands import render_help, resolve_command
+from agent_cli.doctor import render_doctor_output, run_health_checks
 from agent_cli.interrupts import build_resume_value, extract_interrupt_requests, has_interrupt
 from agent_cli.rendering import format_interrupt_summary, format_sessions, latest_ai_text
-from agent_cli.session import Session, render_session_status, update_session_title
+from agent_cli.session import (
+    Session,
+    render_session_status,
+    update_session_title,
+    render_history,
+    export_to_markdown,
+)
 from agent_cli.session_store import SessionStore
 
 
@@ -152,6 +159,9 @@ class AgentCLI:
             return f"Unknown command: {parts[0] if parts else raw}"
         if command.name == "help":
             return render_help()
+        if command.name == "doctor":
+            results = run_health_checks(workdir=self.workdir)
+            return render_doctor_output(results)
         if command.name == "new":
             record = self.session_store.create_session(
                 workdir=self.workdir,
@@ -189,6 +199,25 @@ class AgentCLI:
             if self.session is None:
                 self.ensure_session()
             return update_session_title(self.session, arg)
+        if command.name == "history":
+            if self.session is None:
+                self.ensure_session()
+            parts = raw.strip().split(maxsplit=1)
+            limit = None
+            if len(parts) > 1:
+                try:
+                    limit = int(parts[1])
+                except ValueError:
+                    pass
+            return render_history(self.session, limit=limit)
+        if command.name == "export":
+            if self.session is None:
+                self.ensure_session()
+            parts = raw.strip().split(maxsplit=1)
+            if len(parts) < 2:
+                return "Usage: /export <path.md>\n"
+            path = parts[1].strip()
+            return export_to_markdown(self.session, path)
         if command.name == "clear":
             os.system("cls" if os.name == "nt" else "clear")
             return None
