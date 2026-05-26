@@ -12,7 +12,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from agent_cli.interrupts import has_interrupt
+from langgraph.types import Command
+
+from agent_cli.interrupts import extract_interrupt_review_requests, has_interrupt
 from agent_cli.rendering import latest_ai_text
 
 
@@ -97,13 +99,14 @@ class BackgroundNotification:
 
 
 logger = logging.getLogger(__name__)
+_NO_RESUME_VALUE = object()
 
 
 @dataclass
 class _RuntimeTask:
     thread: threading.Thread
     approval_event: threading.Event
-    resume_value: Any | None = None
+    resume_value: Any = _NO_RESUME_VALUE
     interrupt_result: Any | None = None
 
 
@@ -165,6 +168,60 @@ class BackgroundTaskRegistry:
             runtime = self._runtime.get(task_id)
         if runtime is not None:
             runtime.thread.join(timeout)
+
+    def stop(self, task_id: str) -> BackgroundTaskRecord:
+        record = self.store.get_task(task_id)
+        if record is None:
+            raise ValueError(f"unknown background task: {task_id}")
+        if record.status in TERMINAL_TASK_STATUSES or record.status == "stopping":
+            return record
+
+        updated = self.store.request_stop(task_id)
+        self.stop_wait_interrupt(record.session_id)
+        with self._lock:
+            runtime = self._runtime.get(task_id)
+            if runtime is not None:
+                runtime.approval_event.set()
+        return updated
+
+    def wait_for_status(self, task_id: str, status: str, *, timeout: float) -> None:
+        deadline = datetime.now(timezone.utc).timestamp() + timeout
+        while datetime.now(timezone.utc).timestamp() < deadline:
+            record = self.store.get_task(task_id)
+            if record is not None and record.status == status:
+                return
+            threading.Event().wait(0.01)
+        record = self.store.get_task(task_id)
+        raise AssertionError(f"task {task_id} did not reach {status}; current={record}")
+
+    def approval_requests(self, task_id: str):
+        record = self.store.get_task(task_id)
+        if record is None:
+            raise ValueError(f"unknown background task: {task_id}")
+        if record.status != "waiting_approval":
+            raise ValueError(f"background task is not waiting for approval: {task_id}")
+        with self._lock:
+            runtime = self._runtime.get(task_id)
+            result = runtime.interrupt_result if runtime is not None else None
+        if result is None:
+            raise ValueError(f"background task is not waiting for approval: {task_id}")
+        return extract_interrupt_review_requests(result)
+
+    def approve(self, task_id: str, resume_value: Any) -> BackgroundTaskRecord:
+        record = self.store.get_task(task_id)
+        if record is None:
+            raise ValueError(f"unknown background task: {task_id}")
+        if record.status != "waiting_approval":
+            raise ValueError(f"background task is not waiting for approval: {task_id}")
+        with self._lock:
+            runtime = self._runtime.get(task_id)
+            if runtime is None:
+                raise ValueError(f"background task runtime is unavailable: {task_id}")
+            if runtime.resume_value is not _NO_RESUME_VALUE:
+                raise ValueError(f"background task approval was already submitted: {task_id}")
+            runtime.resume_value = resume_value
+            runtime.approval_event.set()
+        return record
 
     def drain_notifications(self) -> list[BackgroundNotification]:
         items: list[BackgroundNotification] = []
@@ -236,13 +293,61 @@ class BackgroundTaskRegistry:
         waiting = self.store.set_status(task_id, "waiting_approval")
         with self._lock:
             runtime = self._runtime.get(task_id)
-            if runtime is not None:
-                runtime.interrupt_result = result
+            if runtime is None:
+                return
+            runtime.interrupt_result = result
+            runtime.resume_value = _NO_RESUME_VALUE
         self._notify(
             kind="attention",
             record=waiting,
             message=f"waiting approval; run /approve {task_id}",
         )
+
+        while True:
+            if self._stop_requested(task_id):
+                stopped = self.store.set_status(task_id, "stopped", finished=True)
+                self._notify(kind="stopped", record=stopped, message="stopped")
+                return
+            with self._lock:
+                runtime = self._runtime.get(task_id)
+                resume_value = (
+                    runtime.resume_value if runtime is not None else _NO_RESUME_VALUE
+                )
+                approval_event = runtime.approval_event if runtime is not None else None
+            if resume_value is not _NO_RESUME_VALUE:
+                break
+            if approval_event is not None:
+                approval_event.wait(0.05)
+                approval_event.clear()
+
+        self.store.set_status(task_id, "running")
+        resumed = self.runner(
+            Command(resume=resume_value),
+            {"configurable": {"thread_id": waiting.session_id}},
+        )
+        if self._stop_requested(task_id):
+            stopped = self.store.set_status(task_id, "stopped", finished=True)
+            self._notify(kind="stopped", record=stopped, message="stopped")
+            return
+        if has_interrupt(resumed):
+            self._pause_for_approval(task_id, resumed)
+            return
+        while True:
+            steers = self.store.consume_pending_steers(task_id)
+            if not steers:
+                break
+            for steer in steers:
+                if self._stop_requested(task_id):
+                    stopped = self.store.set_status(task_id, "stopped", finished=True)
+                    self._notify(kind="stopped", record=stopped, message="stopped")
+                    return
+                resumed = self._invoke(waiting.session_id, steer.message)
+                if has_interrupt(resumed):
+                    self._pause_for_approval(task_id, resumed)
+                    return
+        preview = latest_ai_text(resumed) or "completed"
+        completed = self.store.mark_completed(task_id, result_preview=preview[:200])
+        self._notify(kind="done", record=completed, message=preview[:200])
 
 
 class BackgroundTaskStore:

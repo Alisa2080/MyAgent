@@ -1,6 +1,5 @@
 from pathlib import Path
-
-from pathlib import Path
+from threading import Event
 
 from agent_cli.background import BackgroundTaskRegistry, BackgroundTaskStore
 
@@ -144,3 +143,283 @@ def test_background_store_can_share_session_store_database(tmp_path: Path):
     )
 
     assert record.task_id == "bg_12345678"
+
+
+def test_background_registry_consumes_queued_steer(tmp_path: Path):
+    store = BackgroundTaskStore(tmp_path / "cli.sqlite")
+    calls = []
+
+    def runner(input_data, config):
+        calls.append(input_data["messages"][0]["content"])
+        if len(calls) == 1:
+            store.add_steer("bg_12345678", "second instruction")
+        return {"messages": [{"role": "assistant", "content": f"turn {len(calls)}"}]}
+
+    registry = BackgroundTaskRegistry(
+        store=store,
+        session_id_factory=lambda: "session-1",
+        title_factory=lambda prompt: "Task title",
+        runner=runner,
+    )
+    registry.new_task_id = lambda: "bg_12345678"
+
+    record = registry.start("first instruction")
+    registry.join(record.task_id, timeout=2)
+
+    assert calls == ["first instruction", "second instruction"]
+    assert store.get_task(record.task_id).status == "completed"
+
+
+def test_background_registry_stop_requests_interrupt_and_stops_after_turn(
+    tmp_path: Path,
+):
+    store = BackgroundTaskStore(tmp_path / "cli.sqlite")
+    interrupts = []
+
+    def runner(input_data, config):
+        registry.stop("bg_12345678")
+        return {"messages": [{"role": "assistant", "content": "done"}]}
+
+    registry = BackgroundTaskRegistry(
+        store=store,
+        session_id_factory=lambda: "session-1",
+        title_factory=lambda prompt: "Task title",
+        runner=runner,
+        stop_wait_interrupt=lambda session_id: interrupts.append(session_id),
+    )
+    registry.new_task_id = lambda: "bg_12345678"
+
+    record = registry.start("first instruction")
+    registry.join(record.task_id, timeout=2)
+
+    assert store.get_task(record.task_id).status == "stopped"
+    assert interrupts == ["session-1"]
+
+
+def test_background_registry_waits_for_approval_and_resumes(tmp_path: Path):
+    from langgraph.types import Command
+
+    store = BackgroundTaskStore(tmp_path / "cli.sqlite")
+    calls = []
+
+    def runner(input_data, config):
+        calls.append(input_data)
+        if len(calls) == 1:
+            return {
+                "__interrupt__": [
+                    {
+                        "value": {
+                            "action_requests": [
+                                {"name": "terminal", "args": {"command": "pwd"}}
+                            ],
+                            "review_configs": [{"description": "review"}],
+                        }
+                    }
+                ]
+            }
+        assert isinstance(input_data, Command)
+        assert input_data.resume == {"decisions": [{"type": "approve"}]}
+        return {"messages": [{"role": "assistant", "content": "approved done"}]}
+
+    registry = BackgroundTaskRegistry(
+        store=store,
+        session_id_factory=lambda: "session-1",
+        title_factory=lambda prompt: "Task title",
+        runner=runner,
+    )
+
+    record = registry.start("needs approval")
+    registry.wait_for_status(record.task_id, "waiting_approval", timeout=2)
+    assert store.get_task(record.task_id).status == "waiting_approval"
+
+    approval_requests = registry.approval_requests(record.task_id)
+    assert approval_requests[0].tool_name == "terminal"
+
+    registry.approve(record.task_id, {"decisions": [{"type": "approve"}]})
+    registry.join(record.task_id, timeout=2)
+
+    assert store.get_task(record.task_id).status == "completed"
+    assert store.get_task(record.task_id).last_result_preview == "approved done"
+
+
+def test_background_registry_allows_none_approval_resume(tmp_path: Path):
+    from langgraph.types import Command
+
+    store = BackgroundTaskStore(tmp_path / "cli.sqlite")
+    calls = []
+
+    def runner(input_data, config):
+        calls.append(input_data)
+        if len(calls) == 1:
+            return {
+                "__interrupt__": [
+                    {
+                        "value": {
+                            "action_requests": [
+                                {"name": "terminal", "args": {"command": "pwd"}}
+                            ],
+                            "review_configs": [{"description": "review"}],
+                        }
+                    }
+                ]
+            }
+        assert isinstance(input_data, Command)
+        assert input_data.resume is None
+        return {"messages": [{"role": "assistant", "content": "approved none"}]}
+
+    registry = BackgroundTaskRegistry(
+        store=store,
+        session_id_factory=lambda: "session-1",
+        title_factory=lambda prompt: "Task title",
+        runner=runner,
+    )
+
+    record = registry.start("needs approval")
+    registry.wait_for_status(record.task_id, "waiting_approval", timeout=2)
+    registry.approve(record.task_id, None)
+    registry.join(record.task_id, timeout=2)
+
+    assert store.get_task(record.task_id).status == "completed"
+    assert store.get_task(record.task_id).last_result_preview == "approved none"
+
+
+def test_background_registry_stop_during_approval_resume_stops_after_turn(
+    tmp_path: Path,
+):
+    from langgraph.types import Command
+
+    store = BackgroundTaskStore(tmp_path / "cli.sqlite")
+    resume_started = Event()
+    allow_resume = Event()
+
+    def runner(input_data, config):
+        if isinstance(input_data, Command):
+            resume_started.set()
+            allow_resume.wait(2)
+            return {"messages": [{"role": "assistant", "content": "resumed done"}]}
+        return {
+            "__interrupt__": [
+                {
+                    "value": {
+                        "action_requests": [
+                            {"name": "terminal", "args": {"command": "pwd"}}
+                        ],
+                        "review_configs": [{"description": "review"}],
+                    }
+                }
+            ]
+        }
+
+    registry = BackgroundTaskRegistry(
+        store=store,
+        session_id_factory=lambda: "session-1",
+        title_factory=lambda prompt: "Task title",
+        runner=runner,
+    )
+
+    record = registry.start("needs approval")
+    registry.wait_for_status(record.task_id, "waiting_approval", timeout=2)
+    registry.approve(record.task_id, {"decisions": [{"type": "approve"}]})
+    assert resume_started.wait(2)
+
+    registry.stop(record.task_id)
+    allow_resume.set()
+    registry.join(record.task_id, timeout=2)
+
+    stopped = store.get_task(record.task_id)
+    assert stopped.status == "stopped"
+    assert stopped.last_result_preview is None
+
+
+def test_background_registry_rejects_duplicate_approval(tmp_path: Path):
+    from langgraph.types import Command
+
+    store = BackgroundTaskStore(tmp_path / "cli.sqlite")
+    resume_started = Event()
+    allow_resume = Event()
+
+    def runner(input_data, config):
+        if isinstance(input_data, Command):
+            resume_started.set()
+            allow_resume.wait(2)
+            return {"messages": [{"role": "assistant", "content": "approved done"}]}
+        return {
+            "__interrupt__": [
+                {
+                    "value": {
+                        "action_requests": [
+                            {"name": "terminal", "args": {"command": "pwd"}}
+                        ],
+                        "review_configs": [{"description": "review"}],
+                    }
+                }
+            ]
+        }
+
+    registry = BackgroundTaskRegistry(
+        store=store,
+        session_id_factory=lambda: "session-1",
+        title_factory=lambda prompt: "Task title",
+        runner=runner,
+    )
+
+    record = registry.start("needs approval")
+    registry.wait_for_status(record.task_id, "waiting_approval", timeout=2)
+    registry.approve(record.task_id, {"decisions": [{"type": "approve"}]})
+
+    try:
+        registry.approve(record.task_id, {"decisions": [{"type": "reject"}]})
+    except ValueError as exc:
+        assert "already submitted" in str(exc)
+    else:
+        raise AssertionError("duplicate approval should fail")
+
+    assert resume_started.wait(2)
+    allow_resume.set()
+    registry.join(record.task_id, timeout=2)
+
+    assert store.get_task(record.task_id).last_result_preview == "approved done"
+
+
+def test_background_registry_rejects_stale_approval_requests_after_completion(
+    tmp_path: Path,
+):
+    from langgraph.types import Command
+
+    store = BackgroundTaskStore(tmp_path / "cli.sqlite")
+
+    def runner(input_data, config):
+        if isinstance(input_data, Command):
+            return {"messages": [{"role": "assistant", "content": "approved done"}]}
+        return {
+            "__interrupt__": [
+                {
+                    "value": {
+                        "action_requests": [
+                            {"name": "terminal", "args": {"command": "pwd"}}
+                        ],
+                        "review_configs": [{"description": "review"}],
+                    }
+                }
+            ]
+        }
+
+    registry = BackgroundTaskRegistry(
+        store=store,
+        session_id_factory=lambda: "session-1",
+        title_factory=lambda prompt: "Task title",
+        runner=runner,
+    )
+
+    record = registry.start("needs approval")
+    registry.wait_for_status(record.task_id, "waiting_approval", timeout=2)
+    registry.approve(record.task_id, {"decisions": [{"type": "approve"}]})
+    registry.join(record.task_id, timeout=2)
+
+    assert store.get_task(record.task_id).status == "completed"
+    try:
+        registry.approval_requests(record.task_id)
+    except ValueError as exc:
+        assert "not waiting for approval" in str(exc)
+    else:
+        raise AssertionError("stale approval requests should fail")
