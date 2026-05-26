@@ -3,7 +3,7 @@ from __future__ import annotations
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 
 class CheckpointDependencyError(RuntimeError):
@@ -68,3 +68,51 @@ def create_sqlite_checkpointer(db_path: str | Path) -> CheckpointerHandle:
         connection.close()
         raise
     return CheckpointerHandle(checkpointer=checkpointer, _connection=connection)
+
+
+def iter_checkpoints(checkpointer: Any, thread_id: str) -> Iterator[dict[str, Any]]:
+    """Iterate over checkpoints for a given thread."""
+    if checkpointer is None:
+        return
+    try:
+        if hasattr(checkpointer, "alist"):
+            aconfig = {"configurable": {"thread_id": thread_id}}
+            for state in checkpointer.alist(None, aconfig, limit=100):
+                yield state
+        elif hasattr(checkpointer, "get_list"):
+            for state in checkpointer.get_list(thread_id, limit=100):
+                yield state
+        elif hasattr(checkpointer, "list"):
+            for state in checkpointer.list(thread_id):
+                yield state
+    except Exception:
+        pass
+
+
+def checkpoint_to_messages(checkpoint: dict[str, Any]) -> list[dict[str, Any]]:
+    """Extract message list from a checkpoint."""
+    if checkpoint is None:
+        return []
+    if isinstance(checkpoint, dict):
+        if "channel_values" in checkpoint:
+            values = checkpoint["channel_values"]
+            if "messages" in values:
+                msgs = values["messages"]
+                if isinstance(msgs, list):
+                    return msgs
+        if "messages" in checkpoint:
+            msgs = checkpoint["messages"]
+            if isinstance(msgs, list):
+                return msgs
+    return []
+
+
+def extract_messages_from_checkpoints(
+    checkpointer: Any, thread_id: str
+) -> list[dict[str, Any]]:
+    """Extract all messages from all checkpoints for a thread."""
+    messages = []
+    for checkpoint in iter_checkpoints(checkpointer, thread_id):
+        msgs = checkpoint_to_messages(checkpoint)
+        messages.extend(msgs)
+    return messages
