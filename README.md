@@ -150,3 +150,31 @@ state elsewhere.
 
 Inside chat, use `/help` to list slash commands. The MVP supports basic
 approve/reject prompts for human-in-the-loop interrupts.
+
+## CLI Commands
+
+The Agent CLI supports these slash commands:
+
+### Session Commands
+- `/status` - Show current session status
+- `/title <name>` - Set session title
+- `/history [N]` - Show session history (optionally limit to N messages)
+- `/export <path.md>` - Export session history to Markdown file
+
+### Navigation Commands
+- `/new` - Start a new session
+- `/resume <session_id>` - Resume a previous session
+- `/sessions` - List recent sessions
+
+### Info Commands
+- `/help` - Show available commands
+- `/doctor` - Run health checks
+- `/skills` - List available skills
+- `/skill <name>` - Show skill details
+
+### Tab Completion
+Type `/` followed by a partial command to see completions:
+- Command names
+- Session IDs (for `/resume`)
+- Skill names (for `/skill`)
+- File paths (for `/export`)
