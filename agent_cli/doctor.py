@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import platform
 import sys
 from pathlib import Path
@@ -61,14 +62,49 @@ def check_workdir(workdir: str) -> tuple[bool, str]:
     return True, f"Workdir: {workdir}"
 
 
-def run_health_checks(workdir: str, tmp_path: Path | None = None) -> list[tuple[str, bool, str]]:
+def check_config(cli_home: Path) -> tuple[bool, str]:
+    """Check config.yaml is readable if present."""
+    config_path = cli_home / "config.yaml"
+    if not config_path.exists():
+        return True, "OK"
+    try:
+        config_path.read_text(encoding="utf-8")
+        return True, "OK"
+    except Exception as exc:
+        return False, f"FAIL"
+
+
+def check_dotenv(cli_home: Path, cwd: Path) -> tuple[bool, str]:
+    """Check dotenv files are readable if present."""
+    env_paths = [cli_home / ".env", cwd / ".env"]
+    existing = [str(p) for p in env_paths if p.exists()]
+    if not existing:
+        return True, "OK"
+    try:
+        for path in env_paths:
+            if path.exists():
+                path.read_text(encoding="utf-8")
+        return True, f"OK"
+    except Exception as exc:
+        return False, f"WARN"
+
+
+def run_health_checks(
+    workdir: str, tmp_path: Path | None = None, cli_home: Path | None = None
+) -> list[tuple[str, bool, str]]:
     """Run all health checks."""
+    if cli_home is None:
+        cli_home = Path.home()
+    cwd = Path.cwd()
+
     checks = [
         ("Python Version", check_python_version),
         ("Platform", check_platform),
         ("Dependencies", check_dependencies),
         ("Session Store", lambda: check_session_store(tmp_path)),
         ("Workdir", lambda: check_workdir(workdir)),
+        ("Config", lambda: check_config(cli_home)),
+        ("Dotenv", lambda: check_dotenv(cli_home, cwd)),
     ]
 
     results = []

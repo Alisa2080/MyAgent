@@ -206,3 +206,60 @@ def test_python_module_sessions_smoke(tmp_path):
 
     assert result.returncode == 0
     assert "No sessions found." in result.stdout
+
+
+def test_main_model_config_used_when_cli_model_missing(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CLI_HOME", str(tmp_path))
+    (tmp_path / "config.yaml").write_text("model:\n  name: config-model\n", encoding="utf-8")
+    created = []
+
+    class FakeCLI:
+        def __init__(self, **kwargs):
+            created.append(kwargs)
+
+        def run_repl(self):
+            return 0
+
+    import agent_cli.main as main_module
+
+    handle = type("Handle", (), {"checkpointer": "cp", "close": lambda self: None})()
+    monkeypatch.setattr(main_module, "AgentCLI", FakeCLI)
+    monkeypatch.setattr(main_module, "create_sqlite_checkpointer", lambda path: handle)
+
+    assert main_module.main(["chat"]) == 0
+    assert created[0]["model_name"] == "config-model"
+
+
+def test_main_cli_model_overrides_config_model(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CLI_HOME", str(tmp_path))
+    (tmp_path / "config.yaml").write_text("model:\n  name: config-model\n", encoding="utf-8")
+    created = []
+
+    class FakeCLI:
+        def __init__(self, **kwargs):
+            created.append(kwargs)
+
+        def run_repl(self):
+            return 0
+
+    import agent_cli.main as main_module
+
+    handle = type("Handle", (), {"checkpointer": "cp", "close": lambda self: None})()
+    monkeypatch.setattr(main_module, "AgentCLI", FakeCLI)
+    monkeypatch.setattr(main_module, "create_sqlite_checkpointer", lambda path: handle)
+
+    assert main_module.main(["--model", "cli-model", "chat"]) == 0
+    assert created[0]["model_name"] == "cli-model"
+
+
+def test_main_malformed_config_returns_code_2(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("AGENT_CLI_HOME", str(tmp_path))
+    (tmp_path / "config.yaml").write_text("model: [", encoding="utf-8")
+
+    import agent_cli.main as main_module
+
+    code = main_module.main(["sessions"])
+
+    captured = capsys.readouterr()
+    assert code == 2
+    assert "config.yaml" in captured.err

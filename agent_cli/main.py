@@ -11,6 +11,7 @@ except ModuleNotFoundError:
     dotenv = None
 
 from agent_cli.checkpoints import CheckpointDependencyError, create_sqlite_checkpointer
+from agent_cli.config import ConfigError, load_dotenv_files, settings_from_config
 from agent_cli.logging_config import setup_cli_logging
 from agent_cli.paths import ensure_db_parent
 from agent_cli.rendering import format_sessions
@@ -37,13 +38,9 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def load_dotenv() -> None:
-    if dotenv is None:
-        return
-    dotenv.load_dotenv(Path.cwd() / ".env")
-
-
-def make_cli(*, args: argparse.Namespace, store: SessionStore, checkpointer) -> AgentCLI:
+def make_cli(
+    *, args: argparse.Namespace, store: SessionStore, checkpointer, settings
+) -> AgentCLI:
     workdir = str(Path(args.workdir).expanduser().resolve()) if args.workdir else os.getcwd()
     return AgentCLI(
         session_store=store,
@@ -51,7 +48,8 @@ def make_cli(*, args: argparse.Namespace, store: SessionStore, checkpointer) -> 
         agent_factory=default_agent_factory,
         runner=default_runner,
         workdir=workdir,
-        model_name=args.model,
+        model_name=settings.model_name,
+        default_title=settings.default_title,
         session_id=getattr(args, "resume", None),
     )
 
@@ -61,9 +59,22 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     command = args.command or "chat"
-    load_dotenv()
 
     db_path = ensure_db_parent()
+    cli_home = db_path.parent
+
+    try:
+        settings = settings_from_config(
+            cli_home=cli_home,
+            profile=None,
+            cli_model=args.model,
+        )
+    except ConfigError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+
+    load_dotenv_files(cli_home=cli_home, project_root=Path.cwd(), dotenv_module=dotenv)
+
     store = SessionStore(db_path)
 
     if command == "sessions":
@@ -72,6 +83,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if command == "doctor":
         from agent_cli.doctor import render_doctor_output, run_health_checks
+
         workdir = str(Path(args.workdir).expanduser().resolve()) if args.workdir else os.getcwd()
         results = run_health_checks(workdir=workdir)
         print(render_doctor_output(results))
@@ -96,6 +108,7 @@ def main(argv: list[str] | None = None) -> int:
             args=args,
             store=store,
             checkpointer=checkpointer_handle.checkpointer,
+            settings=settings,
         )
 
         if command == "ask":
