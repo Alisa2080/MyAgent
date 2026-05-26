@@ -1,5 +1,65 @@
 from pathlib import Path
 
+from pathlib import Path
+
+from agent_cli.background import BackgroundTaskRegistry, BackgroundTaskStore
+
+
+def test_background_registry_runs_task_to_completion(tmp_path: Path):
+    store = BackgroundTaskStore(tmp_path / "cli.sqlite")
+    calls = []
+    sessions = []
+
+    def runner(input_data, config):
+        calls.append((input_data, config))
+        return {"messages": [{"role": "assistant", "content": "done"}]}
+
+    registry = BackgroundTaskRegistry(
+        store=store,
+        session_id_factory=lambda: "session-1",
+        session_record_creator=lambda session_id, title: sessions.append((session_id, title)),
+        title_factory=lambda prompt: "Task title",
+        runner=runner,
+    )
+
+    record = registry.start("Fix tests")
+    registry.join(record.task_id, timeout=2)
+
+    completed = store.get_task(record.task_id)
+    assert completed.status == "completed"
+    assert completed.last_result_preview == "done"
+    assert calls == [
+        (
+            {"messages": [{"role": "user", "content": "Fix tests"}]},
+            {"configurable": {"thread_id": "session-1"}},
+        )
+    ]
+    assert sessions == [("session-1", "Task title")]
+    assert registry.drain_notifications()[0].kind == "done"
+
+
+def test_background_registry_records_failure(tmp_path: Path):
+    store = BackgroundTaskStore(tmp_path / "cli.sqlite")
+
+    def runner(input_data, config):
+        raise RuntimeError("agent failed")
+
+    registry = BackgroundTaskRegistry(
+        store=store,
+        session_id_factory=lambda: "session-1",
+        title_factory=lambda prompt: "Task title",
+        runner=runner,
+    )
+
+    record = registry.start("Fix tests")
+    registry.join(record.task_id, timeout=2)
+
+    failed = store.get_task(record.task_id)
+    assert failed.status == "failed"
+    assert "agent failed" in failed.last_error
+    assert registry.drain_notifications()[0].kind == "failed"
+
+
 from agent_cli.background import BackgroundTaskStore
 
 

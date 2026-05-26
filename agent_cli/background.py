@@ -1,9 +1,19 @@
 from __future__ import annotations
 
+import logging
+import queue
 import sqlite3
+import threading
+import traceback
+import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
+
+from agent_cli.interrupts import has_interrupt
+from agent_cli.rendering import latest_ai_text
 
 
 TASK_STATUSES = {
@@ -84,6 +94,155 @@ class BackgroundNotification:
     session_id: str
     status: str
     message: str
+
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class _RuntimeTask:
+    thread: threading.Thread
+    approval_event: threading.Event
+    resume_value: Any | None = None
+    interrupt_result: Any | None = None
+
+
+class BackgroundTaskRegistry:
+    def __init__(
+        self,
+        *,
+        store: BackgroundTaskStore,
+        session_id_factory: Callable[[], str],
+        session_record_creator: Callable[[str, str], None] | None = None,
+        title_factory: Callable[[str], str],
+        runner: Callable[[Any, dict[str, Any]], Any],
+        stop_wait_interrupt: Callable[[str], Any] | None = None,
+    ):
+        self.store = store
+        self.session_id_factory = session_id_factory
+        self.session_record_creator = session_record_creator or (lambda session_id, title: None)
+        self.title_factory = title_factory
+        self.runner = runner
+        self.stop_wait_interrupt = stop_wait_interrupt or (lambda session_id: None)
+        self._lock = threading.RLock()
+        self._runtime: dict[str, _RuntimeTask] = {}
+        self._notifications: queue.Queue[BackgroundNotification] = queue.Queue()
+
+    @staticmethod
+    def new_task_id() -> str:
+        return f"bg_{uuid.uuid4().hex[:8]}"
+
+    def start(self, prompt: str) -> BackgroundTaskRecord:
+        if not prompt.strip():
+            raise ValueError("background prompt is required")
+        task_id = self.new_task_id()
+        session_id = self.session_id_factory()
+        title = self.title_factory(prompt)
+        self.session_record_creator(session_id, title)
+        record = self.store.create_task(
+            task_id=task_id,
+            session_id=session_id,
+            title=title,
+            prompt_preview=prompt[:200],
+        )
+        approval_event = threading.Event()
+        thread = threading.Thread(
+            target=self._worker,
+            args=(task_id, session_id, prompt),
+            name=f"agent-cli-{task_id}",
+            daemon=True,
+        )
+        with self._lock:
+            self._runtime[task_id] = _RuntimeTask(
+                thread=thread,
+                approval_event=approval_event,
+            )
+        thread.start()
+        return record
+
+    def join(self, task_id: str, *, timeout: float | None = None) -> None:
+        with self._lock:
+            runtime = self._runtime.get(task_id)
+        if runtime is not None:
+            runtime.thread.join(timeout)
+
+    def drain_notifications(self) -> list[BackgroundNotification]:
+        items: list[BackgroundNotification] = []
+        while True:
+            try:
+                items.append(self._notifications.get_nowait())
+            except queue.Empty:
+                return items
+
+    def _notify(self, *, kind: str, record: BackgroundTaskRecord, message: str) -> None:
+        self._notifications.put(
+            BackgroundNotification(
+                kind=kind,
+                task_id=record.task_id,
+                session_id=record.session_id,
+                status=record.status,
+                message=message,
+            )
+        )
+
+    def _invoke(self, session_id: str, message: str) -> Any:
+        return self.runner(
+            {"messages": [{"role": "user", "content": message}]},
+            {"configurable": {"thread_id": session_id}},
+        )
+
+    def _worker(self, task_id: str, session_id: str, prompt: str) -> None:
+        try:
+            self.store.mark_started(task_id)
+            result = self._invoke(session_id, prompt)
+            if has_interrupt(result):
+                self._pause_for_approval(task_id, result)
+                return
+            if self._stop_requested(task_id):
+                stopped = self.store.set_status(task_id, "stopped", finished=True)
+                self._notify(kind="stopped", record=stopped, message="stopped")
+                return
+            while True:
+                steers = self.store.consume_pending_steers(task_id)
+                if not steers:
+                    break
+                for steer in steers:
+                    if self._stop_requested(task_id):
+                        stopped = self.store.set_status(task_id, "stopped", finished=True)
+                        self._notify(kind="stopped", record=stopped, message="stopped")
+                        return
+                    result = self._invoke(session_id, steer.message)
+                    if has_interrupt(result):
+                        self._pause_for_approval(task_id, result)
+                        return
+            preview = latest_ai_text(result) or "completed"
+            completed = self.store.mark_completed(task_id, result_preview=preview[:200])
+            self._notify(kind="done", record=completed, message=preview[:200])
+        except Exception as exc:
+            logger.error("Background task %s failed:\n%s", task_id, traceback.format_exc())
+            failed = self.store.set_status(
+                task_id,
+                "failed",
+                last_error=f"{type(exc).__name__}: {exc}",
+                finished=True,
+            )
+            self._notify(kind="failed", record=failed, message=failed.last_error or "failed")
+
+    def _stop_requested(self, task_id: str) -> bool:
+        record = self.store.get_task(task_id)
+        return bool(record and record.cancel_requested)
+
+    def _pause_for_approval(self, task_id: str, result: Any) -> None:
+        waiting = self.store.set_status(task_id, "waiting_approval")
+        with self._lock:
+            runtime = self._runtime.get(task_id)
+            if runtime is not None:
+                runtime.interrupt_result = result
+        self._notify(
+            kind="attention",
+            record=waiting,
+            message=f"waiting approval; run /approve {task_id}",
+        )
 
 
 class BackgroundTaskStore:
