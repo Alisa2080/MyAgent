@@ -8,6 +8,7 @@ from typing import Any
 from agent_cli.commands import render_help, resolve_command
 from agent_cli.interrupts import build_resume_value, extract_interrupt_requests, has_interrupt
 from agent_cli.rendering import format_interrupt_summary, format_sessions, latest_ai_text
+from agent_cli.session import Session, render_session_status, update_session_title
 from agent_cli.session_store import SessionStore
 
 
@@ -48,9 +49,19 @@ class AgentCLI:
         self.runner = runner
         self.workdir = workdir
         self.model_name = model_name
-        self.session_id = session_id
         self.prompt_session = prompt_session
         self._agent: Any | None = None
+        # Initialize session after basic attributes are set
+        if session_id:
+            self.session = Session(
+                session_store=session_store,
+                session_id=session_id,
+                model_name=model_name,
+            )
+        else:
+            self.session = None
+        # Legacy attribute for backward compatibility
+        self.session_id = session_id
 
     @property
     def agent(self) -> Any:
@@ -72,6 +83,11 @@ class AgentCLI:
             title=title,
         )
         self.session_id = record.session_id
+        self.session = Session(
+            session_store=self.session_store,
+            session_id=self.session_id,
+            model_name=self.model_name,
+        )
         return self.session_id
 
     def submit_message(self, text: str) -> str:
@@ -143,6 +159,11 @@ class AgentCLI:
                 title="New session",
             )
             self.session_id = record.session_id
+            self.session = Session(
+                session_store=self.session_store,
+                session_id=self.session_id,
+                model_name=self.model_name,
+            )
             return f"Started session: {record.session_id}"
         if command.name == "sessions":
             return format_sessions(self.session_store.list_sessions())
@@ -154,7 +175,20 @@ class AgentCLI:
                 return f"Unknown session: {arg}"
             self.session_store.touch_session(record.session_id)
             self.session_id = record.session_id
+            self.session = Session(
+                session_store=self.session_store,
+                session_id=self.session_id,
+                model_name=self.model_name,
+            )
             return f"Resumed session: {record.session_id}"
+        if command.name == "status":
+            if self.session is None:
+                self.ensure_session()
+            return render_session_status(self.session)
+        if command.name == "title":
+            if self.session is None:
+                self.ensure_session()
+            return update_session_title(self.session, arg)
         if command.name == "clear":
             os.system("cls" if os.name == "nt" else "clear")
             return None

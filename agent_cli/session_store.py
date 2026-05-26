@@ -175,3 +175,27 @@ class SessionStore:
                 """,
                 (new_title, self.now(), preview, updated_seq, session_id),
             )
+
+    def get_or_create_session(
+        self,
+        *,
+        session_id: str,
+        workdir: str,
+        model: str | None,
+        title: str = "New session",
+    ) -> SessionRecord:
+        existing = self.get_session(session_id)
+        if existing is not None:
+            return existing
+        return self.create_session(
+            workdir=workdir,
+            model=model,
+            title=title,
+            session_id=session_id,
+        )
+
+    def update_session(self, session_id: str, *, title: str | None = None) -> None:
+        existing = self.get_session(session_id)
+        if existing is None:
+            raise ValueError(f"unknown session: {session_id}")
+        self.touch_session(session_id, title=title)

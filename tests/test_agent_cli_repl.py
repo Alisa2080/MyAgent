@@ -8,23 +8,41 @@ class FakeStore:
         self.created = []
         self.touched = []
         self.sessions = {}
+        self._session_counter = 0
 
     def create_session(self, *, workdir, model, title="New session", session_id=None):
-        sid = session_id or f"s{len(self.created) + 1}"
+        sid = session_id or self.new_session_id()
         record = SimpleNamespace(
             session_id=sid,
             title=title,
             workdir=workdir,
             model=model,
             updated_at="now",
+            created_at="now",
             last_message_preview=None,
         )
         self.created.append(record)
-        self.sessions[sid] = record
+        self.sessions[sid] = record  # Store under the actual sid, not session_id param
         return record
 
     def get_session(self, session_id):
         return self.sessions.get(session_id)
+
+    def get_or_create_session(self, *, session_id, workdir, model, title="New session"):
+        existing = self.get_session(session_id)
+        if existing is not None:
+            return existing
+        return self.create_session(
+            workdir=workdir,
+            model=model,
+            title=title,
+            session_id=session_id,
+        )
+
+    def update_session(self, session_id, *, title=None):
+        session = self.get_session(session_id)
+        if session:
+            session.title = title if title is not None else session.title
 
     def list_sessions(self, limit=20):
         return list(self.sessions.values())
@@ -33,7 +51,8 @@ class FakeStore:
         self.touched.append((session_id, kwargs))
 
     def new_session_id(self):
-        return f"s{len(self.created) + 1}"
+        self._session_counter += 1
+        return f"s{self._session_counter}"
 
     def title_from_message(self, message, max_length=60):
         normalized = " ".join(message.split())
