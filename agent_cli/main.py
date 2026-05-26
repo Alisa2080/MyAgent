@@ -11,6 +11,7 @@ except ModuleNotFoundError:
     dotenv = None
 
 from agent_cli.checkpoints import CheckpointDependencyError, create_sqlite_checkpointer
+from agent_cli.logging_config import setup_cli_logging
 from agent_cli.paths import ensure_db_parent
 from agent_cli.rendering import format_sessions
 from agent_cli.repl import AgentCLI, default_agent_factory, default_runner
@@ -55,6 +56,7 @@ def make_cli(*, args: argparse.Namespace, store: SessionStore, checkpointer) -> 
 
 
 def main(argv: list[str] | None = None) -> int:
+    setup_cli_logging()
     parser = build_parser()
     args = parser.parse_args(argv)
     command = args.command or "chat"
