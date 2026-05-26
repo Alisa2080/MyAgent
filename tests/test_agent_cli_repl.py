@@ -32,6 +32,17 @@ class FakeStore:
     def touch_session(self, session_id, **kwargs):
         self.touched.append((session_id, kwargs))
 
+    def new_session_id(self):
+        return f"s{len(self.created) + 1}"
+
+    def title_from_message(self, message, max_length=60):
+        normalized = " ".join(message.split())
+        if not normalized:
+            return "New session"
+        if len(normalized) <= max_length:
+            return normalized
+        return normalized[: max_length - 3].rstrip() + "..."
+
 
 def test_submit_message_invokes_runner_with_thread_id(monkeypatch):
     calls = []
@@ -57,7 +68,7 @@ def test_submit_message_invokes_runner_with_thread_id(monkeypatch):
     assert calls[0][2] == {"configurable": {"thread_id": "s1"}}
 
 
-def test_submit_message_does_not_touch_session_when_runner_raises():
+def test_fresh_submit_message_does_not_write_metadata_when_runner_raises():
     store = FakeStore()
 
     def fake_runner(agent, input_data, config):
@@ -79,7 +90,36 @@ def test_submit_message_does_not_touch_session_when_runner_raises():
     else:
         raise AssertionError("expected submit_message to raise")
 
+    assert store.created == []
     assert store.touched == []
+    assert cli.session_id is None
+
+
+def test_fresh_submit_message_creates_session_after_success_with_runner_thread_id():
+    store = FakeStore()
+    calls = []
+
+    def fake_runner(agent, input_data, config):
+        calls.append((agent, input_data, config))
+        return {"messages": [{"role": "assistant", "content": "ok"}]}
+
+    cli = AgentCLI(
+        session_store=store,
+        checkpointer="cp",
+        agent_factory=lambda checkpointer: "agent",
+        runner=fake_runner,
+        workdir="/repo",
+        model_name="model",
+    )
+
+    output = cli.submit_message("hello")
+
+    assert output == "ok"
+    assert calls[0][2] == {"configurable": {"thread_id": "s1"}}
+    assert cli.session_id == "s1"
+    assert [record.session_id for record in store.created] == ["s1"]
+    assert store.created[0].title == "hello"
+    assert store.touched == [("s1", {"last_message_preview": "hello"})]
 
 
 def test_run_repl_prints_error_and_continues_after_message_failure(

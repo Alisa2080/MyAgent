@@ -73,13 +73,27 @@ class AgentCLI:
         return self.session_id
 
     def submit_message(self, text: str) -> str:
-        session_id = self.ensure_session(text)
+        existing_session = self.session_id is not None
+        if existing_session:
+            session_id = self.session_id
+            title = None
+        else:
+            session_id = self.session_store.new_session_id()
+            title = _title_from_message(self.session_store, text)
         result = self.runner(
             self.agent,
             {"messages": [{"role": "user", "content": text}]},
             {"configurable": {"thread_id": session_id}},
         )
-        result = self._handle_interrupts(result)
+        result = self._handle_interrupts(result, session_id=session_id)
+        if not existing_session:
+            self.session_store.create_session(
+                workdir=self.workdir,
+                model=self.model_name,
+                title=title or "New session",
+                session_id=session_id,
+            )
+            self.session_id = session_id
         self.session_store.touch_session(
             session_id,
             last_message_preview=_title_from_message(
@@ -88,7 +102,8 @@ class AgentCLI:
         )
         return latest_ai_text(result)
 
-    def _handle_interrupts(self, result: Any) -> Any:
+    def _handle_interrupts(self, result: Any, *, session_id: str | None = None) -> Any:
+        thread_id = session_id or self.session_id
         while has_interrupt(result):
             requests = extract_interrupt_requests(result)
             print(format_interrupt_summary(requests))
@@ -107,7 +122,7 @@ class AgentCLI:
             result = self.runner(
                 self.agent,
                 Command(resume=resume_value),
-                {"configurable": {"thread_id": self.session_id}},
+                {"configurable": {"thread_id": thread_id}},
             )
         return result
 
