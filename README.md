@@ -127,3 +127,26 @@ agent = build_agent(include_cron_tools=True)
 ```
 
 Cron output is saved under the configured Hermes home. `deliver="origin"` queues thread-scoped notifications that embedding applications can drain with `cron.notifications.drain_cron_notifications_for_thread_id(thread_id)`.
+
+## Agent CLI
+
+This repository includes a minimal local CLI for the LangGraph agent:
+
+Chat and ask modes require the LangGraph SQLite checkpointer package
+(`langgraph-checkpoint-sqlite`) because the MVP stores conversation state in
+SQLite. `sessions` and `--help` do not require it. Install it in the project
+environment with `python -m pip install langgraph-checkpoint-sqlite`.
+
+```bash
+python -m agent_cli
+python -m agent_cli ask "Summarize this repository"
+python -m agent_cli sessions
+python -m agent_cli chat --resume <session_id>
+```
+
+The CLI stores LangGraph checkpoints and lightweight session metadata in
+`~/.langchain-agent/cli.sqlite` by default. Set `AGENT_CLI_HOME` to place this
+state elsewhere.
+
+Inside chat, use `/help` to list slash commands. The MVP supports basic
+approve/reject prompts for human-in-the-loop interrupts.
