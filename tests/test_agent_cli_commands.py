@@ -4,6 +4,7 @@ from agent_cli.commands import (
     render_help,
     commands_for_completion,
 )
+from agent_cli.skill_commands import SkillCommand, build_skill_command_map, build_skill_invocation_message
 
 
 def test_resolve_command_handles_slash_and_alias():
@@ -48,3 +49,54 @@ def test_commands_expose_completion_metadata():
     assert resolve_command("/resume").completion == "session"
     assert resolve_command("/skill").completion == "skill"
     assert resolve_command("/export").completion == "path"
+
+
+def test_build_skill_command_map_registers_skill_name_and_dir_alias():
+    skills = [
+        {
+            "name": "Python Debug",
+            "description": "Debug Python failures.",
+            "path": "/repo/skills/python-debug/SKILL.md",
+            "dir": "/repo/skills/python-debug",
+        }
+    ]
+
+    commands = build_skill_command_map(skills, built_in_names={"help"})
+
+    assert commands["python-debug"].skill["name"] == "Python Debug"
+
+
+def test_build_skill_command_map_builtin_conflict_is_not_registered():
+    skills = [
+        {
+            "name": "help",
+            "description": "conflict",
+            "path": "/repo/skills/help/SKILL.md",
+            "dir": "/repo/skills/help",
+        }
+    ]
+
+    commands = build_skill_command_map(skills, built_in_names={"help"})
+
+    assert commands == {}
+
+
+def test_build_skill_invocation_message_includes_content_and_supporting_files():
+    command = SkillCommand(
+        command="python-debug",
+        skill={
+            "name": "python-debug",
+            "title": "Python Debug",
+            "description": "Debug Python.",
+            "dir": "/repo/skills/python-debug",
+            "content": "# Python Debug\nUse pytest.",
+            "supporting_files": ["references/example.md"],
+        },
+    )
+
+    message = build_skill_invocation_message(command, "fix traceback")
+
+    assert '<skill name="python-debug" dir="/repo/skills/python-debug">' in message
+    assert "# Python Debug" in message
+    assert "- references/example.md" in message
+    assert "User request:\nfix traceback" in message
