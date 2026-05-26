@@ -245,6 +245,12 @@ class BackgroundTaskRegistry:
             except queue.Empty:
                 return items
 
+    def summary_counts(self) -> dict[str, int]:
+        counts = {status: 0 for status in TASK_STATUSES}
+        for record in self.store.list_tasks(limit=200):
+            counts[record.status] = counts.get(record.status, 0) + 1
+        return counts
+
     def _notify(self, *, kind: str, record: BackgroundTaskRecord, message: str) -> None:
         self._notifications.put(
             BackgroundNotification(

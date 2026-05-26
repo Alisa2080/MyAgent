@@ -391,7 +391,25 @@ class AgentCLI:
                 print(f"Failed to join {record.task_id}: {exc}", file=sys.stderr)
 
     def _print_banner(self) -> None:
-        print(f"Session: {self.session_id}")
+        from shutil import get_terminal_size
+
+        from agent_cli.banner import BannerContext, render_banner
+
+        counts = (
+            self.background_registry.summary_counts()
+            if self.background_registry is not None
+            else {}
+        )
+        context = BannerContext(
+            workdir=self.workdir,
+            profile=self.profile,
+            home=self.cli_home,
+            model=self.model_name,
+            session=self.session_id or "",
+            background_counts=counts,
+        )
+        width = get_terminal_size((100, 24)).columns
+        print(render_banner(context, width=width, theme_name=self.display_theme))
         print("Type /help for commands. Ctrl-D exits.")
 
     def run_repl(self) -> int:
