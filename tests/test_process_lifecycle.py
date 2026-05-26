@@ -8,6 +8,7 @@ def reset_process_lifecycle_state(monkeypatch):
     import agent_core.process_lifecycle as lifecycle
 
     monkeypatch.setattr(lifecycle, "_installed", False)
+    monkeypatch.setattr(lifecycle, "_atexit_registered", False)
     monkeypatch.setattr(lifecycle, "_cleanup_done", False)
     monkeypatch.setattr(lifecycle, "_shutdown_requested", False)
     monkeypatch.setattr(lifecycle, "_previous_signal_handlers", {})
@@ -304,6 +305,51 @@ def test_install_process_signal_handlers_is_idempotent(monkeypatch):
     assert len([call for call in signal_calls if call[0] == lifecycle.signal.SIGTERM]) == 1
     if hasattr(lifecycle.signal, "SIGHUP"):
         assert len([call for call in signal_calls if call[0] == lifecycle.signal.SIGHUP]) == 1
+
+
+def test_install_process_signal_handlers_skips_signal_registration_outside_main_thread(
+    monkeypatch,
+):
+    import agent_core.process_lifecycle as lifecycle
+
+    errors = []
+    results = []
+    unregister_calls = []
+    atexit_calls = []
+    monkeypatch.setattr(
+        lifecycle.atexit,
+        "unregister",
+        lambda handler: unregister_calls.append(handler),
+    )
+    monkeypatch.setattr(lifecycle.atexit, "register", lambda handler: atexit_calls.append(handler))
+
+    def install_from_worker():
+        try:
+            results.append(lifecycle.install_process_signal_handlers())
+        except BaseException as exc:
+            errors.append(exc)
+
+    worker = threading.Thread(target=install_from_worker)
+    worker.start()
+    worker.join(timeout=5)
+
+    assert not worker.is_alive()
+    assert errors == []
+    assert results == [False]
+    assert unregister_calls == [lifecycle.cleanup_all_environments]
+    assert atexit_calls == [lifecycle._atexit_cleanup]
+
+    signal_calls = []
+    monkeypatch.setattr(
+        lifecycle.signal,
+        "signal",
+        lambda signum, handler: signal_calls.append((signum, handler)) or lifecycle.signal.SIG_DFL,
+    )
+
+    assert lifecycle.install_process_signal_handlers() is True
+    assert (lifecycle.signal.SIGTERM, lifecycle._signal_handler) in signal_calls
+    assert unregister_calls == [lifecycle.cleanup_all_environments]
+    assert atexit_calls == [lifecycle._atexit_cleanup]
 
 
 def test_signal_handler_grace_window_allows_foreground_wait_to_kill_process(monkeypatch):

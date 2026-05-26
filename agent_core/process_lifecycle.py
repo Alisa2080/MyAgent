@@ -20,6 +20,7 @@ DEFAULT_SIGTERM_GRACE_SECONDS = 1.5
 
 _install_lock = threading.Lock()
 _installed = False
+_atexit_registered = False
 _cleanup_lock = threading.Lock()
 _cleanup_done = False
 _shutdown_requested = False
@@ -104,19 +105,32 @@ def _atexit_cleanup() -> None:
     run_process_shutdown_cleanup(reason="atexit")
 
 
+def _register_atexit_cleanup_once() -> None:
+    global _atexit_registered
+    if _atexit_registered:
+        return
+
+    try:
+        atexit.unregister(cleanup_all_environments)
+    except (AttributeError, ValueError):
+        pass
+    atexit.register(_atexit_cleanup)
+    _atexit_registered = True
+
+
 def install_process_signal_handlers() -> bool:
     global _installed
     with _install_lock:
+        _register_atexit_cleanup_once()
+
         if _installed:
+            return False
+
+        if threading.current_thread() is not threading.main_thread():
             return False
 
         _previous_signal_handlers[signal.SIGTERM] = signal.signal(signal.SIGTERM, _signal_handler)
         if hasattr(signal, "SIGHUP"):
             _previous_signal_handlers[signal.SIGHUP] = signal.signal(signal.SIGHUP, _signal_handler)
-        try:
-            atexit.unregister(cleanup_all_environments)
-        except (AttributeError, ValueError):
-            pass
-        atexit.register(_atexit_cleanup)
         _installed = True
         return True
