@@ -110,6 +110,23 @@ def test_build_skill_discovery_reports_registered_and_conflicting_skills():
     assert "conflicts" in discovery.entries[1].note
 
 
+def test_build_skill_discovery_builtin_name_conflict_does_not_fall_back_to_dir_alias():
+    skills = [
+        {
+            "name": "help",
+            "description": "conflict",
+            "path": "/repo/skills/custom-help/SKILL.md",
+            "dir": "/repo/skills/custom-help",
+        }
+    ]
+
+    discovery = build_skill_discovery(skills, built_in_names={"help"})
+
+    assert discovery.commands == {}
+    assert discovery.entries[0].command is None
+    assert "conflicts with built-in command /help" == discovery.entries[0].note
+
+
 def test_build_skill_invocation_message_includes_content_and_supporting_files():
     command = SkillCommand(
         command="python-debug",

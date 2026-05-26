@@ -51,7 +51,18 @@ def build_skill_discovery(
     for skill in skills:
         command = None
         note = ""
-        for name in _candidate_names(skill):
+        names = _candidate_names(skill)
+        primary = names[0] if names else ""
+        if primary in built_in_names:
+            entries.append(
+                SkillEntry(
+                    skill=skill,
+                    command=None,
+                    note=f"conflicts with built-in command /{primary}",
+                )
+            )
+            continue
+        for name in names:
             if name in built_in_names:
                 note = f"conflicts with built-in command /{name}"
                 continue

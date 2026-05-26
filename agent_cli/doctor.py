@@ -5,7 +5,7 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-from agent_cli.config import ConfigError, load_config_file
+from agent_cli.config import ConfigError, settings_from_config
 from agent_cli.paths import get_cli_home
 from agent_cli.session_store import SessionStore
 
@@ -77,7 +77,7 @@ def check_config(cli_home: Path) -> tuple[bool, str]:
     if not config_path.exists():
         return True, f"optional file missing: {config_path}"
     try:
-        load_config_file(config_path)
+        settings_from_config(cli_home=cli_home, profile=None, cli_model=None)
         return True, f"config readable: {config_path}"
     except ConfigError as exc:
         return False, str(exc)
