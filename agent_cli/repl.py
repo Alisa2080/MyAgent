@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import sys
 from collections.abc import Callable
 from typing import Any
 
@@ -73,18 +74,18 @@ class AgentCLI:
 
     def submit_message(self, text: str) -> str:
         session_id = self.ensure_session(text)
-        self.session_store.touch_session(
-            session_id,
-            last_message_preview=_title_from_message(
-                self.session_store, text, max_length=80
-            ),
-        )
         result = self.runner(
             self.agent,
             {"messages": [{"role": "user", "content": text}]},
             {"configurable": {"thread_id": session_id}},
         )
         result = self._handle_interrupts(result)
+        self.session_store.touch_session(
+            session_id,
+            last_message_preview=_title_from_message(
+                self.session_store, text, max_length=80
+            ),
+        )
         return latest_ai_text(result)
 
     def _handle_interrupts(self, result: Any) -> Any:
@@ -194,6 +195,9 @@ class AgentCLI:
                     print(output)
             except EOFError:
                 return 0
+            except Exception as exc:
+                print(f"Error: {exc}", file=sys.stderr)
+                continue
 
 
 def default_agent_factory(checkpointer: Any) -> Any:

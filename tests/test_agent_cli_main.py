@@ -89,7 +89,7 @@ def test_main_chat_resume_rejects_unknown_session_without_checkpointer(
 
 
 def test_main_ask_closes_checkpointer_handle_when_submit_raises(
-    monkeypatch, tmp_path
+    monkeypatch, tmp_path, capsys
 ):
     monkeypatch.setenv("AGENT_CLI_HOME", str(tmp_path))
 
@@ -114,14 +114,37 @@ def test_main_ask_closes_checkpointer_handle_when_submit_raises(
         main_module, "create_sqlite_checkpointer", lambda path: handle
     )
 
-    try:
-        main_module.main(["ask", "hello"])
-    except RuntimeError as exc:
-        assert str(exc) == "boom"
-    else:
-        raise AssertionError("expected submit_message to raise")
+    code = main_module.main(["ask", "hello"])
 
+    captured = capsys.readouterr()
+    assert code == 1
+    assert "Error: boom" in captured.err
     assert handle.closed is True
+
+
+def test_main_ask_checkpoint_dependency_error_names_command_and_package(
+    monkeypatch, tmp_path, capsys
+):
+    monkeypatch.setenv("AGENT_CLI_HOME", str(tmp_path))
+
+    import agent_cli.main as main_module
+    from agent_cli.checkpoints import CheckpointDependencyError
+
+    def fail_create_checkpointer(path):
+        raise CheckpointDependencyError(
+            "Install langgraph-checkpoint-sqlite to use SQLite checkpointing."
+        )
+
+    monkeypatch.setattr(
+        main_module, "create_sqlite_checkpointer", fail_create_checkpointer
+    )
+
+    code = main_module.main(["ask", "hello"])
+
+    captured = capsys.readouterr()
+    assert code == 2
+    assert "ask" in captured.err
+    assert "langgraph-checkpoint-sqlite" in captured.err
 
 
 def test_main_chat_closes_checkpointer_handle_when_repl_raises(

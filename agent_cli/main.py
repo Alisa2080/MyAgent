@@ -75,7 +75,10 @@ def main(argv: list[str] | None = None) -> int:
     try:
         checkpointer_handle = create_sqlite_checkpointer(db_path)
     except CheckpointDependencyError as exc:
-        print(str(exc), file=sys.stderr)
+        print(
+            f"agent_cli {command} requires SQLite checkpointing: {exc}",
+            file=sys.stderr,
+        )
         return 2
 
     try:
@@ -86,7 +89,11 @@ def main(argv: list[str] | None = None) -> int:
         )
 
         if command == "ask":
-            output = cli.submit_message(" ".join(args.question))
+            try:
+                output = cli.submit_message(" ".join(args.question))
+            except Exception as exc:
+                print(f"Error: {exc}", file=sys.stderr)
+                return 1
             if output:
                 print(output)
             return 0

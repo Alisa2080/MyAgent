@@ -57,6 +57,61 @@ def test_submit_message_invokes_runner_with_thread_id(monkeypatch):
     assert calls[0][2] == {"configurable": {"thread_id": "s1"}}
 
 
+def test_submit_message_does_not_touch_session_when_runner_raises():
+    store = FakeStore()
+
+    def fake_runner(agent, input_data, config):
+        raise RuntimeError("agent failed")
+
+    cli = AgentCLI(
+        session_store=store,
+        checkpointer="cp",
+        agent_factory=lambda checkpointer: "agent",
+        runner=fake_runner,
+        workdir="/repo",
+        model_name="model",
+    )
+
+    try:
+        cli.submit_message("hello")
+    except RuntimeError as exc:
+        assert str(exc) == "agent failed"
+    else:
+        raise AssertionError("expected submit_message to raise")
+
+    assert store.touched == []
+
+
+def test_run_repl_prints_error_and_continues_after_message_failure(
+    monkeypatch, capsys
+):
+    entries = iter(["boom", EOFError])
+    cli = AgentCLI(
+        session_store=FakeStore(),
+        checkpointer=None,
+        agent_factory=lambda checkpointer: "agent",
+        runner=lambda agent, input_data, config: (_ for _ in ()).throw(
+            RuntimeError("agent failed")
+        ),
+        workdir="/repo",
+        model_name=None,
+    )
+
+    def fake_input(prompt):
+        entry = next(entries)
+        if entry is EOFError:
+            raise EOFError
+        return entry
+
+    monkeypatch.setattr("builtins.input", fake_input)
+
+    code = cli.run_repl()
+
+    captured = capsys.readouterr()
+    assert code == 0
+    assert "Error: agent failed" in captured.err
+
+
 def test_handle_command_new_switches_session():
     store = FakeStore()
     cli = AgentCLI(
