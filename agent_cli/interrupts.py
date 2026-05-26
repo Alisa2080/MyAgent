@@ -54,16 +54,3 @@ def extract_interrupt_review_requests(result: Any) -> list[ApprovalRequest]:
 def extract_interrupt_requests(result: Any) -> list[dict[str, Any]]:
     requests = extract_interrupt_review_requests(result)
     return [item.action_request for item in requests] or [{"raw": result.get(INTERRUPT_KEY)}]
-
-
-def build_resume_value(
-    *, approved: bool, request_count: int
-) -> dict[str, list[dict[str, str]]]:
-    count = max(1, request_count)
-    if approved:
-        return {"decisions": [{"type": "approve"} for _ in range(count)]}
-    return {
-        "decisions": [
-            {"type": "reject", "message": "Rejected by user."} for _ in range(count)
-        ]
-    }

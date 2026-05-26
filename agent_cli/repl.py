@@ -5,6 +5,8 @@ import sys
 from collections.abc import Callable
 from typing import Any
 
+from langgraph.types import Command
+
 from agent_cli.commands import render_help, resolve_command
 from agent_cli.doctor import render_doctor_output, run_health_checks
 from agent_cli.approval import collect_approval_decisions
@@ -13,7 +15,7 @@ from agent_cli.interrupts import (
     extract_interrupt_review_requests,
     has_interrupt,
 )
-from agent_cli.rendering import format_interrupt_summary, format_sessions, latest_ai_text
+from agent_cli.rendering import format_sessions, latest_ai_text
 from agent_cli.session import (
     Session,
     render_session_status,
@@ -147,12 +149,6 @@ class AgentCLI:
         while has_interrupt(result):
             requests = extract_interrupt_review_requests(result)
             resume_value = collect_approval_decisions(requests)
-            try:
-                from langgraph.types import Command
-            except ModuleNotFoundError as exc:
-                raise RuntimeError(
-                    "Cannot resume interrupt because langgraph is not installed."
-                ) from exc
             result = self.runner(
                 self.agent,
                 Command(resume=resume_value),
@@ -226,22 +222,19 @@ class AgentCLI:
         if command.name == "history":
             if self.session is None:
                 self.ensure_session()
-            parts = raw.strip().split(maxsplit=1)
             limit = None
-            if len(parts) > 1:
+            if arg:
                 try:
-                    limit = int(parts[1])
+                    limit = int(arg)
                 except ValueError:
                     pass
             return render_history(self.session, limit=limit)
         if command.name == "export":
             if self.session is None:
                 self.ensure_session()
-            parts = raw.strip().split(maxsplit=1)
-            if len(parts) < 2:
+            if not arg:
                 return "Usage: /export <path.md>\n"
-            path = parts[1].strip()
-            return export_to_markdown(self.session, path)
+            return export_to_markdown(self.session, arg)
         if command.name == "clear":
             os.system("cls" if os.name == "nt" else "clear")
             return None

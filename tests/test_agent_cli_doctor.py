@@ -61,4 +61,4 @@ def test_doctor_reports_config_and_dotenv_paths(tmp_path, monkeypatch):
     output = render_doctor_output(run_health_checks(workdir=str(tmp_path)))
 
     assert "config" in output.lower()
-    assert "Dotenv" in output
+    assert "dotenv" in output.lower()

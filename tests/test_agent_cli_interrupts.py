@@ -1,5 +1,4 @@
 from agent_cli.interrupts import (
-    build_resume_value,
     extract_interrupt_requests,
     extract_interrupt_review_requests,
     has_interrupt,
@@ -71,27 +70,6 @@ def test_extract_interrupt_requests_reads_action_requests_from_object_value():
 
 def test_extract_interrupt_requests_handles_unknown_shape():
     assert extract_interrupt_requests({"__interrupt__": ["raw"]}) == [{"raw": "raw"}]
-
-
-def test_build_resume_value_approves_all_requests():
-    resume = build_resume_value(approved=True, request_count=2)
-
-    assert resume == {
-        "decisions": [
-            {"type": "approve"},
-            {"type": "approve"},
-        ]
-    }
-
-
-def test_build_resume_value_rejects_all_requests():
-    resume = build_resume_value(approved=False, request_count=1)
-
-    assert resume == {
-        "decisions": [
-            {"type": "reject", "message": "Rejected by user."},
-        ]
-    }
 
 
 from agent_cli.rendering import format_interrupt_summary, latest_ai_text
