@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Iterable
+from typing import Iterable, Literal
+
+
+CompletionKind = Literal["none", "session", "skill", "path"]
 
 
 @dataclass(frozen=True)
@@ -11,6 +14,7 @@ class CommandDef:
     category: str
     aliases: tuple[str, ...] = ()
     args_hint: str = ""
+    completion: CompletionKind = "none"
 
     @property
     def usage(self) -> str:
@@ -22,10 +26,37 @@ COMMAND_REGISTRY: tuple[CommandDef, ...] = (
     CommandDef("help", "Show available commands.", "Info", aliases=("h",)),
     CommandDef("new", "Start a new session.", "Session"),
     CommandDef("sessions", "List recent sessions.", "Session", aliases=("ls",)),
-    CommandDef("resume", "Resume a session.", "Session", args_hint="<session_id>"),
+    CommandDef(
+        "resume",
+        "Resume a session.",
+        "Session",
+        args_hint="<session_id>",
+        completion="session",
+    ),
+    CommandDef("status", "Show current CLI session status.", "Session"),
+    CommandDef(
+        "title",
+        "Set the current session title.",
+        "Session",
+        args_hint="<name>",
+    ),
+    CommandDef("history", "Show user and assistant messages.", "Session"),
+    CommandDef(
+        "export",
+        "Export user and assistant messages to Markdown.",
+        "Session",
+        args_hint="<path.md>",
+        completion="path",
+    ),
     CommandDef("clear", "Clear the terminal screen.", "Session"),
     CommandDef("skills", "List available local skills.", "Skills"),
-    CommandDef("skill", "Show a skill summary.", "Skills", args_hint="<name>"),
+    CommandDef(
+        "skill",
+        "Show a skill summary.",
+        "Skills",
+        args_hint="<name>",
+        completion="skill",
+    ),
     CommandDef("exit", "Exit the CLI.", "Exit", aliases=("quit", "q")),
 )
 
@@ -55,6 +86,10 @@ def resolve_command(raw: str) -> CommandDef | None:
     if not raw.strip():
         return None
     return COMMAND_LOOKUP.get(normalize_command_name(raw))
+
+
+def commands_for_completion() -> tuple[CommandDef, ...]:
+    return COMMAND_REGISTRY
 
 
 def render_help() -> str:
