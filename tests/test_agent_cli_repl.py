@@ -63,6 +63,58 @@ class FakeStore:
         return normalized[: max_length - 3].rstrip() + "..."
 
 
+class FakeBackgroundRegistry:
+    def __init__(self):
+        self.started = []
+        self.steers = []
+        self.stopped = []
+        self.approved = []
+        self.notifications = []
+        self.records = {}
+        self.list_active_only_calls = []
+
+    def start(self, prompt):
+        record = SimpleNamespace(
+            task_id="bg_12345678",
+            session_id="session-bg",
+            title="Background task",
+            status="queued",
+            pending_steer_count=0,
+            last_result_preview=None,
+            last_error=None,
+            updated_at="now",
+            created_at="now",
+        )
+        self.started.append(prompt)
+        self.records[record.task_id] = record
+        return record
+
+    def list_tasks(self, active_only=False):
+        self.list_active_only_calls.append(active_only)
+        return list(self.records.values())
+
+    def steer(self, task_id, message):
+        self.steers.append((task_id, message))
+        return SimpleNamespace(id=1, task_id=task_id, message=message)
+
+    def stop(self, task_id):
+        self.stopped.append(task_id)
+        return self.records[task_id]
+
+    def approval_requests(self, task_id):
+        from agent_cli.approval import ApprovalRequest
+
+        return [ApprovalRequest({"name": "terminal", "args": {"command": "pwd"}}, {})]
+
+    def approve(self, task_id, resume_value):
+        self.approved.append((task_id, resume_value))
+
+    def drain_notifications(self):
+        items = self.notifications
+        self.notifications = []
+        return items
+
+
 def test_submit_message_invokes_runner_with_thread_id(monkeypatch):
     calls = []
 
@@ -188,6 +240,69 @@ def test_handle_command_new_switches_session():
 
     assert "Started session" in result
     assert cli.session_id == "s2"
+
+
+def test_handle_background_command_starts_task():
+    registry = FakeBackgroundRegistry()
+    cli = AgentCLI(
+        session_store=FakeStore(),
+        checkpointer=None,
+        agent_factory=lambda checkpointer: "agent",
+        runner=lambda agent, input_data, config: {},
+        workdir="/repo",
+        model_name=None,
+        background_registry=registry,
+    )
+
+    output = cli.handle_command("/background fix tests")
+
+    assert registry.started == ["fix tests"]
+    assert "Started background task bg_12345678" in output
+    assert "session-bg" in output
+
+
+def test_handle_tasks_and_queue_render_background_tasks():
+    registry = FakeBackgroundRegistry()
+    registry.start("fix tests")
+    cli = AgentCLI(
+        session_store=FakeStore(),
+        checkpointer=None,
+        agent_factory=lambda checkpointer: "agent",
+        runner=lambda agent, input_data, config: {},
+        workdir="/repo",
+        model_name=None,
+        background_registry=registry,
+    )
+
+    assert "bg_12345678" in cli.handle_command("/tasks")
+    assert "bg_12345678" in cli.handle_command("/queue")
+    assert registry.list_active_only_calls == [False, True]
+
+
+def test_handle_steer_stop_and_approve(monkeypatch):
+    registry = FakeBackgroundRegistry()
+    registry.start("fix tests")
+    monkeypatch.setattr(
+        "agent_cli.repl.collect_approval_decisions",
+        lambda requests: {"decisions": [{"type": "approve"}]},
+    )
+    cli = AgentCLI(
+        session_store=FakeStore(),
+        checkpointer=None,
+        agent_factory=lambda checkpointer: "agent",
+        runner=lambda agent, input_data, config: {},
+        workdir="/repo",
+        model_name=None,
+        background_registry=registry,
+    )
+
+    assert "Queued steer" in cli.handle_command("/steer bg_12345678 retry now")
+    assert "Stop requested" in cli.handle_command("/stop bg_12345678")
+    assert "Approved background task" in cli.handle_command("/approve bg_12345678")
+
+    assert registry.steers == [("bg_12345678", "retry now")]
+    assert registry.stopped == ["bg_12345678"]
+    assert registry.approved == [("bg_12345678", {"decisions": [{"type": "approve"}]})]
 
 
 def test_handle_command_resume_rejects_unknown_session():

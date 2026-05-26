@@ -43,6 +43,21 @@ def test_phase_1_commands_are_registered():
     assert "/export <path.md>" in help_text
 
 
+def test_phase_3_background_commands_are_registered():
+    assert resolve_command("/background").name == "background"
+    assert resolve_command("/tasks").name == "tasks"
+    assert resolve_command("/agents").name == "tasks"
+    assert resolve_command("/queue").name == "queue"
+    assert resolve_command("/steer").name == "steer"
+    assert resolve_command("/stop").name == "stop"
+    assert resolve_command("/approve").name == "approve"
+
+    help_text = render_help()
+    assert "/background <prompt>" in help_text
+    assert "/tasks" in help_text
+    assert "/steer <task_id> <message>" in help_text
+
+
 def test_commands_expose_completion_metadata():
     completion_names = [item.name for item in commands_for_completion()]
 

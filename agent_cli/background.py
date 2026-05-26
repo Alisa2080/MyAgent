@@ -163,6 +163,18 @@ class BackgroundTaskRegistry:
         thread.start()
         return record
 
+    def list_tasks(self, *, active_only: bool = False) -> list[BackgroundTaskRecord]:
+        statuses = ACTIVE_TASK_STATUSES if active_only else None
+        return self.store.list_tasks(statuses=statuses)
+
+    def steer(self, task_id: str, message: str) -> BackgroundSteerRecord:
+        record = self.store.get_task(task_id)
+        if record is None:
+            raise ValueError(f"unknown background task: {task_id}")
+        if record.status in TERMINAL_TASK_STATUSES or record.status == "stopping":
+            raise ValueError(f"cannot steer background task in {record.status} state")
+        return self.store.add_steer(task_id, message)
+
     def join(self, task_id: str, *, timeout: float | None = None) -> None:
         with self._lock:
             runtime = self._runtime.get(task_id)
@@ -547,10 +559,22 @@ class BackgroundTaskStore:
         return self.set_status(task_id, "stopping", cancel_requested=True)
 
     def add_steer(self, task_id: str, message: str) -> BackgroundSteerRecord:
-        if self.get_task(task_id) is None:
-            raise ValueError(f"unknown background task: {task_id}")
         now = self.now()
         with self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                """
+                SELECT status
+                FROM cli_background_tasks
+                WHERE task_id = ?
+                """,
+                (task_id,),
+            ).fetchone()
+            if row is None:
+                raise ValueError(f"unknown background task: {task_id}")
+            status = row[0]
+            if status in TERMINAL_TASK_STATUSES or status == "stopping":
+                raise ValueError(f"cannot steer background task in {status} state")
             cursor = conn.execute(
                 """
                 INSERT INTO cli_background_steers (task_id, message, status, created_at, consumed_at)

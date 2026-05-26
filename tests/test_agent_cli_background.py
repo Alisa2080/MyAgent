@@ -423,3 +423,49 @@ def test_background_registry_rejects_stale_approval_requests_after_completion(
         assert "not waiting for approval" in str(exc)
     else:
         raise AssertionError("stale approval requests should fail")
+
+
+def test_background_registry_rejects_steer_while_stopping(tmp_path: Path):
+    store = BackgroundTaskStore(tmp_path / "cli.sqlite")
+    store.create_task(
+        task_id="bg_12345678",
+        session_id="session-1",
+        title="Fix tests",
+        prompt_preview="Fix tests please",
+    )
+    store.request_stop("bg_12345678")
+    registry = BackgroundTaskRegistry(
+        store=store,
+        session_id_factory=lambda: "session-1",
+        title_factory=lambda prompt: "Task title",
+        runner=lambda input_data, config: {},
+    )
+
+    try:
+        registry.steer("bg_12345678", "try this next")
+    except ValueError as exc:
+        assert "stopping" in str(exc)
+    else:
+        raise AssertionError("steer while stopping should fail")
+
+    assert store.get_task("bg_12345678").pending_steer_count == 0
+
+
+def test_background_store_rejects_steer_while_stopping(tmp_path: Path):
+    store = BackgroundTaskStore(tmp_path / "cli.sqlite")
+    store.create_task(
+        task_id="bg_12345678",
+        session_id="session-1",
+        title="Fix tests",
+        prompt_preview="Fix tests please",
+    )
+    store.request_stop("bg_12345678")
+
+    try:
+        store.add_steer("bg_12345678", "try this next")
+    except ValueError as exc:
+        assert "stopping" in str(exc)
+    else:
+        raise AssertionError("store steer while stopping should fail")
+
+    assert store.get_task("bg_12345678").pending_steer_count == 0
