@@ -123,3 +123,43 @@ def update_session_title(session: Session, title: str) -> str:
         return "Usage: /title <name>\n"
     session.set_title(title)
     return f"Session title set to: {title}\n"
+
+
+def render_history(session: Session, limit: int | None = None) -> str:
+    """Render session history as formatted text."""
+    messages = session.history(limit=limit)
+    if not messages:
+        return "No messages in session history.\n"
+
+    lines = ["Session History:", ""]
+    for i, msg in enumerate(messages, 1):
+        role = msg.get("type", msg.get("role", "unknown"))
+        content = msg.get("content", "")
+
+        if isinstance(content, list):
+            text_parts = []
+            for part in content:
+                if isinstance(part, dict) and part.get("type") == "text":
+                    text_parts.append(part.get("text", ""))
+                elif isinstance(part, str):
+                    text_parts.append(part)
+            content = "\n".join(text_parts)
+        elif isinstance(content, dict):
+            content = content.get("text", str(content))
+
+        lines.append(f"[{i}] {role.upper()}:")
+        content_str = str(content)
+        if len(content_str) > 200:
+            content_str = content_str[:200] + "..."
+        lines.append(f"    {content_str}")
+        lines.append("")
+
+    return "\n".join(lines)
+
+
+def export_to_markdown(session: Session, path: str) -> str:
+    """Export session history to a Markdown file."""
+    try:
+        return session.export_markdown(path)
+    except Exception as e:
+        return f"Export failed: {e}\n"

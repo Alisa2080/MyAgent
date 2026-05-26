@@ -255,3 +255,107 @@ def test_run_repl_uses_prompt_adapter(monkeypatch, capsys):
     assert code == 0
     assert prompts == ["> ", "> "]
     assert "Available commands:" in captured.out
+
+
+def test_handle_command_history_renders_empty_history():
+    cli = AgentCLI(
+        session_store=FakeStore(),
+        checkpointer=None,
+        agent_factory=lambda checkpointer: "agent",
+        runner=lambda agent, input_data, config: {},
+        workdir="/repo",
+        model_name=None,
+    )
+    cli.ensure_session()
+
+    result = cli.handle_command("/history")
+
+    assert "No messages" in result
+
+
+def test_handle_command_history_with_limit():
+    cli = AgentCLI(
+        session_store=FakeStore(),
+        checkpointer=None,
+        agent_factory=lambda checkpointer: "agent",
+        runner=lambda agent, input_data, config: {},
+        workdir="/repo",
+        model_name=None,
+    )
+    cli.ensure_session()
+
+    result = cli.handle_command("/history 10")
+
+    assert "History" in result or "No messages" in result
+
+
+def test_handle_command_export_usage_error():
+    cli = AgentCLI(
+        session_store=FakeStore(),
+        checkpointer=None,
+        agent_factory=lambda checkpointer: "agent",
+        runner=lambda agent, input_data, config: {},
+        workdir="/repo",
+        model_name=None,
+    )
+    cli.ensure_session()
+
+    result = cli.handle_command("/export")
+
+    assert "Usage" in result
+    assert "path.md" in result
+
+
+def test_run_repl_handles_history_command(monkeypatch, capsys):
+    entries = iter(["/history", EOFError])
+
+    class FakePrompt:
+        def prompt(self, prompt_text):
+            entry = next(entries)
+            if entry is EOFError:
+                raise EOFError
+            return entry
+
+    cli = AgentCLI(
+        session_store=FakeStore(),
+        checkpointer=None,
+        agent_factory=lambda checkpointer: "agent",
+        runner=lambda agent, input_data, config: {},
+        workdir="/repo",
+        model_name=None,
+        prompt_session=FakePrompt(),
+    )
+
+    code = cli.run_repl()
+
+    assert code == 0
+    captured = capsys.readouterr()
+    assert "History" in captured.out or "No messages" in captured.out
+
+
+def test_run_repl_handles_export_command(monkeypatch, capsys, tmp_path):
+    export_file = tmp_path / "export.md"
+    entries = iter([f"/export {export_file}", EOFError])
+
+    class FakePrompt:
+        def prompt(self, prompt_text):
+            entry = next(entries)
+            if entry is EOFError:
+                raise EOFError
+            return entry
+
+    cli = AgentCLI(
+        session_store=FakeStore(),
+        checkpointer=None,
+        agent_factory=lambda checkpointer: "agent",
+        runner=lambda agent, input_data, config: {},
+        workdir=str(tmp_path),
+        model_name=None,
+        prompt_session=FakePrompt(),
+    )
+
+    code = cli.run_repl()
+
+    assert code == 0
+    captured = capsys.readouterr()
+    assert "export.md" in captured.out or "Exported" in captured.out
