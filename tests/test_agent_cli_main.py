@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
 from types import SimpleNamespace
 
 
@@ -155,3 +158,28 @@ def test_main_chat_closes_checkpointer_handle_when_repl_raises(
         raise AssertionError("expected run_repl to raise")
 
     assert handle.closed is True
+
+
+def test_python_module_help_smoke():
+    result = subprocess.run(
+        [sys.executable, "-m", "agent_cli", "--help"],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert "usage:" in result.stdout
+
+
+def test_python_module_sessions_smoke(tmp_path):
+    result = subprocess.run(
+        [sys.executable, "-m", "agent_cli", "sessions"],
+        text=True,
+        capture_output=True,
+        check=False,
+        env={**os.environ, "AGENT_CLI_HOME": str(tmp_path)},
+    )
+
+    assert result.returncode == 0
+    assert "No sessions found." in result.stdout
