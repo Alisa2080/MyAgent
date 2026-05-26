@@ -40,6 +40,7 @@ class AgentCLI:
         workdir: str,
         model_name: str | None,
         session_id: str | None = None,
+        prompt_session: Any | None = None,
     ):
         self.session_store = session_store
         self.checkpointer = checkpointer
@@ -48,6 +49,7 @@ class AgentCLI:
         self.workdir = workdir
         self.model_name = model_name
         self.session_id = session_id
+        self.prompt_session = prompt_session
         self._agent: Any | None = None
 
     @property
@@ -192,7 +194,7 @@ class AgentCLI:
         print("Type /help for commands. Ctrl-D exits.")
         while True:
             try:
-                text = input("> ").strip()
+                text = self._prompt("> ").strip()
             except EOFError:
                 print()
                 return 0
@@ -213,6 +215,18 @@ class AgentCLI:
             except Exception as exc:
                 print(f"Error: {exc}", file=sys.stderr)
                 continue
+
+    def _prompt(self, prompt_text: str) -> str:
+        if self.prompt_session is None:
+            from agent_cli.input import build_prompt_session
+            from agent_cli.paths import ensure_cli_home
+
+            self.prompt_session = build_prompt_session(
+                history_path=ensure_cli_home() / "history.txt",
+                session_store=self.session_store,
+                workdir=self.workdir,
+            )
+        return self.prompt_session.prompt(prompt_text)
 
 
 def default_agent_factory(checkpointer: Any) -> Any:

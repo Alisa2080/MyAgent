@@ -122,10 +122,16 @@ def test_fresh_submit_message_creates_session_after_success_with_runner_thread_i
     assert store.touched == [("s1", {"last_message_preview": "hello"})]
 
 
-def test_run_repl_prints_error_and_continues_after_message_failure(
-    monkeypatch, capsys
-):
+def test_run_repl_prints_error_and_continues_after_message_failure(capsys):
     entries = iter(["boom", EOFError])
+
+    class FakePrompt:
+        def prompt(self, prompt_text):
+            entry = next(entries)
+            if entry is EOFError:
+                raise EOFError
+            return entry
+
     cli = AgentCLI(
         session_store=FakeStore(),
         checkpointer=None,
@@ -135,15 +141,8 @@ def test_run_repl_prints_error_and_continues_after_message_failure(
         ),
         workdir="/repo",
         model_name=None,
+        prompt_session=FakePrompt(),
     )
-
-    def fake_input(prompt):
-        entry = next(entries)
-        if entry is EOFError:
-            raise EOFError
-        return entry
-
-    monkeypatch.setattr("builtins.input", fake_input)
 
     code = cli.run_repl()
 
@@ -207,3 +206,33 @@ def test_handle_command_resume_touches_session_metadata():
     assert result == "Resumed session: known"
     assert cli.session_id == "known"
     assert store.touched == [("known", {})]
+
+
+def test_run_repl_uses_prompt_adapter(monkeypatch, capsys):
+    entries = iter(["/help", EOFError])
+    prompts = []
+
+    class FakePrompt:
+        def prompt(self, prompt_text):
+            prompts.append(prompt_text)
+            entry = next(entries)
+            if entry is EOFError:
+                raise EOFError
+            return entry
+
+    cli = AgentCLI(
+        session_store=FakeStore(),
+        checkpointer=None,
+        agent_factory=lambda checkpointer: "agent",
+        runner=lambda agent, input_data, config: {},
+        workdir="/repo",
+        model_name=None,
+        prompt_session=FakePrompt(),
+    )
+
+    code = cli.run_repl()
+
+    captured = capsys.readouterr()
+    assert code == 0
+    assert prompts == ["> ", "> "]
+    assert "Available commands:" in captured.out
