@@ -311,7 +311,7 @@ class AgentCLI:
         if not task_id:
             return "Usage: /stop <task_id>"
         record = self._require_background_registry().stop(task_id)
-        if record.status in {"completed", "failed", "stopped"}:
+        if record.status in {"completing", "completed", "failed", "stopped"}:
             return f"Background task {record.task_id} is already {record.status}"
         return f"Stop requested for {record.task_id}"
 
@@ -387,6 +387,17 @@ class AgentCLI:
         for record in active:
             try:
                 join(record.task_id, timeout=0.5)
+                finalize = getattr(self.background_registry, "finalize_stopping", None)
+                store = getattr(self.background_registry, "store", None)
+                if finalize is not None and store is not None:
+                    current = store.get_task(record.task_id)
+                    if current is not None and current.status in {
+                        "queued",
+                        "running",
+                        "waiting_approval",
+                        "stopping",
+                    }:
+                        finalize(record.task_id)
             except Exception as exc:
                 print(f"Failed to join {record.task_id}: {exc}", file=sys.stderr)
 

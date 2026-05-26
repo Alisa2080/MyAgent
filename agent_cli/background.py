@@ -22,12 +22,13 @@ TASK_STATUSES = {
     "queued",
     "running",
     "waiting_approval",
+    "completing",
     "stopping",
     "stopped",
     "completed",
     "failed",
 }
-ACTIVE_TASK_STATUSES = {"queued", "running", "waiting_approval", "stopping"}
+ACTIVE_TASK_STATUSES = {"queued", "running", "waiting_approval", "completing", "stopping"}
 TERMINAL_TASK_STATUSES = {"stopped", "completed", "failed"}
 
 
@@ -173,7 +174,10 @@ class BackgroundTaskRegistry:
         record = self.store.get_task(task_id)
         if record is None:
             raise ValueError(f"unknown background task: {task_id}")
-        if record.status in TERMINAL_TASK_STATUSES or record.status == "stopping":
+        if record.status in TERMINAL_TASK_STATUSES or record.status in {
+            "completing",
+            "stopping",
+        }:
             raise ValueError(f"cannot steer background task in {record.status} state")
         return self.store.add_steer(task_id, message)
 
@@ -187,7 +191,10 @@ class BackgroundTaskRegistry:
         record = self.store.get_task(task_id)
         if record is None:
             raise ValueError(f"unknown background task: {task_id}")
-        if record.status in TERMINAL_TASK_STATUSES or record.status == "stopping":
+        if record.status in TERMINAL_TASK_STATUSES or record.status in {
+            "completing",
+            "stopping",
+        }:
             return record
 
         updated = self.store.request_stop(task_id)
@@ -197,6 +204,14 @@ class BackgroundTaskRegistry:
             if runtime is not None:
                 runtime.approval_event.set()
         return updated
+
+    def finalize_stopping(self, task_id: str) -> BackgroundTaskRecord:
+        record = self.store.get_task(task_id)
+        if record is None:
+            raise ValueError(f"unknown background task: {task_id}")
+        if record.status in TERMINAL_TASK_STATUSES or not record.cancel_requested:
+            return record
+        return self.store.set_status(task_id, "stopped", finished=True)
 
     def wait_for_status(self, task_id: str, status: str, *, timeout: float) -> None:
         deadline = datetime.now(timezone.utc).timestamp() + timeout
@@ -270,7 +285,13 @@ class BackgroundTaskRegistry:
 
     def _worker(self, task_id: str, session_id: str, prompt: str) -> None:
         try:
-            self.store.mark_started(task_id)
+            started = self.store.mark_started(task_id)
+            if started.status == "stopping" or started.cancel_requested:
+                stopped = self.store.set_status(task_id, "stopped", finished=True)
+                self._notify(kind="stopped", record=stopped, message="stopped")
+                return
+            if started.status in TERMINAL_TASK_STATUSES:
+                return
             result = self._invoke(session_id, prompt)
             if has_interrupt(result):
                 self._pause_for_approval(task_id, result)
@@ -282,7 +303,15 @@ class BackgroundTaskRegistry:
             while True:
                 steers = self.store.consume_pending_steers(task_id)
                 if not steers:
-                    break
+                    record = self.store.mark_completing_if_idle(task_id)
+                    if record is None:
+                        continue
+                    if record.status == "completing":
+                        break
+                    if record.status == "stopping" or record.cancel_requested:
+                        stopped = self.store.set_status(task_id, "stopped", finished=True)
+                        self._notify(kind="stopped", record=stopped, message="stopped")
+                    return
                 for steer in steers:
                     if self._stop_requested(task_id):
                         stopped = self.store.set_status(task_id, "stopped", finished=True)
@@ -297,6 +326,16 @@ class BackgroundTaskRegistry:
             self._notify(kind="done", record=completed, message=preview[:200])
         except Exception as exc:
             logger.error("Background task %s failed:\n%s", task_id, traceback.format_exc())
+            current = self.store.get_task(task_id)
+            if current is not None and (
+                current.status in TERMINAL_TASK_STATUSES
+                or current.status == "stopping"
+                or current.cancel_requested
+            ):
+                if current.status == "stopping" or current.cancel_requested:
+                    stopped = self.store.set_status(task_id, "stopped", finished=True)
+                    self._notify(kind="stopped", record=stopped, message="stopped")
+                return
             failed = self.store.set_status(
                 task_id,
                 "failed",
@@ -355,7 +394,15 @@ class BackgroundTaskRegistry:
         while True:
             steers = self.store.consume_pending_steers(task_id)
             if not steers:
-                break
+                record = self.store.mark_completing_if_idle(task_id)
+                if record is None:
+                    continue
+                if record.status == "completing":
+                    break
+                if record.status == "stopping" or record.cancel_requested:
+                    stopped = self.store.set_status(task_id, "stopped", finished=True)
+                    self._notify(kind="stopped", record=stopped, message="stopped")
+                return
             for steer in steers:
                 if self._stop_requested(task_id):
                     stopped = self.store.set_status(task_id, "stopped", finished=True)
@@ -540,11 +587,34 @@ class BackgroundTaskStore:
         return updated
 
     def mark_started(self, task_id: str) -> BackgroundTaskRecord:
-        existing = self.get_task(task_id)
-        if existing is None:
-            raise ValueError(f"unknown background task: {task_id}")
         now = self.now()
         with self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                """
+                SELECT status
+                FROM cli_background_tasks
+                WHERE task_id = ?
+                """,
+                (task_id,),
+            ).fetchone()
+            if row is None:
+                raise ValueError(f"unknown background task: {task_id}")
+            status = row[0]
+            if status != "queued":
+                record_row = conn.execute(
+                    """
+                    SELECT task_id, session_id, title, status, prompt_preview,
+                           last_result_preview, last_error, created_at, updated_at,
+                           started_at, finished_at, cancel_requested, pending_steer_count
+                    FROM cli_background_tasks
+                    WHERE task_id = ?
+                    """,
+                    (task_id,),
+                ).fetchone()
+                if record_row is None:
+                    raise RuntimeError(f"failed to read background task {task_id}")
+                return self._task_from_row(record_row)
             conn.execute(
                 """
                 UPDATE cli_background_tasks
@@ -559,15 +629,133 @@ class BackgroundTaskStore:
         return updated
 
     def mark_completed(self, task_id: str, *, result_preview: str) -> BackgroundTaskRecord:
-        return self.set_status(
-            task_id,
-            "completed",
-            last_result_preview=result_preview,
-            finished=True,
-        )
+        now = self.now()
+        with self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                """
+                SELECT status
+                FROM cli_background_tasks
+                WHERE task_id = ?
+                """,
+                (task_id,),
+            ).fetchone()
+            if row is None:
+                raise ValueError(f"unknown background task: {task_id}")
+            status = row[0]
+            if status in TERMINAL_TASK_STATUSES or status == "stopping":
+                return self._task_from_row(
+                    conn.execute(
+                        """
+                        SELECT task_id, session_id, title, status, prompt_preview,
+                               last_result_preview, last_error, created_at, updated_at,
+                               started_at, finished_at, cancel_requested, pending_steer_count
+                        FROM cli_background_tasks
+                        WHERE task_id = ?
+                        """,
+                        (task_id,),
+                    ).fetchone()
+                )
+            conn.execute(
+                """
+                UPDATE cli_background_tasks
+                SET status = 'completed', updated_at = ?, finished_at = ?,
+                    last_result_preview = ?
+                WHERE task_id = ?
+                """,
+                (now, now, result_preview, task_id),
+            )
+        updated = self.get_task(task_id)
+        if updated is None:
+            raise RuntimeError(f"failed to complete background task {task_id}")
+        return updated
+
+    def mark_completing_if_idle(self, task_id: str) -> BackgroundTaskRecord | None:
+        now = self.now()
+        with self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                """
+                SELECT status, pending_steer_count
+                FROM cli_background_tasks
+                WHERE task_id = ?
+                """,
+                (task_id,),
+            ).fetchone()
+            if row is None:
+                raise ValueError(f"unknown background task: {task_id}")
+            status = row[0]
+            pending_count = int(row[1])
+            if pending_count:
+                return None
+            if status in TERMINAL_TASK_STATUSES or status == "stopping":
+                record_row = conn.execute(
+                    """
+                    SELECT task_id, session_id, title, status, prompt_preview,
+                           last_result_preview, last_error, created_at, updated_at,
+                           started_at, finished_at, cancel_requested, pending_steer_count
+                    FROM cli_background_tasks
+                    WHERE task_id = ?
+                    """,
+                    (task_id,),
+                ).fetchone()
+                if record_row is None:
+                    raise RuntimeError(f"failed to read background task {task_id}")
+                return self._task_from_row(record_row)
+            conn.execute(
+                """
+                UPDATE cli_background_tasks
+                SET status = 'completing', updated_at = ?
+                WHERE task_id = ?
+                """,
+                (now, task_id),
+            )
+        updated = self.get_task(task_id)
+        if updated is None:
+            raise RuntimeError(f"failed to mark background task completing {task_id}")
+        return updated
 
     def request_stop(self, task_id: str) -> BackgroundTaskRecord:
-        return self.set_status(task_id, "stopping", cancel_requested=True)
+        now = self.now()
+        with self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                """
+                SELECT status
+                FROM cli_background_tasks
+                WHERE task_id = ?
+                """,
+                (task_id,),
+            ).fetchone()
+            if row is None:
+                raise ValueError(f"unknown background task: {task_id}")
+            status = row[0]
+            if status in TERMINAL_TASK_STATUSES or status in {"completing", "stopping"}:
+                record_row = conn.execute(
+                    """
+                    SELECT task_id, session_id, title, status, prompt_preview,
+                           last_result_preview, last_error, created_at, updated_at,
+                           started_at, finished_at, cancel_requested, pending_steer_count
+                    FROM cli_background_tasks
+                    WHERE task_id = ?
+                    """,
+                    (task_id,),
+                ).fetchone()
+                if record_row is None:
+                    raise RuntimeError(f"failed to read background task {task_id}")
+                return self._task_from_row(record_row)
+            conn.execute(
+                """
+                UPDATE cli_background_tasks
+                SET status = 'stopping', updated_at = ?, cancel_requested = 1
+                WHERE task_id = ?
+                """,
+                (now, task_id),
+            )
+        updated = self.get_task(task_id)
+        if updated is None:
+            raise RuntimeError(f"failed to request stop for background task {task_id}")
+        return updated
 
     def add_steer(self, task_id: str, message: str) -> BackgroundSteerRecord:
         now = self.now()
@@ -584,7 +772,7 @@ class BackgroundTaskStore:
             if row is None:
                 raise ValueError(f"unknown background task: {task_id}")
             status = row[0]
-            if status in TERMINAL_TASK_STATUSES or status == "stopping":
+            if status in TERMINAL_TASK_STATUSES or status in {"completing", "stopping"}:
                 raise ValueError(f"cannot steer background task in {status} state")
             cursor = conn.execute(
                 """
@@ -621,6 +809,7 @@ class BackgroundTaskStore:
     def consume_pending_steers(self, task_id: str) -> list[BackgroundSteerRecord]:
         now = self.now()
         with self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
             rows = conn.execute(
                 """
                 SELECT id, task_id, message, status, created_at, consumed_at
@@ -644,9 +833,14 @@ class BackgroundTaskStore:
             conn.execute(
                 """
                 UPDATE cli_background_tasks
-                SET pending_steer_count = 0, updated_at = ?
+                SET pending_steer_count = (
+                    SELECT COUNT(*)
+                    FROM cli_background_steers
+                    WHERE task_id = ? AND status = 'pending'
+                ),
+                    updated_at = ?
                 WHERE task_id = ?
                 """,
-                (now, task_id),
+                (task_id, now, task_id),
             )
         return [self._steer_from_row(row) for row in rows]

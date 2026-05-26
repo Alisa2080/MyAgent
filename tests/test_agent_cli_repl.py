@@ -311,6 +311,25 @@ def test_handle_steer_stop_and_approve(monkeypatch):
     assert registry.approved == [("bg_12345678", {"decisions": [{"type": "approve"}]})]
 
 
+def test_handle_stop_reports_completing_as_already_done():
+    registry = FakeBackgroundRegistry()
+    record = registry.start("fix tests")
+    record.status = "completing"
+    cli = AgentCLI(
+        session_store=FakeStore(),
+        checkpointer=None,
+        agent_factory=lambda checkpointer: "agent",
+        runner=lambda agent, input_data, config: {},
+        workdir="/repo",
+        model_name=None,
+        background_registry=registry,
+    )
+
+    assert cli.handle_command("/stop bg_12345678") == (
+        "Background task bg_12345678 is already completing"
+    )
+
+
 def test_handle_command_resume_rejects_unknown_session():
     cli = AgentCLI(
         session_store=FakeStore(),
@@ -605,6 +624,64 @@ def test_run_repl_requests_all_stops_before_joining_on_exit(capsys):
         ("join", "bg_00000001"),
         ("join", "bg_00000002"),
     ]
+
+
+def test_run_repl_finalizes_still_active_tasks_after_exit_join(capsys):
+    active_record = SimpleNamespace(
+        task_id="bg_12345678",
+        session_id="session-bg",
+        title="Task",
+        status="stopping",
+        pending_steer_count=0,
+        last_result_preview=None,
+        last_error=None,
+        prompt_preview="Task",
+        updated_at="now",
+        created_at="now",
+    )
+
+    class Store:
+        def get_task(self, task_id):
+            return active_record
+
+    class Registry(FakeBackgroundRegistry):
+        def __init__(self):
+            super().__init__()
+            self.store = Store()
+            self.finalized = []
+
+        def list_tasks(self, active_only=False, limit=20):
+            return [active_record]
+
+        def stop(self, task_id):
+            self.stopped.append(task_id)
+            return active_record
+
+        def finalize_stopping(self, task_id):
+            self.finalized.append(task_id)
+            active_record.status = "stopped"
+            return active_record
+
+    class FakePrompt:
+        def prompt(self, prompt_text):
+            raise EOFError
+
+    registry = Registry()
+    cli = AgentCLI(
+        session_store=FakeStore(),
+        checkpointer=None,
+        agent_factory=lambda checkpointer: "agent",
+        runner=lambda agent, input_data, config: {},
+        workdir="/repo",
+        model_name=None,
+        prompt_session=FakePrompt(),
+        background_registry=registry,
+        show_banner=False,
+    )
+
+    assert cli.run_repl() == 0
+    assert registry.finalized == ["bg_12345678"]
+    assert active_record.status == "stopped"
 
 
 def test_handle_command_history_renders_empty_history():

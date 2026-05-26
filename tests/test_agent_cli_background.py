@@ -469,3 +469,164 @@ def test_background_store_rejects_steer_while_stopping(tmp_path: Path):
         raise AssertionError("store steer while stopping should fail")
 
     assert store.get_task("bg_12345678").pending_steer_count == 0
+
+
+def test_background_store_does_not_complete_when_pending_steers_exist(tmp_path: Path):
+    store = BackgroundTaskStore(tmp_path / "cli.sqlite")
+    store.create_task(
+        task_id="bg_12345678",
+        session_id="session-1",
+        title="Fix tests",
+        prompt_preview="Fix tests please",
+    )
+    store.mark_started("bg_12345678")
+    store.add_steer("bg_12345678", "try this next")
+
+    assert store.mark_completing_if_idle("bg_12345678") is None
+    record = store.get_task("bg_12345678")
+    assert record.status == "running"
+    assert record.pending_steer_count == 1
+
+
+def test_background_store_rejects_steer_while_completing(tmp_path: Path):
+    store = BackgroundTaskStore(tmp_path / "cli.sqlite")
+    store.create_task(
+        task_id="bg_12345678",
+        session_id="session-1",
+        title="Fix tests",
+        prompt_preview="Fix tests please",
+    )
+    store.mark_started("bg_12345678")
+    completing = store.mark_completing_if_idle("bg_12345678")
+
+    assert completing.status == "completing"
+    try:
+        store.add_steer("bg_12345678", "too late")
+    except ValueError as exc:
+        assert "completing" in str(exc)
+    else:
+        raise AssertionError("steer while completing should fail")
+
+
+def test_background_registry_finalize_requires_cancel_requested(tmp_path: Path):
+    store = BackgroundTaskStore(tmp_path / "cli.sqlite")
+    store.create_task(
+        task_id="bg_12345678",
+        session_id="session-1",
+        title="Fix tests",
+        prompt_preview="Fix tests please",
+    )
+    store.mark_started("bg_12345678")
+    registry = BackgroundTaskRegistry(
+        store=store,
+        session_id_factory=lambda: "session-1",
+        title_factory=lambda prompt: "Task title",
+        runner=lambda input_data, config: {},
+    )
+
+    record = registry.finalize_stopping("bg_12345678")
+
+    assert record.status == "running"
+
+
+def test_background_store_does_not_stop_completing_task(tmp_path: Path):
+    store = BackgroundTaskStore(tmp_path / "cli.sqlite")
+    store.create_task(
+        task_id="bg_12345678",
+        session_id="session-1",
+        title="Fix tests",
+        prompt_preview="Fix tests please",
+    )
+    store.mark_started("bg_12345678")
+    completing = store.mark_completing_if_idle("bg_12345678")
+
+    stopped = store.request_stop("bg_12345678")
+
+    assert completing.status == "completing"
+    assert stopped.status == "completing"
+    assert stopped.cancel_requested is False
+
+
+def test_background_store_does_not_complete_stopping_task(tmp_path: Path):
+    store = BackgroundTaskStore(tmp_path / "cli.sqlite")
+    store.create_task(
+        task_id="bg_12345678",
+        session_id="session-1",
+        title="Fix tests",
+        prompt_preview="Fix tests please",
+    )
+    store.mark_started("bg_12345678")
+    stopping = store.request_stop("bg_12345678")
+
+    completed = store.mark_completed("bg_12345678", result_preview="done")
+
+    assert stopping.status == "stopping"
+    assert completed.status == "stopping"
+    assert completed.last_result_preview is None
+
+
+def test_background_store_does_not_start_stopping_task(tmp_path: Path):
+    store = BackgroundTaskStore(tmp_path / "cli.sqlite")
+    store.create_task(
+        task_id="bg_12345678",
+        session_id="session-1",
+        title="Fix tests",
+        prompt_preview="Fix tests please",
+    )
+    store.request_stop("bg_12345678")
+
+    started = store.mark_started("bg_12345678")
+
+    assert started.status == "stopping"
+    assert started.cancel_requested is True
+
+
+def test_background_registry_stop_before_worker_turn_skips_runner(tmp_path: Path):
+    store = BackgroundTaskStore(tmp_path / "cli.sqlite")
+    calls = []
+
+    def runner(input_data, config):
+        calls.append(input_data)
+        return {"messages": [{"role": "assistant", "content": "done"}]}
+
+    registry = BackgroundTaskRegistry(
+        store=store,
+        session_id_factory=lambda: "session-1",
+        title_factory=lambda prompt: "Task title",
+        runner=runner,
+    )
+    store.create_task(
+        task_id="bg_12345678",
+        session_id="session-1",
+        title="Task title",
+        prompt_preview="first instruction",
+    )
+    store.request_stop("bg_12345678")
+
+    registry._worker("bg_12345678", "session-1", "first instruction")
+
+    assert calls == []
+    assert store.get_task("bg_12345678").status == "stopped"
+
+
+def test_background_registry_exception_preserves_cancelled_task(tmp_path: Path):
+    store = BackgroundTaskStore(tmp_path / "cli.sqlite")
+
+    def runner(input_data, config):
+        registry.stop("bg_12345678")
+        raise RuntimeError("boom")
+
+    registry = BackgroundTaskRegistry(
+        store=store,
+        session_id_factory=lambda: "session-1",
+        title_factory=lambda prompt: "Task title",
+        runner=runner,
+    )
+    registry.new_task_id = lambda: "bg_12345678"
+
+    record = registry.start("first instruction")
+    registry.join(record.task_id, timeout=2)
+
+    final = store.get_task(record.task_id)
+    assert final.status == "stopped"
+    assert final.last_error is None
