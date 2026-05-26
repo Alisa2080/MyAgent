@@ -74,26 +74,35 @@ def iter_checkpoints(checkpointer: Any, thread_id: str) -> Iterator[dict[str, An
     """Iterate over checkpoints for a given thread."""
     if checkpointer is None:
         return
+    config = {"configurable": {"thread_id": thread_id}}
     try:
+        if hasattr(checkpointer, "get_tuple"):
+            checkpoint_tuple = checkpointer.get_tuple(config)
+            if checkpoint_tuple is not None:
+                yield checkpoint_tuple
+                return
         if hasattr(checkpointer, "alist"):
-            aconfig = {"configurable": {"thread_id": thread_id}}
-            for state in checkpointer.alist(None, aconfig, limit=100):
+            for state in checkpointer.alist(config, limit=100):
                 yield state
         elif hasattr(checkpointer, "get_list"):
             for state in checkpointer.get_list(thread_id, limit=100):
                 yield state
         elif hasattr(checkpointer, "list"):
-            for state in checkpointer.list(thread_id):
+            for state in checkpointer.list(config, limit=100):
                 yield state
     except Exception:
         pass
 
 
-def checkpoint_to_messages(checkpoint: dict[str, Any]) -> list[dict[str, Any]]:
+def checkpoint_to_messages(checkpoint: Any) -> list[dict[str, Any]]:
     """Extract message list from a checkpoint."""
     if checkpoint is None:
         return []
+    if hasattr(checkpoint, "checkpoint"):
+        checkpoint = checkpoint.checkpoint
     if isinstance(checkpoint, dict):
+        if "checkpoint" in checkpoint:
+            return checkpoint_to_messages(checkpoint["checkpoint"])
         if "channel_values" in checkpoint:
             values = checkpoint["channel_values"]
             if "messages" in values:

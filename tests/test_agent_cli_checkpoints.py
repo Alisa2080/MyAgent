@@ -1,6 +1,7 @@
 import sys
 import types
 from contextlib import AbstractContextManager
+from dataclasses import dataclass
 
 import pytest
 
@@ -136,3 +137,49 @@ def test_create_sqlite_checkpointer_reraises_unexpected_transitive_import_error(
         create_sqlite_checkpointer(tmp_path / "cli.sqlite")
 
     assert exc.value.name == "missing_transitive"
+
+
+@dataclass
+class FakeCheckpointTuple:
+    checkpoint: dict
+
+
+def test_extract_messages_from_checkpoints_reads_latest_checkpoint_tuple():
+    class FakeSaver:
+        def get_tuple(self, config):
+            assert config == {"configurable": {"thread_id": "thread-1"}}
+            return FakeCheckpointTuple(
+                checkpoint={
+                    "channel_values": {
+                        "messages": [{"role": "user", "content": "hello"}]
+                    }
+                }
+            )
+
+    from agent_cli.checkpoints import extract_messages_from_checkpoints
+
+    assert extract_messages_from_checkpoints(FakeSaver(), "thread-1") == [
+        {"role": "user", "content": "hello"}
+    ]
+
+
+def test_extract_messages_from_checkpoints_reads_list_checkpoint_tuples():
+    class FakeSaver:
+        def list(self, config, *, limit=None):
+            assert config == {"configurable": {"thread_id": "thread-1"}}
+            assert limit == 100
+            return [
+                FakeCheckpointTuple(
+                    checkpoint={
+                        "channel_values": {
+                            "messages": [{"role": "assistant", "content": "hi"}]
+                        }
+                    }
+                )
+            ]
+
+    from agent_cli.checkpoints import extract_messages_from_checkpoints
+
+    assert extract_messages_from_checkpoints(FakeSaver(), "thread-1") == [
+        {"role": "assistant", "content": "hi"}
+    ]
