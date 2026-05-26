@@ -38,6 +38,9 @@ def extract_interrupt_review_requests(result: Any) -> list[ApprovalRequest]:
         if not isinstance(action_requests, list):
             paired.append(ApprovalRequest(value, {}))
             continue
+        if not action_requests:
+            paired.append(ApprovalRequest(value, {}))
+            continue
 
         if not isinstance(review_configs, list):
             review_configs = []

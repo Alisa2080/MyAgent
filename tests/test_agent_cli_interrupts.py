@@ -177,6 +177,15 @@ def test_extract_interrupt_review_requests_handles_missing_review_configs():
     assert requests[0].review_config == {}
 
 
+def test_extract_interrupt_review_requests_handles_empty_action_requests():
+    result = {"__interrupt__": [{"value": {"action_requests": []}}]}
+
+    requests = extract_interrupt_review_requests(result)
+
+    assert len(requests) == 1
+    assert requests[0].action_request == {"action_requests": []}
+
+
 from agent_cli.approval import ApprovalRequest, collect_approval_decisions, summarize_args
 
 
