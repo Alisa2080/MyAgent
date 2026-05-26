@@ -304,6 +304,42 @@ def test_main_invalid_display_markdown_returns_code_2(monkeypatch, tmp_path, cap
     assert "display.markdown" in captured.err
 
 
+def test_settings_from_config_reads_display_theme(tmp_path):
+    from agent_cli.config import settings_from_config
+
+    (tmp_path / "config.yaml").write_text("display:\n  theme: slate\n", encoding="utf-8")
+
+    settings = settings_from_config(cli_home=tmp_path, profile=None, cli_model=None)
+
+    assert settings.display_theme == "slate"
+
+
+def test_settings_from_config_rejects_invalid_display_theme(tmp_path):
+    from agent_cli.config import ConfigError, settings_from_config
+
+    (tmp_path / "config.yaml").write_text("display:\n  theme: weird\n", encoding="utf-8")
+
+    try:
+        settings_from_config(cli_home=tmp_path, profile=None, cli_model=None)
+    except ConfigError as exc:
+        assert "display.theme" in str(exc)
+    else:
+        raise AssertionError("expected ConfigError")
+
+
+def test_settings_from_config_rejects_falsy_display_theme(tmp_path):
+    from agent_cli.config import ConfigError, settings_from_config
+
+    (tmp_path / "config.yaml").write_text("display:\n  theme: false\n", encoding="utf-8")
+
+    try:
+        settings_from_config(cli_home=tmp_path, profile=None, cli_model=None)
+    except ConfigError as exc:
+        assert "display.theme" in str(exc)
+    else:
+        raise AssertionError("expected ConfigError")
+
+
 def test_main_doctor_reports_malformed_config_without_startup_failure(monkeypatch, tmp_path, capsys):
     monkeypatch.setenv("AGENT_CLI_HOME", str(tmp_path))
     (tmp_path / "config.yaml").write_text("model: [", encoding="utf-8")

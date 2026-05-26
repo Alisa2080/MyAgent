@@ -12,6 +12,8 @@ try:
 except ModuleNotFoundError:
     yaml = None
 
+from agent_cli.theme import SUPPORTED_THEMES
+
 
 @dataclass(frozen=True)
 class RuntimeSettings:
@@ -20,12 +22,14 @@ class RuntimeSettings:
     model_name: str | None = None
     default_title: str = "New session"
     display_markdown: str = "render"
+    display_theme: str = "default"
     config_path: Path | None = None
     dotenv_paths: tuple[Path, ...] = ()
 
 
 PROFILE_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 DISPLAY_MARKDOWN_VALUES = {"render", "strip", "raw"}
+DISPLAY_THEME_VALUES = set(SUPPORTED_THEMES)
 
 
 @dataclass(frozen=True)
@@ -104,6 +108,13 @@ def settings_from_config(
             "display.markdown must be one of: "
             + ", ".join(sorted(DISPLAY_MARKDOWN_VALUES))
         )
+    raw_display_theme = display_section.get("theme", "default")
+    display_theme = "default" if raw_display_theme is None else str(raw_display_theme)
+    if display_theme not in DISPLAY_THEME_VALUES:
+        raise ConfigError(
+            "display.theme must be one of: "
+            + ", ".join(sorted(DISPLAY_THEME_VALUES))
+        )
     model_name = cli_model or model_section.get("name")
     if model_name is not None:
         model_name = str(model_name)
@@ -114,6 +125,7 @@ def settings_from_config(
         model_name=model_name,
         default_title=default_title,
         display_markdown=display_markdown,
+        display_theme=display_theme,
         config_path=config_path,
     )
 
