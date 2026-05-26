@@ -206,7 +206,10 @@ def test_collect_approval_decisions_supports_approve_reject_respond_edit():
             {"type": "approve"},
             {"type": "reject", "message": "not useful"},
             {"type": "respond", "message": "please explain first"},
-            {"type": "edit", "args": {"name": "new"}},
+            {
+                "type": "edit",
+                "edited_action": {"name": "write_file", "args": {"name": "new"}},
+            },
         ]
     }
 
@@ -249,5 +252,45 @@ def test_collect_approval_decisions_retries_invalid_edit_json():
         print_func=printed.append,
     )
 
-    assert resume == {"decisions": [{"type": "edit", "args": {"path": "b.txt"}}]}
+    assert resume == {
+        "decisions": [
+            {
+                "type": "edit",
+                "edited_action": {"name": "write_file", "args": {"path": "b.txt"}},
+            }
+        ]
+    }
     assert any("Invalid JSON" in line for line in printed)
+
+
+def test_collect_approval_decisions_rejects_remaining_on_secondary_prompt_eof():
+    requests = [
+        ApprovalRequest({"name": "terminal", "args": {"command": "pwd"}}, {}),
+        ApprovalRequest({"name": "write_file", "args": {"path": "a.txt"}}, {}),
+    ]
+    answers = iter(["n"])
+
+    def input_func(prompt):
+        try:
+            return next(answers)
+        except StopIteration:
+            raise EOFError
+
+    resume = collect_approval_decisions(
+        requests,
+        input_func=input_func,
+        print_func=lambda text="": None,
+    )
+
+    assert resume == {
+        "decisions": [
+            {
+                "type": "reject",
+                "message": "Rejected because approval input ended.",
+            },
+            {
+                "type": "reject",
+                "message": "Rejected because approval input ended.",
+            },
+        ]
+    }

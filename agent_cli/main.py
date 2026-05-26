@@ -12,19 +12,25 @@ except ModuleNotFoundError:
 
 from agent_cli.checkpoints import CheckpointDependencyError, create_sqlite_checkpointer
 from agent_cli.commands import COMMAND_LOOKUP
-from agent_cli.config import ConfigError, load_dotenv_files, settings_from_config
+from agent_cli.config import (
+    ConfigError,
+    apply_profile_override,
+    load_dotenv_files,
+    settings_from_config,
+)
 from agent_cli.logging_config import setup_cli_logging
 from agent_cli.paths import ensure_db_parent
 from agent_cli.rendering import format_sessions
 from agent_cli.repl import AgentCLI, default_agent_factory, default_runner
 from agent_cli.session_store import SessionStore
-from agent_cli.skill_commands import load_skill_commands
+from agent_cli.skill_commands import load_skill_commands, load_skill_discovery
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="agent_cli")
     parser.add_argument("--workdir", default=None, help="Workspace directory for the agent.")
     parser.add_argument("--model", default=None, help="Model display metadata for session list.")
+    parser.add_argument("--profile", "-p", default=None, help="Use a named CLI profile.")
 
     subparsers = parser.add_subparsers(dest="command")
 
@@ -56,10 +62,18 @@ def make_cli(
         skill_commands_provider=lambda: load_skill_commands(
             built_in_names=set(COMMAND_LOOKUP)
         ),
+        skill_discovery_provider=lambda: load_skill_discovery(
+            built_in_names=set(COMMAND_LOOKUP)
+        ),
     )
 
 
 def main(argv: list[str] | None = None) -> int:
+    try:
+        profile_application = apply_profile_override(argv)
+    except ValueError as exc:
+        print(f"Invalid profile: {exc}", file=sys.stderr)
+        return 2
     setup_cli_logging()
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -68,31 +82,31 @@ def main(argv: list[str] | None = None) -> int:
     db_path = ensure_db_parent()
     cli_home = db_path.parent
 
+    load_dotenv_files(cli_home=cli_home, project_root=Path.cwd(), dotenv_module=dotenv)
+
+    if command == "doctor":
+        from agent_cli.doctor import render_doctor_output, run_health_checks
+
+        workdir = str(Path(args.workdir).expanduser().resolve()) if args.workdir else os.getcwd()
+        results = run_health_checks(workdir=workdir, cli_home=cli_home)
+        print(render_doctor_output(results))
+        return 1 if any(item.status == "FAIL" for item in results) else 0
+
     try:
         settings = settings_from_config(
             cli_home=cli_home,
-            profile=None,
+            profile=profile_application.profile,
             cli_model=args.model,
         )
     except ConfigError as exc:
         print(str(exc), file=sys.stderr)
         return 2
 
-    load_dotenv_files(cli_home=cli_home, project_root=Path.cwd(), dotenv_module=dotenv)
-
     store = SessionStore(db_path)
 
     if command == "sessions":
         print(format_sessions(store.list_sessions()))
         return 0
-
-    if command == "doctor":
-        from agent_cli.doctor import render_doctor_output, run_health_checks
-
-        workdir = str(Path(args.workdir).expanduser().resolve()) if args.workdir else os.getcwd()
-        results = run_health_checks(workdir=workdir)
-        print(render_doctor_output(results))
-        return 1 if any(item.status == "FAIL" for item in results) else 0
 
     resume_id = getattr(args, "resume", None)
     if resume_id and store.get_session(resume_id) is None:

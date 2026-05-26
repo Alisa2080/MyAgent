@@ -25,6 +25,7 @@ class RuntimeSettings:
 
 
 PROFILE_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
+DISPLAY_MARKDOWN_VALUES = {"render", "strip", "raw"}
 
 
 @dataclass(frozen=True)
@@ -51,7 +52,7 @@ def _profile_from_argv(argv: list[str] | None) -> str | None:
 
 def apply_profile_override(argv: list[str] | None = None) -> ProfileApplication:
     profile = _profile_from_argv(argv)
-    existing = os.getenv("AGENT_CLI_HOME")
+    existing = os.getenv("AGENT_CLI_HOME") or None
     if not profile:
         return ProfileApplication(None, str(Path(existing).expanduser().resolve()) if existing else None, existing, bool(existing))
 
@@ -98,6 +99,11 @@ def settings_from_config(
 
     default_title = str(session_section.get("default_title") or "New session")
     display_markdown = str(display_section.get("markdown") or "render")
+    if display_markdown not in DISPLAY_MARKDOWN_VALUES:
+        raise ConfigError(
+            "display.markdown must be one of: "
+            + ", ".join(sorted(DISPLAY_MARKDOWN_VALUES))
+        )
     model_name = cli_model or model_section.get("name")
     if model_name is not None:
         model_name = str(model_name)

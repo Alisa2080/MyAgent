@@ -4,7 +4,12 @@ from agent_cli.commands import (
     render_help,
     commands_for_completion,
 )
-from agent_cli.skill_commands import SkillCommand, build_skill_command_map, build_skill_invocation_message
+from agent_cli.skill_commands import (
+    SkillCommand,
+    build_skill_command_map,
+    build_skill_discovery,
+    build_skill_invocation_message,
+)
 
 
 def test_resolve_command_handles_slash_and_alias():
@@ -79,6 +84,30 @@ def test_build_skill_command_map_builtin_conflict_is_not_registered():
     commands = build_skill_command_map(skills, built_in_names={"help"})
 
     assert commands == {}
+
+
+def test_build_skill_discovery_reports_registered_and_conflicting_skills():
+    skills = [
+        {
+            "name": "python-debug",
+            "description": "Debug Python failures.",
+            "path": "/repo/skills/python-debug/SKILL.md",
+            "dir": "/repo/skills/python-debug",
+        },
+        {
+            "name": "help",
+            "description": "conflict",
+            "path": "/repo/skills/help/SKILL.md",
+            "dir": "/repo/skills/help",
+        },
+    ]
+
+    discovery = build_skill_discovery(skills, built_in_names={"help"})
+
+    assert discovery.commands["python-debug"].command == "python-debug"
+    assert discovery.entries[0].command == "python-debug"
+    assert discovery.entries[1].command is None
+    assert "conflicts" in discovery.entries[1].note
 
 
 def test_build_skill_invocation_message_includes_content_and_supporting_files():

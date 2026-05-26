@@ -16,9 +16,54 @@ class SkillCommand:
     conflict: bool = False
 
 
+@dataclass(frozen=True)
+class SkillEntry:
+    skill: dict[str, Any]
+    command: str | None
+    note: str = ""
+
+
+@dataclass(frozen=True)
+class SkillDiscovery:
+    commands: dict[str, SkillCommand]
+    entries: list[SkillEntry]
+
+
 def normalize_skill_command(value: str) -> str:
     normalized = COMMAND_RE.sub("-", value.strip().lower()).strip("-")
     return normalized
+
+
+def _candidate_names(skill: dict[str, Any]) -> list[str]:
+    names = [normalize_skill_command(str(skill.get("name") or ""))]
+    if skill.get("dir"):
+        names.append(normalize_skill_command(Path(str(skill["dir"])).name))
+    return list(dict.fromkeys(item for item in names if item))
+
+
+def build_skill_discovery(
+    skills: list[dict[str, Any]],
+    *,
+    built_in_names: set[str],
+) -> SkillDiscovery:
+    commands: dict[str, SkillCommand] = {}
+    entries: list[SkillEntry] = []
+    for skill in skills:
+        command = None
+        note = ""
+        for name in _candidate_names(skill):
+            if name in built_in_names:
+                note = f"conflicts with built-in command /{name}"
+                continue
+            if name in commands:
+                note = f"conflicts with skill command /{name}"
+                continue
+            command = name
+            commands[name] = SkillCommand(command=name, skill=skill)
+            note = ""
+            break
+        entries.append(SkillEntry(skill=skill, command=command, note=note))
+    return SkillDiscovery(commands=commands, entries=entries)
 
 
 def build_skill_command_map(
@@ -26,16 +71,7 @@ def build_skill_command_map(
     *,
     built_in_names: set[str],
 ) -> dict[str, SkillCommand]:
-    commands: dict[str, SkillCommand] = {}
-    for skill in skills:
-        names = [normalize_skill_command(str(skill.get("name") or ""))]
-        if skill.get("dir"):
-            names.append(normalize_skill_command(Path(str(skill["dir"])).name))
-        for name in dict.fromkeys(item for item in names if item):
-            if name in built_in_names or name in commands:
-                continue
-            commands[name] = SkillCommand(command=name, skill=skill)
-    return commands
+    return build_skill_discovery(skills, built_in_names=built_in_names).commands
 
 
 def build_skill_invocation_message(command: SkillCommand, prompt: str) -> str:
@@ -55,9 +91,13 @@ def build_skill_invocation_message(command: SkillCommand, prompt: str) -> str:
 
 
 def load_skill_commands(*, built_in_names: set[str]) -> dict[str, SkillCommand]:
+    return load_skill_discovery(built_in_names=built_in_names).commands
+
+
+def load_skill_discovery(*, built_in_names: set[str]) -> SkillDiscovery:
     from agent_tools.public.skills import _all_skills
 
-    return build_skill_command_map(_all_skills(), built_in_names=built_in_names)
+    return build_skill_discovery(_all_skills(), built_in_names=built_in_names)
 
 
 def load_skill_for_command(command: SkillCommand) -> SkillCommand:

@@ -7,7 +7,7 @@ from typing import Any
 
 from langgraph.types import Command
 
-from agent_cli.commands import render_help, resolve_command
+from agent_cli.commands import COMMAND_LOOKUP, render_help, resolve_command
 from agent_cli.doctor import render_doctor_output, run_health_checks
 from agent_cli.approval import collect_approval_decisions
 from agent_cli.interrupts import (
@@ -58,6 +58,7 @@ class AgentCLI:
         prompt_session: Any | None = None,
         default_title: str = "New session",
         skill_commands_provider: Callable[[], dict[str, Any]] | None = None,
+        skill_discovery_provider: Callable[[], Any] | None = None,
         skill_loader: Callable[[Any], Any] | None = None,
     ):
         self.session_store = session_store
@@ -69,6 +70,7 @@ class AgentCLI:
         self.prompt_session = prompt_session
         self.default_title = default_title
         self.skill_commands_provider = skill_commands_provider or (lambda: {})
+        self.skill_discovery_provider = skill_discovery_provider
         self.skill_loader = skill_loader
         self._agent: Any | None = None
         # Initialize session after basic attributes are set
@@ -247,15 +249,24 @@ class AgentCLI:
         return f"Unhandled command: /{command.name}"
 
     def _render_skills(self) -> str:
-        from agent_tools.public.skills import _all_skills
+        if self.skill_discovery_provider is not None:
+            discovery = self.skill_discovery_provider()
+        else:
+            from agent_cli.skill_commands import load_skill_discovery
 
-        skills = _all_skills()
-        if not skills:
+            discovery = load_skill_discovery(built_in_names=set(COMMAND_LOOKUP))
+        if not discovery.entries:
             return "No skills found."
-        return "\n".join(
-            f"{item['name']} - {item.get('description') or ''}".rstrip()
-            for item in skills
-        )
+        lines = []
+        for entry in discovery.entries:
+            item = entry.skill
+            line = f"{item['name']} - {item.get('description') or ''}".rstrip()
+            if entry.command:
+                line = f"{line} (/{entry.command})"
+            elif entry.note:
+                line = f"{line} ({entry.note})"
+            lines.append(line)
+        return "\n".join(lines)
 
     def _render_skill(self, name: str) -> str:
         if not name:

@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-import os
 import platform
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+from agent_cli.config import ConfigError, load_config_file
+from agent_cli.paths import get_cli_home
 from agent_cli.session_store import SessionStore
 
 
@@ -74,12 +75,14 @@ def check_config(cli_home: Path) -> tuple[bool, str]:
     """Check config.yaml is readable if present."""
     config_path = cli_home / "config.yaml"
     if not config_path.exists():
-        return True, "OK"
+        return True, f"optional file missing: {config_path}"
     try:
-        config_path.read_text(encoding="utf-8")
-        return True, "OK"
+        load_config_file(config_path)
+        return True, f"config readable: {config_path}"
+    except ConfigError as exc:
+        return False, str(exc)
     except Exception as exc:
-        return False, f"FAIL"
+        return False, f"Config cannot be read at {config_path}: {exc}"
 
 
 def check_dotenv(cli_home: Path, cwd: Path) -> tuple[bool, str]:
@@ -87,14 +90,14 @@ def check_dotenv(cli_home: Path, cwd: Path) -> tuple[bool, str]:
     env_paths = [cli_home / ".env", cwd / ".env"]
     existing = [str(p) for p in env_paths if p.exists()]
     if not existing:
-        return True, "OK"
+        return True, f"no .env files found; checked {env_paths[0]} and {env_paths[1]}"
     try:
         for path in env_paths:
             if path.exists():
                 path.read_text(encoding="utf-8")
-        return True, f"OK"
+        return True, "visible .env files: " + ", ".join(existing)
     except Exception as exc:
-        return False, f"WARN"
+        return False, f"dotenv file cannot be read: {exc}"
 
 
 def run_health_checks(
@@ -102,7 +105,7 @@ def run_health_checks(
 ) -> list[HealthCheck]:
     """Run all health checks."""
     if cli_home is None:
-        cli_home = Path.home()
+        cli_home = get_cli_home()
     cwd = Path.cwd()
 
     checks = [

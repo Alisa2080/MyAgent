@@ -434,3 +434,44 @@ def test_handle_command_routes_dynamic_skill_to_agent(monkeypatch, tmp_path):
     assert cli.handle_command("/python-debug fix it") == "ok"
     assert "# Python Debug" in submitted[0]
     assert "User request:\nfix it" in submitted[0]
+
+
+def test_render_skills_shows_dynamic_command_and_conflict(monkeypatch):
+    from agent_cli.skill_commands import SkillCommand, SkillDiscovery, SkillEntry
+
+    cli = AgentCLI(
+        session_store=FakeStore(),
+        checkpointer=object(),
+        agent_factory=lambda checkpointer: object(),
+        runner=lambda agent, input_data, config: {},
+        workdir="/repo",
+        model_name=None,
+        skill_discovery_provider=lambda: SkillDiscovery(
+            commands={
+                "python-debug": SkillCommand(
+                    command="python-debug",
+                    skill={
+                        "name": "python-debug",
+                        "description": "Debug Python.",
+                    },
+                )
+            },
+            entries=[
+                SkillEntry(
+                    skill={"name": "python-debug", "description": "Debug Python."},
+                    command="python-debug",
+                    note="",
+                ),
+                SkillEntry(
+                    skill={"name": "help", "description": "Builtin conflict."},
+                    command=None,
+                    note="conflicts with built-in command /help",
+                ),
+            ],
+        ),
+    )
+
+    output = cli.handle_command("/skills")
+
+    assert "python-debug - Debug Python. (/python-debug)" in output
+    assert "help - Builtin conflict. (conflicts with built-in command /help)" in output

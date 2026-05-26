@@ -208,6 +208,32 @@ def test_python_module_sessions_smoke(tmp_path):
     assert "No sessions found." in result.stdout
 
 
+def test_python_module_profile_sessions_smoke(tmp_path):
+    result = subprocess.run(
+        [sys.executable, "-m", "agent_cli", "--profile", "dev", "sessions"],
+        text=True,
+        capture_output=True,
+        check=False,
+        env={**os.environ, "HOME": str(tmp_path), "AGENT_CLI_HOME": ""},
+    )
+
+    assert result.returncode == 0
+    assert "No sessions found." in result.stdout
+    assert (tmp_path / ".langchain-agent" / "profiles" / "dev" / "cli.sqlite").exists()
+
+
+def test_main_invalid_profile_returns_code_2(monkeypatch, capsys):
+    monkeypatch.delenv("AGENT_CLI_HOME", raising=False)
+
+    import agent_cli.main as main_module
+
+    code = main_module.main(["--profile", "../bad", "sessions"])
+
+    captured = capsys.readouterr()
+    assert code == 2
+    assert "Invalid profile" in captured.err
+
+
 def test_main_model_config_used_when_cli_model_missing(monkeypatch, tmp_path):
     monkeypatch.setenv("AGENT_CLI_HOME", str(tmp_path))
     (tmp_path / "config.yaml").write_text("model:\n  name: config-model\n", encoding="utf-8")
@@ -263,6 +289,33 @@ def test_main_malformed_config_returns_code_2(monkeypatch, tmp_path, capsys):
     captured = capsys.readouterr()
     assert code == 2
     assert "config.yaml" in captured.err
+
+
+def test_main_invalid_display_markdown_returns_code_2(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("AGENT_CLI_HOME", str(tmp_path))
+    (tmp_path / "config.yaml").write_text("display:\n  markdown: weird\n", encoding="utf-8")
+
+    import agent_cli.main as main_module
+
+    code = main_module.main(["sessions"])
+
+    captured = capsys.readouterr()
+    assert code == 2
+    assert "display.markdown" in captured.err
+
+
+def test_main_doctor_reports_malformed_config_without_startup_failure(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("AGENT_CLI_HOME", str(tmp_path))
+    (tmp_path / "config.yaml").write_text("model: [", encoding="utf-8")
+
+    import agent_cli.main as main_module
+
+    code = main_module.main(["doctor"])
+
+    captured = capsys.readouterr()
+    assert code == 1
+    assert "Config" in captured.out
+    assert "config.yaml" in captured.out
 
 
 def test_main_doctor_returns_1_when_health_check_fails(monkeypatch, tmp_path, capsys):

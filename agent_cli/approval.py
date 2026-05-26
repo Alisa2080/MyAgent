@@ -70,15 +70,15 @@ def collect_approval_decisions(
     decisions: list[dict[str, Any]] = []
     total = len(requests)
     index = 0
+    eof_message = "Rejected because approval input ended."
     while index < total:
         request = requests[index]
         print_func(_render_request(index + 1, total, request))
         try:
             answer = input_func("Decision [y/n/e/r/a/q]: ").strip().lower()
         except EOFError:
-            message = "Rejected because approval input ended."
             decisions.extend(
-                {"type": "reject", "message": message}
+                {"type": "reject", "message": eof_message}
                 for _ in range(total - index)
             )
             break
@@ -91,41 +91,73 @@ def collect_approval_decisions(
             decisions.extend({"type": "approve"} for _ in range(total - index))
             break
         if answer in {"n", "no"}:
-            message = _message_or_default(
-                input_func("Reject message: "),
-                "Rejected by user.",
-            )
+            try:
+                message = _message_or_default(
+                    input_func("Reject message: "),
+                    "Rejected by user.",
+                )
+            except EOFError:
+                decisions.extend(
+                    {"type": "reject", "message": eof_message}
+                    for _ in range(total - index)
+                )
+                break
             decisions.append({"type": "reject", "message": message})
             index += 1
             continue
         if answer in {"q", "quit"}:
-            message = _message_or_default(
-                input_func("Reject message for all remaining: "),
-                "Rejected by user.",
-            )
+            try:
+                message = _message_or_default(
+                    input_func("Reject message for all remaining: "),
+                    "Rejected by user.",
+                )
+            except EOFError:
+                message = eof_message
             decisions.extend(
                 {"type": "reject", "message": message}
                 for _ in range(total - index)
             )
             break
         if answer in {"r", "respond"}:
-            message = _message_or_default(
-                input_func("Response message: "),
-                "Please revise the request.",
-            )
+            try:
+                message = _message_or_default(
+                    input_func("Response message: "),
+                    "Please revise the request.",
+                )
+            except EOFError:
+                decisions.extend(
+                    {"type": "reject", "message": eof_message}
+                    for _ in range(total - index)
+                )
+                break
             decisions.append({"type": "respond", "message": message})
             index += 1
             continue
         if answer in {"e", "edit"}:
             print_func("Current args JSON:")
             print_func(json.dumps(request.args, ensure_ascii=False, indent=2, sort_keys=True))
-            raw = input_func("Edited args JSON: ")
+            try:
+                raw = input_func("Edited args JSON: ")
+            except EOFError:
+                decisions.extend(
+                    {"type": "reject", "message": eof_message}
+                    for _ in range(total - index)
+                )
+                break
             try:
                 edited_args = _parse_json_args(raw)
             except (json.JSONDecodeError, ValueError) as exc:
                 print_func(f"Invalid JSON: {exc}")
                 continue
-            decisions.append({"type": "edit", "args": edited_args})
+            decisions.append(
+                {
+                    "type": "edit",
+                    "edited_action": {
+                        "name": request.tool_name,
+                        "args": edited_args,
+                    },
+                }
+            )
             index += 1
             continue
 
