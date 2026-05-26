@@ -356,15 +356,58 @@ class AgentCLI:
         desc = meta.get("description") or ""
         return f"{meta['name']}\n{desc}".strip()
 
-    def run_repl(self) -> int:
-        self.ensure_session()
+    def _drain_background_notifications(self) -> None:
+        if self.background_registry is None:
+            return
+        for item in self.background_registry.drain_notifications():
+            message = " ".join(str(item.message).split())
+            print(
+                f"[background {item.kind}] {item.task_id} · {item.status} "
+                f"· session {item.session_id} · {message}"
+            )
+
+    def _stop_active_background_tasks_on_exit(self) -> None:
+        if self.background_registry is None:
+            return
+        try:
+            active = self.background_registry.list_tasks(active_only=True, limit=None)
+        except TypeError:
+            active = self.background_registry.list_tasks(active_only=True)
+        if not active:
+            return
+        print(f"Stopping {len(active)} active background task(s)...")
+        for record in active:
+            try:
+                self.background_registry.stop(record.task_id)
+            except Exception as exc:
+                print(f"Failed to stop {record.task_id}: {exc}", file=sys.stderr)
+        join = getattr(self.background_registry, "join", None)
+        if join is None:
+            return
+        for record in active:
+            try:
+                join(record.task_id, timeout=0.5)
+            except Exception as exc:
+                print(f"Failed to join {record.task_id}: {exc}", file=sys.stderr)
+
+    def _print_banner(self) -> None:
         print(f"Session: {self.session_id}")
         print("Type /help for commands. Ctrl-D exits.")
+
+    def run_repl(self) -> int:
+        self.ensure_session()
+        if self.show_banner:
+            self._print_banner()
+        else:
+            print(f"Session: {self.session_id}")
+            print("Type /help for commands. Ctrl-D exits.")
         while True:
             try:
+                self._drain_background_notifications()
                 text = self._prompt("> ").strip()
             except EOFError:
                 print()
+                self._stop_active_background_tasks_on_exit()
                 return 0
             except KeyboardInterrupt:
                 print()
@@ -378,7 +421,9 @@ class AgentCLI:
                     output = self.submit_message(text)
                 if output:
                     print(output)
+                self._drain_background_notifications()
             except EOFError:
+                self._stop_active_background_tasks_on_exit()
                 return 0
             except Exception as exc:
                 print(f"Error: {exc}", file=sys.stderr)

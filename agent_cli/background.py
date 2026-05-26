@@ -163,9 +163,11 @@ class BackgroundTaskRegistry:
         thread.start()
         return record
 
-    def list_tasks(self, *, active_only: bool = False) -> list[BackgroundTaskRecord]:
+    def list_tasks(
+        self, *, active_only: bool = False, limit: int | None = 20
+    ) -> list[BackgroundTaskRecord]:
         statuses = ACTIVE_TASK_STATUSES if active_only else None
-        return self.store.list_tasks(statuses=statuses)
+        return self.store.list_tasks(statuses=statuses, limit=limit)
 
     def steer(self, task_id: str, message: str) -> BackgroundSteerRecord:
         record = self.store.get_task(task_id)
@@ -453,7 +455,7 @@ class BackgroundTaskStore:
         self,
         *,
         statuses: set[str] | None = None,
-        limit: int = 20,
+        limit: int | None = 20,
     ) -> list[BackgroundTaskRecord]:
         where = ""
         params: list[object] = []
@@ -461,7 +463,10 @@ class BackgroundTaskStore:
             placeholders = ", ".join("?" for _ in statuses)
             where = f"WHERE status IN ({placeholders})"
             params.extend(sorted(statuses))
-        params.append(limit)
+        limit_clause = ""
+        if limit is not None:
+            limit_clause = "LIMIT ?"
+            params.append(limit)
         with self.connect() as conn:
             rows = conn.execute(
                 f"""
@@ -471,7 +476,7 @@ class BackgroundTaskStore:
                 FROM cli_background_tasks
                 {where}
                 ORDER BY updated_at DESC
-                LIMIT ?
+                {limit_clause}
                 """,
                 params,
             ).fetchall()
