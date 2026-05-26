@@ -33,12 +33,15 @@ def setup_cli_logging(
         log_file = ensure_cli_home() / "cli.log"
     
     log_file = Path(log_file)
-    log_file.parent.mkdir(parents=True, exist_ok=True)
     
-    file_handler = logging.FileHandler(log_file)
-    file_handler.setLevel(logging.DEBUG)
-    file_handler.setFormatter(formatter)
-    logger.addHandler(file_handler)
+    try:
+        log_file.parent.mkdir(parents=True, exist_ok=True)
+        file_handler = logging.FileHandler(log_file)
+        file_handler.setLevel(logging.DEBUG)
+        file_handler.setFormatter(formatter)
+        logger.addHandler(file_handler)
+    except (PermissionError, OSError):
+        pass
     
     return logger
 
