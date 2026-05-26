@@ -3,9 +3,17 @@ from __future__ import annotations
 import os
 import platform
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 from agent_cli.session_store import SessionStore
+
+
+@dataclass(frozen=True)
+class HealthCheck:
+    name: str
+    status: str
+    message: str
 
 
 def check_python_version() -> tuple[bool, str]:
@@ -91,7 +99,7 @@ def check_dotenv(cli_home: Path, cwd: Path) -> tuple[bool, str]:
 
 def run_health_checks(
     workdir: str, tmp_path: Path | None = None, cli_home: Path | None = None
-) -> list[tuple[str, bool, str]]:
+) -> list[HealthCheck]:
     """Run all health checks."""
     if cli_home is None:
         cli_home = Path.home()
@@ -110,20 +118,20 @@ def run_health_checks(
     results = []
     for name, check_fn in checks:
         ok, message = check_fn()
-        results.append((name, ok, message))
+        results.append(HealthCheck(name=name, status="OK" if ok else "FAIL", message=message))
 
     return results
 
 
-def render_doctor_output(results: list[tuple[str, bool, str]]) -> str:
+def render_doctor_output(results: list[HealthCheck]) -> str:
     """Render health check results."""
     lines = ["=== CLI Health Check ===", ""]
     all_ok = True
 
-    for name, ok, message in results:
-        status = "✓" if ok else "✗"
-        lines.append(f"{status} {name}: {message}")
-        if not ok:
+    for result in results:
+        status_icon = "✓" if result.status == "OK" else "✗"
+        lines.append(f"{status_icon} {result.name}: {result.message}")
+        if result.status != "OK":
             all_ok = False
 
     lines.append("")

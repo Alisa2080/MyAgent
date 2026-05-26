@@ -263,3 +263,24 @@ def test_main_malformed_config_returns_code_2(monkeypatch, tmp_path, capsys):
     captured = capsys.readouterr()
     assert code == 2
     assert "config.yaml" in captured.err
+
+
+def test_main_doctor_returns_1_when_health_check_fails(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("AGENT_CLI_HOME", str(tmp_path))
+
+    import agent_cli.doctor as doctor_module
+
+    # Monkeypatch run_health_checks at the source module level
+    original_run = doctor_module.run_health_checks
+    doctor_module.run_health_checks = lambda workdir, tmp_path=None, cli_home=None: [
+        doctor_module.HealthCheck("config", "FAIL", "bad config")
+    ]
+
+    try:
+        import agent_cli.main as main_module
+
+        code = main_module.main(["doctor"])
+
+        assert code == 1
+    finally:
+        doctor_module.run_health_checks = original_run

@@ -92,7 +92,7 @@ def main(argv: list[str] | None = None) -> int:
         workdir = str(Path(args.workdir).expanduser().resolve()) if args.workdir else os.getcwd()
         results = run_health_checks(workdir=workdir)
         print(render_doctor_output(results))
-        return 0
+        return 1 if any(item.status == "FAIL" for item in results) else 0
 
     resume_id = getattr(args, "resume", None)
     if resume_id and store.get_session(resume_id) is None:
