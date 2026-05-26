@@ -11,12 +11,14 @@ except ModuleNotFoundError:
     dotenv = None
 
 from agent_cli.checkpoints import CheckpointDependencyError, create_sqlite_checkpointer
+from agent_cli.commands import COMMAND_LOOKUP
 from agent_cli.config import ConfigError, load_dotenv_files, settings_from_config
 from agent_cli.logging_config import setup_cli_logging
 from agent_cli.paths import ensure_db_parent
 from agent_cli.rendering import format_sessions
 from agent_cli.repl import AgentCLI, default_agent_factory, default_runner
 from agent_cli.session_store import SessionStore
+from agent_cli.skill_commands import load_skill_commands
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -51,6 +53,9 @@ def make_cli(
         model_name=settings.model_name,
         default_title=settings.default_title,
         session_id=getattr(args, "resume", None),
+        skill_commands_provider=lambda: load_skill_commands(
+            built_in_names=set(COMMAND_LOOKUP)
+        ),
     )
 
 

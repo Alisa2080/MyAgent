@@ -54,6 +54,9 @@ class AgentCLI:
         model_name: str | None,
         session_id: str | None = None,
         prompt_session: Any | None = None,
+        default_title: str = "New session",
+        skill_commands_provider: Callable[[], dict[str, Any]] | None = None,
+        skill_loader: Callable[[Any], Any] | None = None,
     ):
         self.session_store = session_store
         self.checkpointer = checkpointer
@@ -62,6 +65,9 @@ class AgentCLI:
         self.workdir = workdir
         self.model_name = model_name
         self.prompt_session = prompt_session
+        self.default_title = default_title
+        self.skill_commands_provider = skill_commands_provider or (lambda: {})
+        self.skill_loader = skill_loader
         self._agent: Any | None = None
         # Initialize session after basic attributes are set
         if session_id:
@@ -89,7 +95,7 @@ class AgentCLI:
         title = (
             _title_from_message(self.session_store, first_message)
             if first_message
-            else "New session"
+            else self.default_title
         )
         record = self.session_store.create_session(
             workdir=self.workdir,
@@ -158,7 +164,18 @@ class AgentCLI:
         parts = raw.strip().split(maxsplit=1)
         command = resolve_command(parts[0] if parts else "")
         arg = parts[1].strip() if len(parts) > 1 else ""
+        
+        # Check for dynamic skill commands
         if command is None:
+            dynamic = self.skill_commands_provider()
+            skill_name = parts[0].lstrip("/") if parts else ""
+            if skill_name in dynamic:
+                from agent_cli.skill_commands import build_skill_invocation_message, load_skill_for_command
+
+                loader = self.skill_loader or load_skill_for_command
+                loaded = loader(dynamic[skill_name])
+                message = build_skill_invocation_message(loaded, arg)
+                return self.submit_message(message)
             return f"Unknown command: {parts[0] if parts else raw}"
         if command.name == "help":
             return render_help()
@@ -169,7 +186,7 @@ class AgentCLI:
             record = self.session_store.create_session(
                 workdir=self.workdir,
                 model=self.model_name,
-                title="New session",
+                title=self.default_title,
             )
             self.session_id = record.session_id
             self.session = Session(
@@ -295,6 +312,7 @@ class AgentCLI:
                 history_path=ensure_cli_home() / "history.txt",
                 session_store=self.session_store,
                 workdir=self.workdir,
+                skill_commands_provider=self.skill_commands_provider,
             )
         return self.prompt_session.prompt(prompt_text)
 

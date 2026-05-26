@@ -402,3 +402,35 @@ def test_handle_interrupts_uses_collected_decisions(monkeypatch, tmp_path):
 
     assert cli.submit_message("hi") == "done"
     assert calls[1].resume == {"decisions": [{"type": "reject", "message": "no"}]}
+
+
+def test_handle_command_routes_dynamic_skill_to_agent(monkeypatch, tmp_path):
+    from agent_cli.repl import AgentCLI
+    from agent_cli.skill_commands import SkillCommand
+
+    submitted = []
+    command = SkillCommand(
+        command="python-debug",
+        skill={
+            "name": "python-debug",
+            "dir": "/repo/skills/python-debug",
+            "content": "# Python Debug",
+            "supporting_files": [],
+        },
+    )
+
+    cli = AgentCLI(
+        session_store=FakeStore(),
+        checkpointer=object(),
+        agent_factory=lambda checkpointer: object(),
+        runner=lambda agent, input_data, config: {"messages": [{"role": "assistant", "content": "ok"}]},
+        workdir=str(tmp_path),
+        model_name=None,
+        skill_commands_provider=lambda: {"python-debug": command},
+        skill_loader=lambda item: item,
+    )
+    monkeypatch.setattr(cli, "submit_message", lambda text: submitted.append(text) or "ok")
+
+    assert cli.handle_command("/python-debug fix it") == "ok"
+    assert "# Python Debug" in submitted[0]
+    assert "User request:\nfix it" in submitted[0]

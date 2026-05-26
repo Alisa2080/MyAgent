@@ -14,9 +14,10 @@ from agent_cli.session_store import SessionStore
 
 
 class SlashCommandCompleter(Completer):
-    def __init__(self, *, session_store: SessionStore, workdir: str):
+    def __init__(self, *, session_store: SessionStore, workdir: str, skill_commands_provider=None):
         self.session_store = session_store
         self.workdir = Path(workdir)
+        self.skill_commands_provider = skill_commands_provider or (lambda: {})
 
     def get_completions(self, document: Document, complete_event):
         text = document.text_before_cursor
@@ -35,6 +36,16 @@ class SlashCommandCompleter(Completer):
                             display=f"/{name}",
                             display_meta=command.description,
                         )
+            # Include dynamic skill commands
+            dynamic_commands = self.skill_commands_provider()
+            for name in dynamic_commands:
+                if name.startswith(word):
+                    yield Completion(
+                        name,
+                        start_position=-len(word),
+                        display=f"/{name}",
+                        display_meta="skill command",
+                    )
             return
 
         command = resolve_command(parts[0])
@@ -98,10 +109,15 @@ def build_prompt_session(
     history_path: str | Path,
     session_store: SessionStore,
     workdir: str,
+    skill_commands_provider=None,
 ) -> PromptSession:
     path = Path(history_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     return PromptSession(
         history=FileHistory(str(path)),
-        completer=SlashCommandCompleter(session_store=session_store, workdir=workdir),
+        completer=SlashCommandCompleter(
+            session_store=session_store,
+            workdir=workdir,
+            skill_commands_provider=skill_commands_provider,
+        ),
     )

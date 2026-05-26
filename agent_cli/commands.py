@@ -100,4 +100,6 @@ def render_help() -> str:
         lines.append(f"{category}:")
         for command in commands:
             lines.append(f"  {command.usage:<24} {command.description}")
+    lines.append("")
+    lines.append("Skill commands are available via /skills.")
     return "\n".join(lines)

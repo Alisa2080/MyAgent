@@ -50,3 +50,16 @@ def test_build_prompt_session_uses_file_history(tmp_path):
 
     assert session is not None
     assert Path(tmp_path / "history.txt").parent.exists()
+
+
+def test_slash_completion_includes_dynamic_skill_commands(tmp_path):
+    store = SessionStore(tmp_path / "cli.sqlite")
+    completer = SlashCommandCompleter(
+        session_store=store,
+        workdir=str(tmp_path),
+        skill_commands_provider=lambda: {"python-debug": object()},
+    )
+
+    completions = _completion_texts(completer, "/python")
+
+    assert "python-debug" in completions
