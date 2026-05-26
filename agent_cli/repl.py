@@ -7,7 +7,12 @@ from typing import Any
 
 from agent_cli.commands import render_help, resolve_command
 from agent_cli.doctor import render_doctor_output, run_health_checks
-from agent_cli.interrupts import build_resume_value, extract_interrupt_requests, has_interrupt
+from agent_cli.approval import collect_approval_decisions
+from agent_cli.interrupts import (
+    extract_interrupt_requests,
+    extract_interrupt_review_requests,
+    has_interrupt,
+)
 from agent_cli.rendering import format_interrupt_summary, format_sessions, latest_ai_text
 from agent_cli.session import (
     Session,
@@ -119,7 +124,7 @@ class AgentCLI:
             self.session_store.create_session(
                 workdir=self.workdir,
                 model=self.model_name,
-                title=title or "New session",
+                title=title or self.default_title,
                 session_id=session_id,
             )
             self.session_id = session_id
@@ -134,14 +139,8 @@ class AgentCLI:
     def _handle_interrupts(self, result: Any, *, session_id: str | None = None) -> Any:
         thread_id = session_id or self.session_id
         while has_interrupt(result):
-            requests = extract_interrupt_requests(result)
-            print(format_interrupt_summary(requests))
-            answer = input("Approve? [y/N]: ").strip().lower()
-            approved = answer in {"y", "yes"}
-            resume_value = build_resume_value(
-                approved=approved,
-                request_count=len(requests),
-            )
+            requests = extract_interrupt_review_requests(result)
+            resume_value = collect_approval_decisions(requests)
             try:
                 from langgraph.types import Command
             except ModuleNotFoundError as exc:

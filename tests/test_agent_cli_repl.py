@@ -360,3 +360,45 @@ def test_run_repl_handles_export_command(monkeypatch, capsys, tmp_path):
     captured = capsys.readouterr()
     # With empty history, should report "No messages"
     assert "No messages" in captured.out or "export.md" in captured.out or "Exported" in captured.out
+
+
+def test_handle_interrupts_uses_collected_decisions(monkeypatch, tmp_path):
+    from agent_cli.repl import AgentCLI
+    from agent_cli.session_store import SessionStore
+
+    calls = []
+
+    class FakeAgent:
+        pass
+
+    def runner(agent, input_data, config):
+        calls.append(input_data)
+        if len(calls) == 1:
+            return {
+                "__interrupt__": [
+                    {
+                        "value": {
+                            "action_requests": [{"name": "terminal", "args": {"command": "pwd"}}],
+                            "review_configs": [{"description": "review"}],
+                        }
+                    }
+                ]
+            }
+        return {"messages": [{"role": "assistant", "content": "done"}]}
+
+    monkeypatch.setattr(
+        "agent_cli.repl.collect_approval_decisions",
+        lambda requests: {"decisions": [{"type": "reject", "message": "no"}]},
+    )
+
+    cli = AgentCLI(
+        session_store=SessionStore(tmp_path / "cli.sqlite"),
+        checkpointer=object(),
+        agent_factory=lambda checkpointer: FakeAgent(),
+        runner=runner,
+        workdir=str(tmp_path),
+        model_name=None,
+    )
+
+    assert cli.submit_message("hi") == "done"
+    assert calls[1].resume == {"decisions": [{"type": "reject", "message": "no"}]}
