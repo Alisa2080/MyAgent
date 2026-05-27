@@ -162,12 +162,12 @@ def main(argv: list[str] | None = None) -> int:
     load_dotenv_files(cli_home=cli_home, project_root=Path.cwd(), dotenv_module=dotenv)
 
     if command == "doctor":
-        from agent_cli.doctor import render_doctor_output, run_health_checks
+        from agent_cli.doctor import doctor_exit_code, render_doctor_output, run_health_checks
 
         workdir = str(Path(args.workdir).expanduser().resolve()) if args.workdir else os.getcwd()
         results = run_health_checks(workdir=workdir, cli_home=cli_home)
         print(render_doctor_output(results))
-        return 1 if any(item.status == "FAIL" for item in results) else 0
+        return doctor_exit_code(results)
 
     try:
         settings = settings_from_config(

@@ -467,6 +467,26 @@ def test_main_doctor_returns_1_when_health_check_fails(monkeypatch, tmp_path, ca
         doctor_module.run_health_checks = original_run
 
 
+def test_main_doctor_returns_0_for_warn_only(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("AGENT_CLI_HOME", str(tmp_path))
+
+    import agent_cli.doctor as doctor_module
+
+    original_run = doctor_module.run_health_checks
+    doctor_module.run_health_checks = lambda workdir, tmp_path=None, cli_home=None: [
+        doctor_module.HealthCheck("OPENAI_API_KEY", "WARN", "not set")
+    ]
+
+    try:
+        import agent_cli.main as main_module
+
+        code = main_module.main(["doctor"])
+
+        assert code == 0
+    finally:
+        doctor_module.run_health_checks = original_run
+
+
 def test_parser_accepts_public_options_after_doctor_subcommand():
     from agent_cli.main import build_parser
 
