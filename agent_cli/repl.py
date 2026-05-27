@@ -61,6 +61,8 @@ class AgentCLI:
         profile: str | None = None,
         cli_home: str | None = None,
         display_theme: str = "default",
+        display_markdown: str = "render",
+        dotenv_module: Any | None = None,
         show_banner: bool = True,
     ):
         self.session_store = session_store
@@ -78,6 +80,8 @@ class AgentCLI:
         self.profile = profile
         self.cli_home = cli_home
         self.display_theme = display_theme
+        self.display_markdown = display_markdown
+        self.dotenv_module = dotenv_module
         self.show_banner = show_banner
         self._agent: Any | None = None
         self._last_result: Any = None
@@ -193,6 +197,47 @@ class AgentCLI:
         from agent_cli.paths import ensure_cli_home
 
         return ensure_cli_home()
+
+    def reload_runtime_settings(self) -> str:
+        from pathlib import Path
+
+        import agent_cli.config as config_module
+
+        cli_home = Path(self._effective_cli_home())
+        old = (
+            self.model_name,
+            self.default_title,
+            self.display_theme,
+            self.display_markdown,
+        )
+        try:
+            config_module.load_dotenv_files(
+                cli_home=cli_home,
+                project_root=Path(self.workdir),
+                dotenv_module=self.dotenv_module,
+            )
+            settings = config_module.settings_from_config(
+                cli_home=cli_home,
+                profile=self.profile,
+                cli_model=None,
+            )
+        except Exception as exc:
+            (
+                self.model_name,
+                self.default_title,
+                self.display_theme,
+                self.display_markdown,
+            ) = old
+            return f"Reload failed: {exc}"
+
+        model_changed = settings.model_name != self.model_name
+        self.model_name = settings.model_name
+        self.default_title = settings.default_title
+        self.display_theme = settings.display_theme
+        self.display_markdown = settings.display_markdown
+        if model_changed:
+            self._agent = None
+        return "Reloaded config and dotenv."
 
     def _capture_usage_metadata(self, result: Any) -> None:
         metadata = None

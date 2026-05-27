@@ -5,7 +5,13 @@ from agent_cli.doctor import render_doctor_output, run_health_checks
 
 
 def debug_handlers():
-    return {"help": handle_help, "doctor": handle_doctor, "exit": handle_exit}
+    return {"help": handle_help, "doctor": handle_doctor, "reload": handle_reload, "exit": handle_exit}
+
+
+def handle_reload(cli, arg, command):
+    if arg:
+        return "Usage: /reload"
+    return cli.reload_runtime_settings()
 
 
 def handle_help(cli, arg, command):

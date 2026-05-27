@@ -570,3 +570,29 @@ def test_main_invalid_profile_after_subcommand_returns_code_2(monkeypatch, capsy
     captured = capsys.readouterr()
     assert code == 2
     assert "Invalid profile" in captured.err
+
+
+def test_main_config_set_and_get_round_trip(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("AGENT_CLI_HOME", str(tmp_path))
+
+    import agent_cli.main as main_module
+
+    set_code = main_module.main(["config", "set", "display.markdown", "strip"])
+    get_code = main_module.main(["config", "get", "display.markdown"])
+
+    captured = capsys.readouterr()
+    assert set_code == 0
+    assert get_code == 0
+    assert "strip" in captured.out
+
+
+def test_main_config_set_rejects_unknown_path(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("AGENT_CLI_HOME", str(tmp_path))
+
+    import agent_cli.main as main_module
+
+    code = main_module.main(["config", "set", "unknown.path", "value"])
+
+    captured = capsys.readouterr()
+    assert code == 2
+    assert "unknown.path" in captured.err

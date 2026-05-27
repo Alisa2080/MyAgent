@@ -3,13 +3,18 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+try:
+    import yaml
+except ModuleNotFoundError:
+    yaml = None
+
 from agent_cli.theme import SUPPORTED_THEMES
 
 DISPLAY_MARKDOWN_VALUES = {"render", "strip", "raw"}
 DISPLAY_THEME_VALUES = set(SUPPORTED_THEMES)
 
 
-@dataclass(frozen=True)
+@dataclass
 class ConfigValidationError(ValueError):
     path: str
     message: str
@@ -141,3 +146,25 @@ def set_config_path_value(data: dict[str, Any], path: str, value: Any) -> dict[s
     updated[section] = section_data
     parse_config(updated)
     return updated
+
+
+def parse_config_value(raw: str) -> Any:
+    if raw == "null":
+        return None
+    if raw == "true":
+        return True
+    if raw == "false":
+        return False
+    return raw
+
+
+def render_config_show(config: AgentCLIConfig) -> str:
+    data = config_to_dict(config)
+    if yaml is None:
+        lines = []
+        for section, values in data.items():
+            lines.append(f"{section}:")
+            for key, value in values.items():
+                lines.append(f"  {key}: {value}")
+        return "\n".join(lines)
+    return yaml.safe_dump(data, sort_keys=True).rstrip()

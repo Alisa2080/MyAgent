@@ -17,7 +17,17 @@ from agent_cli.config import (
     ConfigError,
     apply_profile_override,
     load_dotenv_files,
+    load_normalized_config,
+    save_config_file,
     settings_from_config,
+)
+from agent_cli.config_schema import (
+    ConfigValidationError,
+    get_config_path_value,
+    parse_config,
+    set_config_path_value,
+    render_config_show,
+    parse_config_value,
 )
 from agent_cli.logging_config import setup_cli_logging
 from agent_cli.paths import ensure_db_parent, get_cli_home
@@ -81,6 +91,21 @@ def build_parser() -> argparse.ArgumentParser:
         help="Run CLI health checks.",
         parents=[public_options],
     )
+
+    # Config subcommands
+    config_parser = subparsers.add_parser(
+        "config",
+        help="Show or edit CLI config.",
+        parents=[public_options],
+    )
+    config_subparsers = config_parser.add_subparsers(dest="config_command")
+    config_subparsers.add_parser("show", help="Show normalized CLI config.")
+    config_get = config_subparsers.add_parser("get", help="Get a config value.")
+    config_get.add_argument("path")
+    config_set = config_subparsers.add_parser("set", help="Set a config value.")
+    config_set.add_argument("path")
+    config_set.add_argument("value")
+
     return parser
 
 
@@ -127,6 +152,8 @@ def make_cli(
         profile=settings.profile,
         cli_home=str(settings.cli_home) if settings.cli_home else None,
         display_theme=settings.display_theme,
+        display_markdown=settings.display_markdown,
+        dotenv_module=dotenv,
         skill_commands_provider=lambda: load_skill_commands(
             built_in_names=set(COMMAND_LOOKUP)
         ),
@@ -155,6 +182,44 @@ def main(argv: list[str] | None = None) -> int:
         args.model = pre_parsed["model"]
     if pre_parsed["profile"] is not None:
         args.profile = pre_parsed["profile"]
+
+    # Handle config commands without requiring checkpointer
+    if command == "config":
+        cli_home = get_cli_home()
+        load_dotenv_files(cli_home=cli_home, project_root=Path.cwd(), dotenv_module=dotenv)
+
+        try:
+            config, raw, config_path = load_normalized_config(cli_home)
+        except (ConfigError, ConfigValidationError) as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+
+        config_cmd = getattr(args, "config_command", None)
+
+        if config_cmd == "show":
+            print(render_config_show(config))
+            return 0
+        elif config_cmd == "get":
+            try:
+                value = get_config_path_value(config, args.path)
+                print(value)
+                return 0
+            except ConfigValidationError as exc:
+                print(str(exc), file=sys.stderr)
+                return 2
+        elif config_cmd == "set":
+            try:
+                value = parse_config_value(args.value)
+                updated_raw = set_config_path_value(raw, args.path, value)
+                save_config_file(config_path, updated_raw)
+                return 0
+            except ConfigValidationError as exc:
+                print(str(exc), file=sys.stderr)
+                return 2
+        else:
+            # Show config if no subcommand
+            print(render_config_show(config))
+            return 0
 
     if command == "doctor":
         from agent_cli.doctor import doctor_exit_code, render_doctor_output, run_health_checks

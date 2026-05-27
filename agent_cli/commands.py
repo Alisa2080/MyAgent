@@ -30,6 +30,7 @@ class CommandDef:
 COMMAND_REGISTRY: tuple[CommandDef, ...] = (
     CommandDef("help", "Show available commands.", "Info", aliases=("h",)),
     CommandDef("doctor", "Run CLI health checks.", "Info"),
+    CommandDef("reload", "Reload dotenv and CLI config.", "Info"),
     CommandDef("new", "Start a new session.", "Session"),
     CommandDef("sessions", "List recent sessions.", "Session", aliases=("ls",)),
     CommandDef(

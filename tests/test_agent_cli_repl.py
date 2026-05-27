@@ -1107,3 +1107,36 @@ def test_all_builtin_commands_have_registered_handlers():
 
 def test_agent_cli_no_long_legacy_command_dispatch():
     assert not hasattr(AgentCLI, "_legacy_handle_command")
+
+
+def test_reload_updates_runtime_settings_and_clears_agent(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / "config.yaml").write_text(
+        "display:\n  markdown: strip\n  theme: slate\n"
+        "model:\n  name: new-model\n"
+        "session:\n  default_title: Reloaded\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("AGENT_CLI_HOME", str(home))
+
+    cli = AgentCLI(
+        session_store=FakeStore(),
+        checkpointer="cp",
+        agent_factory=lambda checkpointer: "agent",
+        runner=lambda agent, input_data, config: {},
+        workdir=str(tmp_path),
+        model_name="old-model",
+        cli_home=str(home),
+        display_theme="default",
+    )
+    cli._agent = "old-agent"
+
+    output = cli.handle_command("/reload")
+
+    assert "Reloaded" in output
+    assert cli.model_name == "new-model"
+    assert cli.default_title == "Reloaded"
+    assert cli.display_theme == "slate"
+    assert cli.display_markdown == "strip"
+    assert cli._agent is None
