@@ -3,7 +3,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from langchain.tools import tool
+from langchain.tools import ToolRuntime, tool
 from langchain_core.messages import ToolMessage
 
 from agent_core.schemas import SkillsListInput, SkillViewInput
@@ -190,7 +190,10 @@ def _find_skill(name: str) -> dict[str, Any] | None:
 
 
 @tool("skills_list", args_schema=SkillsListInput)
-def skills_list(category: str = "") -> ToolMessage:
+def skills_list(
+    category: str = "",
+    runtime: ToolRuntime | None = None,
+) -> ToolMessage:
     """List available skills by name, description, and category. Use skill_view to load full instructions."""
     skills = []
     categories = set()
@@ -218,15 +221,25 @@ def skills_list(category: str = "") -> ToolMessage:
         message="Skills listed.",
         meta={"hint": "Use skill_view(name) to load full SKILL.md content."},
         content=f"Listed {len(skills)} skill(s).",
+        runtime=runtime,
     )
 
 
 @tool("skill_view", args_schema=SkillViewInput)
-def skill_view(name: str, file_path: str = "") -> ToolMessage:
+def skill_view(
+    name: str,
+    file_path: str = "",
+    runtime: ToolRuntime | None = None,
+) -> ToolMessage:
     """Load a skill's SKILL.md content, or a supporting file under references/templates/scripts/assets."""
     meta = _find_skill(name)
     if not meta:
-        return tool_failure("skill_view", f"Skill not found: {name}", code="not_found")
+        return tool_failure(
+            "skill_view",
+            f"Skill not found: {name}",
+            code="not_found",
+            runtime=runtime,
+        )
 
     skill_dir = meta["dir"]
 
@@ -238,26 +251,39 @@ def skill_view(name: str, file_path: str = "") -> ToolMessage:
                 "skill_view",
                 "file_path must be under references/, templates/, scripts/, or assets/.",
                 code="invalid_path",
+                runtime=runtime,
             )
 
         target = (skill_dir / relative).resolve()
         try:
             target.relative_to(skill_dir.resolve())
         except ValueError:
-            return tool_failure("skill_view", "Invalid file_path.", code="invalid_path")
+            return tool_failure(
+                "skill_view",
+                "Invalid file_path.",
+                code="invalid_path",
+                runtime=runtime,
+            )
 
         if not target.exists() or not target.is_file():
-            return tool_failure("skill_view", f"File not found: {file_path}", code="not_found")
+            return tool_failure(
+                "skill_view",
+                f"File not found: {file_path}",
+                code="not_found",
+                runtime=runtime,
+            )
 
+        file_content = target.read_text(encoding="utf-8")[:MAX_SKILL_CONTENT_CHARS]
         return tool_success(
             "skill_view",
             data={
                 "name": meta["name"],
                 "file": file_path,
-                "content": target.read_text(encoding="utf-8")[:MAX_SKILL_CONTENT_CHARS],
+                "content": file_content,
             },
             message="Skill file loaded.",
-            content=f"Loaded skill file {meta['name']}/{file_path}.",
+            content=f"Loaded skill file {meta['name']}/{file_path}:\n{file_content}",
+            runtime=runtime,
         )
 
     content = meta["path"].read_text(encoding="utf-8")[:MAX_SKILL_CONTENT_CHARS]
@@ -282,6 +308,11 @@ def skill_view(name: str, file_path: str = "") -> ToolMessage:
             "supporting_files": sorted(supporting_files),
         },
         message="Skill loaded.",
+        content=(
+            f"Loaded skill {meta['name']} ({meta['title']}):\n"
+            f"{content}"
+        ),
+        runtime=runtime,
     )
 
 

@@ -96,6 +96,7 @@ def _wrap_file_tool_result(
     meta_keys: tuple[str, ...] = (),
     runtime: ToolRuntime | None = None,
     summary=None,
+    observation=None,
 ) -> ToolMessage:
     return from_legacy_json(
         tool_name,
@@ -104,6 +105,7 @@ def _wrap_file_tool_result(
         meta_keys=meta_keys,
         runtime=runtime,
         summary=summary,
+        observation=observation,
     )
 
 
@@ -116,12 +118,106 @@ def _read_file_summary(payload: dict, meta: dict) -> str:
     return f"Read {path}."
 
 
+def _read_file_observation(payload: dict, meta: dict) -> str:
+    path = payload.get("path") or "file"
+    content = str(payload.get("content") or "")
+    start = payload.get("start_line") or payload.get("offset")
+    end = payload.get("end_line")
+    if start and end:
+        header = f"Read {path} lines {start}-{end}:"
+    else:
+        header = f"Read {path}:"
+    parts = [header, content]
+    if meta.get("truncated"):
+        parts.append("[truncated]")
+    if meta.get("hint"):
+        parts.append(str(meta["hint"]))
+    return "\n".join(part for part in parts if part)
+
+
 def _search_files_summary(payload: dict, meta: dict) -> str:
-    total = payload.get("total") or payload.get("match_count") or payload.get("count")
+    total = (
+        payload.get("total")
+        or payload.get("total_count")
+        or payload.get("match_count")
+        or payload.get("count")
+    )
     if total is not None:
         suffix = " Output was truncated." if meta.get("truncated") else ""
         return f"Search completed with {total} result(s).{suffix}"
     return "Search completed."
+
+
+def _search_files_observation(payload: dict, meta: dict) -> str:
+    pattern = payload.get("pattern") or payload.get("query") or ""
+    matches = payload.get("matches") or payload.get("results") or []
+    files = payload.get("files") or []
+    counts = payload.get("counts") or {}
+    total = (
+        payload.get("total")
+        or payload.get("total_count")
+        or payload.get("match_count")
+        or payload.get("count")
+    )
+    lines = [f"Search results for {pattern!r}:".rstrip()]
+    target = payload.get("target")
+    path = payload.get("path")
+    file_glob = payload.get("file_glob")
+    output_mode = payload.get("output_mode")
+    if target:
+        lines.append(f"Target: {target}")
+    if path:
+        lines.append(f"Path: {path}")
+    if file_glob:
+        lines.append(f"File glob: {file_glob}")
+    if output_mode:
+        lines.append(f"Output mode: {output_mode}")
+    if total is not None:
+        lines.append(f"Total: {total}")
+    if isinstance(matches, list):
+        for item in matches:
+            if not isinstance(item, dict):
+                lines.append(str(item))
+                continue
+            path = item.get("path") or item.get("file") or item.get("filename") or "(unknown)"
+            line = item.get("line") or item.get("line_number") or item.get("line_start")
+            content = item.get("content") or item.get("text") or item.get("match") or ""
+            location = f"{path}:{line}" if line else str(path)
+            lines.append(f"- {location}")
+            if content:
+                lines.append(f"  {content}")
+    if isinstance(files, list):
+        for path_item in files:
+            lines.append(f"- {path_item}")
+    if isinstance(counts, dict) and counts:
+        lines.append("Counts:")
+        for key, value in sorted(counts.items()):
+            lines.append(f"- {key}: {value}")
+    if meta.get("truncated"):
+        lines.append("[truncated]")
+    if meta.get("hint"):
+        lines.append(str(meta["hint"]))
+    return "\n".join(lines)
+
+
+def _list_directory_observation(payload: dict, meta: dict) -> str:
+    path = payload.get("path") or "."
+    entries = payload.get("entries") or []
+    total = payload.get("total")
+    lines = [f"Directory listing for {path}:"]
+    if total is not None:
+        lines.append(f"Total: {total}")
+    if isinstance(entries, list):
+        for item in entries:
+            if isinstance(item, dict):
+                entry_type = item.get("type") or "entry"
+                entry_path = item.get("path") or item.get("name") or ""
+                lines.append(f"- {entry_type}: {entry_path}")
+            else:
+                lines.append(f"- {item}")
+    if meta.get("truncated"):
+        lines.append("[truncated]")
+    return "\n".join(lines)
 
 
 def _runtime_context(runtime: ToolRuntime | None) -> RuntimeContext:
@@ -485,7 +581,10 @@ def _list_directory_impl(
             message="Directory listed.",
             meta={"truncated": total > len(items)},
             runtime=runtime,
-            content="Directory listed.",
+            content=_list_directory_observation(
+                {"path": path, "entries": items, "total": total},
+                {"truncated": total > len(items)},
+            ),
         )
     except Exception as exc:
         return tool_failure("list_directory", str(exc), runtime=runtime)
@@ -523,6 +622,7 @@ def _read_file_impl(path: str, offset: int = 1, limit: int = 500, runtime: ToolR
         meta_keys=("truncated",),
         runtime=runtime,
         summary=_read_file_summary,
+        observation=_read_file_observation,
     )
 
 
@@ -724,6 +824,17 @@ def _search_files_impl(
         context=context,
         task_id=task_id,
     )
+    try:
+        raw_payload = json.loads(raw)
+    except json.JSONDecodeError:
+        raw_payload = None
+    if isinstance(raw_payload, dict) and "error" not in raw_payload:
+        raw_payload.setdefault("pattern", pattern)
+        raw_payload.setdefault("target", target)
+        raw_payload.setdefault("path", path)
+        raw_payload.setdefault("file_glob", file_glob)
+        raw_payload.setdefault("output_mode", output_mode)
+        raw = json.dumps(raw_payload, ensure_ascii=False)
     return _wrap_file_tool_result(
         "search_files",
         raw,
@@ -731,6 +842,7 @@ def _search_files_impl(
         meta_keys=("truncated",),
         runtime=runtime,
         summary=_search_files_summary,
+        observation=_search_files_observation,
     )
 
 

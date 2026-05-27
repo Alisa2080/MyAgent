@@ -2,12 +2,13 @@ import re
 import shutil
 from pathlib import Path
 
-from langchain.tools import tool
+from langchain.tools import ToolRuntime, tool
 from langchain_core.messages import ToolMessage
 
 from agent_core.schemas import SkillManageInput
 from agent_tools.public.skills import SKILLS_DIR, load_skill_metadata
-from agent_tools.shared.tool_result import tool_failure, tool_success
+from agent_tools.shared.tool_result import tool_failure as _tool_failure
+from agent_tools.shared.tool_result import tool_success as _tool_success
 
 VALID_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
 MAX_NAME_LENGTH = 64
@@ -104,8 +105,15 @@ def skill_manage(
       old_string: str = "",
       new_string: str = "",
       replace_all: bool = False,
+      runtime: ToolRuntime | None = None,
   ) -> ToolMessage:
     """Manage reusable skills. Actions: create, patch, edit, delete, write_file, remove_file."""
+    def tool_failure(tool: str, message: str, **kwargs) -> ToolMessage:
+        return _tool_failure(tool, message, runtime=runtime, **kwargs)
+
+    def tool_success(tool: str, **kwargs) -> ToolMessage:
+        return _tool_success(tool, runtime=runtime, **kwargs)
+
     action = (action or "").strip()
     name = (name or "").strip()
 

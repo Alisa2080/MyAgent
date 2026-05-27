@@ -9,6 +9,7 @@ from agent_core.session_context import RuntimeContext
 
 
 SummaryBuilder = Callable[[dict[str, Any], dict[str, Any]], str]
+ObservationBuilder = Callable[[dict[str, Any], dict[str, Any]], str]
 
 
 def _tool_call_id(runtime: ToolRuntime | None) -> str:
@@ -113,6 +114,7 @@ def from_legacy_json(
     meta_keys: tuple[str, ...] = (),
     runtime: ToolRuntime | None = None,
     summary: SummaryBuilder | None = None,
+    observation: ObservationBuilder | None = None,
 ) -> ToolMessage:
     try:
         payload = json.loads(raw)
@@ -150,7 +152,13 @@ def from_legacy_json(
             runtime=runtime,
         )
 
-    content = summary(payload, meta) if summary is not None else message
+    content = (
+        observation(payload, meta)
+        if observation is not None
+        else summary(payload, meta)
+        if summary is not None
+        else message
+    )
     return tool_success(
         tool,
         message=message,

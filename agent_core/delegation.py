@@ -1,7 +1,7 @@
 import logging
 
 from langchain.agents import create_agent
-from langchain.tools import tool
+from langchain.tools import ToolRuntime, tool
 from langchain_core.messages import ToolMessage
 
 from agent_core.message_utils import extract_text_from_agent_response
@@ -59,7 +59,11 @@ def build_task_subagent():
 
 
 @tool("task", args_schema=TaskInput)
-def task(prompt: str, description: str = "subtask") -> ToolMessage:
+def task(
+    prompt: str,
+    description: str = "subtask",
+    runtime: ToolRuntime | None = None,
+) -> ToolMessage:
     """Spawn a fresh-context read-only subagent for analysis, exploration, or review."""
     logger.info("task: starting delegated subagent task=%s", description)
     try:
@@ -87,6 +91,7 @@ def task(prompt: str, description: str = "subtask") -> ToolMessage:
                 message="Subagent completed with no summary.",
                 data={"description": description, "summary": "(no summary)"},
                 content="Subagent completed with no summary.",
+                runtime=runtime,
             )
         logger.info("task: completed delegated subagent task=%s", description)
         return tool_success(
@@ -94,6 +99,7 @@ def task(prompt: str, description: str = "subtask") -> ToolMessage:
             message="Subagent task completed.",
             data={"description": description, "summary": summary},
             content=f"Subagent task completed: {description}.",
+            runtime=runtime,
         )
     except Exception as exc:
         logger.exception("task: delegated subagent task=%s failed: %s", description, exc)
@@ -102,4 +108,5 @@ def task(prompt: str, description: str = "subtask") -> ToolMessage:
             f"Subagent task failed ({description}): {exc}",
             code="subagent_failed",
             data={"description": description},
+            runtime=runtime,
         )

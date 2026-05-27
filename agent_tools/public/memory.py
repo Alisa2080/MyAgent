@@ -1,6 +1,6 @@
 import json
 
-from langchain.tools import tool
+from langchain.tools import ToolRuntime, tool
 from langchain_core.messages import ToolMessage
 from pydantic import BaseModel, Field
 
@@ -27,6 +27,7 @@ def _memory_manage_impl(
     target: str,
     content: str = "",
     old_text: str = "",
+    runtime: ToolRuntime | None = None,
 ) -> ToolMessage:
     raw = run_memory_tool(
         action=action,
@@ -40,14 +41,21 @@ def _memory_manage_impl(
         raw,
         success_message="Memory updated.",
         meta_keys=("available", "_action"),
+        runtime=runtime,
     )
 
 
 @tool("memory_manage", args_schema=MemoryManageInput)
-def memory_manage(action: str, target: str, content: str = "", old_text: str = "") -> ToolMessage:
+def memory_manage(
+    action: str,
+    target: str,
+    content: str = "",
+    old_text: str = "",
+    runtime: ToolRuntime | None = None,
+) -> ToolMessage:
     """Save, replace, or remove durable memory. target must be 'memory' or 'user'."""
     try:
-        result = _memory_manage_impl(action, target, content, old_text)
+        result = _memory_manage_impl(action, target, content, old_text, runtime=runtime)
         if result.artifact["ok"]:
             meta = dict(result.artifact.get("meta") or {})
             meta["system_prompt_note"] = (
@@ -66,4 +74,4 @@ def memory_manage(action: str, target: str, content: str = "", old_text: str = "
             )
         return result
     except Exception as exc:
-        return tool_failure("memory_manage", str(exc))
+        return tool_failure("memory_manage", str(exc), runtime=runtime)

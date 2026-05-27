@@ -8,5 +8,12 @@
 __pycache__/
 .env
 .worktrees/
+.superpowers/
+.pytest_cache/
+.cursor/
+.codex/
+.claude/
+.agents/
+agent_cli.backup-before-agent-cli-mvp-20260526/
 base/
 agent_tools/hermes_terminal_toolkit/process_registry copy.py

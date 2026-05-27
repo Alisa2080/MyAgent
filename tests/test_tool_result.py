@@ -101,6 +101,33 @@ def test_from_legacy_json_converts_success_and_extracts_meta_keys():
     assert "full file contents" not in result.content
 
 
+def test_from_legacy_json_can_render_observation_content_from_payload():
+    raw = json.dumps(
+        {
+            "status": "success",
+            "message": "Read file.",
+            "path": "README.md",
+            "content": "line 1\nline 2",
+            "start_line": 1,
+            "end_line": 2,
+        }
+    )
+
+    result = from_legacy_json(
+        "read_file",
+        raw,
+        success_message="File read.",
+        runtime=_runtime(tool_call_id="call-read"),
+        summary=lambda payload, meta: f"Read {payload.get('path', 'file')}.",
+        observation=lambda payload, meta: (
+            f"Read {payload.get('path')}:\n{payload.get('content')}"
+        ),
+    )
+
+    assert result.content == "Read README.md:\nline 1\nline 2"
+    assert result.artifact["data"]["content"] == "line 1\nline 2"
+
+
 def test_from_legacy_json_converts_error_payload():
     raw = json.dumps({"error": "missing file", "path": "missing.txt", "code": "not_found"})
 
