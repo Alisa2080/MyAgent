@@ -239,10 +239,10 @@ The Agent CLI supports these slash commands:
 - `/new` - Start a new session.
 - `/resume <session_id>` - Resume a previous session.
 - `/sessions` - List recent sessions.
-- `/retry [new_text]` - Resend the last user message, optionally with new text.
+- `/retry` - Resubmit the last normal user message.
 
 ### Clipboard Commands
-- `/copy` - Copy the last assistant response to clipboard via OSC 52.
+- `/copy [N]` - Copy the latest or Nth latest assistant response using OSC52.
 
 ### Background Commands
 - `/background <prompt>` - Start an in-process background task in a new session.
@@ -260,7 +260,7 @@ The Agent CLI supports these slash commands:
 ### Skill and Utility Commands
 - `/skills` - List available local skills and dynamic skill slash commands.
 - `/skill <name>` - Show skill details.
-- `/usage <text>` - Estimate tokens for the given text.
+- `/usage` - Show local session usage, estimated tokens, checkpoint status, and last-call latency.
 - `/doctor` - Run local health checks.
 - `/clear` - Clear the terminal.
 - `/exit` - Exit the CLI.
@@ -275,10 +275,13 @@ Type `/` followed by a partial command to see completions:
 ### Terminal Input Features
 
 #### Bracketed Paste Support
-The CLI handles bracketed paste mode sequences from terminals. Pastes with 5+ lines are automatically collapsed and saved to `<cli_home>/pastes/` to keep the prompt clean.
+The CLI handles bracketed paste mode sequences from terminals. Pastes with 5+ lines are automatically collapsed and saved to `<cli_home>/pastes/` to keep the prompt clean, then expanded again before the message is submitted.
 
 #### File Drop Detection
-When a file path is entered as input, the CLI detects it and formats it as `[User referenced file: <path>]` for better agent understanding.
+When a file path is entered as input, the CLI detects it and formats it as `[User referenced file: <path>]` for better agent understanding. Image paths are referenced as text in this phase; the CLI does not send multimodal image payloads yet.
 
 #### Input Sanitization
 Terminal control sequences (CPR, DSR, bracketed paste wrappers) are automatically stripped from input.
+
+#### Clipboard Copy
+`/copy` uses OSC52, so terminal and multiplexer clipboard integration must allow OSC52 sequences.

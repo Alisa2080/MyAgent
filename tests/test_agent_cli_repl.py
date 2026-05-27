@@ -917,3 +917,129 @@ def test_handle_command_history_rejects_invalid_limit():
     result = cli.handle_command("/history nope")
 
     assert result == "Usage: /history [N]"
+
+
+def test_handle_copy_supports_nth_recent_assistant_reply(capsys):
+    cli = AgentCLI(
+        session_store=FakeStore(),
+        checkpointer=None,
+        agent_factory=lambda checkpointer: "agent",
+        runner=lambda agent, input_data, config: {},
+        workdir="/repo",
+        model_name=None,
+    )
+    cli.assistant_replies.extend(["first", "second"])
+
+    output = cli.handle_command("/copy 2")
+
+    captured = capsys.readouterr()
+    assert "Zmlyc3Q=" in captured.out
+    assert output == "Copied assistant reply 2."
+
+
+def test_handle_copy_validates_args_and_empty_state():
+    cli = AgentCLI(
+        session_store=FakeStore(),
+        checkpointer=None,
+        agent_factory=lambda checkpointer: "agent",
+        runner=lambda agent, input_data, config: {},
+        workdir="/repo",
+        model_name=None,
+    )
+
+    assert cli.handle_command("/copy nope") == "Usage: /copy [N]"
+    assert cli.handle_command("/copy 0") == "Usage: /copy [N]"
+    assert cli.handle_command("/copy") == "No assistant reply available to copy."
+
+
+def test_handle_retry_resubmits_last_attempted_user_message_after_failure():
+    calls = []
+
+    def fake_runner(agent, input_data, config):
+        calls.append(input_data["messages"][0]["content"])
+        if len(calls) == 1:
+            raise RuntimeError("transient")
+        return {"messages": [{"role": "assistant", "content": "ok"}]}
+
+    cli = AgentCLI(
+        session_store=FakeStore(),
+        checkpointer="cp",
+        agent_factory=lambda checkpointer: "agent",
+        runner=fake_runner,
+        workdir="/repo",
+        model_name=None,
+    )
+
+    try:
+        cli.submit_message("hello")
+    except RuntimeError:
+        pass
+
+    assert cli.handle_command("/retry") == "ok"
+    assert calls == ["hello", "hello"]
+
+
+def test_handle_usage_renders_local_session_stats(tmp_path):
+    class FakeCheckpointer:
+        def get_tuple(self, config):
+            return {
+                "checkpoint": {
+                    "channel_values": {
+                        "messages": [
+                            {"role": "user", "content": "hello there"},
+                            {"role": "assistant", "content": "hi"},
+                        ]
+                    }
+                }
+            }
+
+    cli = AgentCLI(
+        session_store=FakeStore(),
+        checkpointer=FakeCheckpointer(),
+        agent_factory=lambda checkpointer: "agent",
+        runner=lambda agent, input_data, config: {},
+        workdir=str(tmp_path),
+        model_name="model-x",
+    )
+    cli.ensure_session()
+    cli.last_call_elapsed_seconds = 1.234
+    cli.assistant_replies.append("assistant text")
+
+    output = cli.handle_command("/usage")
+
+    assert "Usage:" in output
+    assert "Session ID: s1" in output
+    assert "Model: model-x" in output
+    assert "Messages: 2" in output
+    assert "Turns: 1" in output
+    assert "Estimated tokens:" in output
+    assert "Checkpointer: available" in output
+    assert "Last call: 1.234s" in output
+    assert "Assistant replies tracked: 1" in output
+
+
+def test_run_repl_sanitizes_input_before_command_detection(capsys):
+    entries = iter(["\x1b[200~/help\x1b[201~", EOFError])
+
+    class FakePrompt:
+        def prompt(self, prompt_text):
+            entry = next(entries)
+            if entry is EOFError:
+                raise EOFError
+            return entry
+
+    cli = AgentCLI(
+        session_store=FakeStore(),
+        checkpointer=None,
+        agent_factory=lambda checkpointer: "agent",
+        runner=lambda agent, input_data, config: (_ for _ in ()).throw(
+            AssertionError("command should not reach runner")
+        ),
+        workdir="/repo",
+        model_name=None,
+        prompt_session=FakePrompt(),
+    )
+
+    assert cli.run_repl() == 0
+    captured = capsys.readouterr()
+    assert "Available commands:" in captured.out

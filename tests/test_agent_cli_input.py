@@ -102,7 +102,7 @@ def test_collapse_large_paste_writes_file_and_expand_reference(tmp_path):
     assert result.path.parent == tmp_path / "pastes"
     assert result.path.read_text(encoding="utf-8") == "a\nb\nc\nd\ne"
     assert result.placeholder.startswith("[Pasted text #3: 5 lines -> ")
-    assert expand_paste_references(f"please read {result.placeholder}") == (
+    assert expand_paste_references(f"please read {result.placeholder}", cli_home=tmp_path) == (
         "please read a\nb\nc\nd\ne"
     )
 
@@ -148,6 +148,7 @@ def test_prepare_user_message_sanitizes_expands_paste_and_rewrites_file(tmp_path
     prepared = prepare_user_message(
         f"\x1b[200~{target.name} read this and {paste.placeholder}\x1b[201~",
         workdir=str(tmp_path),
+        cli_home=tmp_path,
     )
     assert prepared == (
         f"[User referenced file: {target.resolve()}]\n"
@@ -188,10 +189,20 @@ def test_prepare_user_message_expands_paste_and_detects_files(tmp_path):
     assert paste.collapsed is True
 
     raw_input = f"{target.name} read this and {paste.placeholder}"
-    processed = prepare_user_message(raw_input, workdir=str(tmp_path))
+    processed = prepare_user_message(raw_input, workdir=str(tmp_path), cli_home=tmp_path)
 
     assert "User referenced file" in processed
     assert "line1\nline2\nline3\nline4\nline5" in processed
+
+
+def test_expand_paste_references_rejects_paths_outside_cli_home(tmp_path):
+    secret = tmp_path / "secret.txt"
+    secret.write_text("do not inline", encoding="utf-8")
+    cli_home = tmp_path / "cli-home"
+    cli_home.mkdir()
+    text = f"[Pasted text #1: 5 lines -> {secret}]"
+
+    assert expand_paste_references(text, cli_home=cli_home) == text
 
 
 def test_copy_and_retry_commands_in_registry():

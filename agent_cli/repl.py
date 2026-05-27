@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import sys
+import time
 from collections.abc import Callable
 from typing import Any
 
@@ -15,7 +16,7 @@ from agent_cli.interrupts import (
     extract_interrupt_review_requests,
     has_interrupt,
 )
-from agent_cli.rendering import format_sessions, latest_ai_text, latest_user_text
+from agent_cli.rendering import format_sessions, latest_ai_text
 from agent_cli.session import (
     Session,
     render_session_status,
@@ -24,7 +25,12 @@ from agent_cli.session import (
     export_to_markdown,
 )
 from agent_cli.session_store import SessionStore
-from agent_cli.text_input import prepare_user_message, format_osc52
+from agent_cli.text_input import (
+    format_osc52,
+    prepare_user_message,
+    render_usage_summary,
+    sanitize_terminal_input,
+)
 
 
 AgentFactory = Callable[[Any], Any]
@@ -85,6 +91,10 @@ class AgentCLI:
         self.show_banner = show_banner
         self._agent: Any | None = None
         self._last_result: Any = None
+        self.last_user_message: str | None = None
+        self.assistant_replies: list[str] = []
+        self.last_call_elapsed_seconds: float | None = None
+        self.last_usage_metadata: dict[str, Any] | None = None
         # Initialize session after basic attributes are set
         if session_id:
             self.session = Session(
@@ -137,19 +147,28 @@ class AgentCLI:
         return self.session_id
 
     def submit_message(self, text: str) -> str:
+        processed = prepare_user_message(
+            text,
+            workdir=self.workdir,
+            cli_home=self._effective_cli_home(),
+        )
+        self.last_user_message = processed
+        started_at = time.perf_counter()
         existing_session = self.session_id is not None
         if existing_session:
             session_id = self.session_id
             title = None
         else:
             session_id = self.session_store.new_session_id()
-            title = _title_from_message(self.session_store, text)
-        processed = prepare_user_message(text, workdir=self.workdir)
-        result = self.runner(
-            self.agent,
-            {"messages": [{"role": "user", "content": processed}]},
-            {"configurable": {"thread_id": session_id}},
-        )
+            title = _title_from_message(self.session_store, processed)
+        try:
+            result = self.runner(
+                self.agent,
+                {"messages": [{"role": "user", "content": processed}]},
+                {"configurable": {"thread_id": session_id}},
+            )
+        finally:
+            self.last_call_elapsed_seconds = time.perf_counter() - started_at
         result = self._handle_interrupts(result, session_id=session_id)
         if not existing_session:
             self.session_store.create_session(
@@ -166,7 +185,31 @@ class AgentCLI:
             ),
         )
         self._last_result = result
-        return latest_ai_text(result)
+        self._capture_usage_metadata(result)
+        output = latest_ai_text(result)
+        if output:
+            self.assistant_replies.append(output)
+        return output
+
+    def _effective_cli_home(self):
+        if self.cli_home:
+            return self.cli_home
+        from agent_cli.paths import ensure_cli_home
+
+        return ensure_cli_home()
+
+    def _capture_usage_metadata(self, result: Any) -> None:
+        metadata = None
+        if isinstance(result, dict):
+            metadata = result.get("usage_metadata") or result.get("usage")
+            messages = result.get("messages")
+            if metadata is None and isinstance(messages, list) and messages:
+                last = messages[-1]
+                metadata = getattr(last, "usage_metadata", None)
+                if metadata is None and isinstance(last, dict):
+                    metadata = last.get("usage_metadata")
+        if isinstance(metadata, dict):
+            self.last_usage_metadata = metadata
 
     def _handle_interrupts(self, result: Any, *, session_id: str | None = None) -> Any:
         thread_id = session_id or self.session_id
@@ -181,6 +224,7 @@ class AgentCLI:
         return result
 
     def handle_command(self, raw: str) -> str | None:
+        raw = sanitize_terminal_input(raw)
         parts = raw.strip().split(maxsplit=1)
         command = resolve_command(parts[0] if parts else "")
         arg = parts[1].strip() if len(parts) > 1 else ""
@@ -287,9 +331,9 @@ class AgentCLI:
         if command.name == "skill":
             return self._render_skill(arg)
         if command.name == "copy":
-            return self._handle_copy()
+            return self._handle_copy(arg)
         if command.name == "retry":
-            return self._handle_retry(arg)
+            return self._handle_retry()
         if command.name == "usage":
             return self._handle_usage(arg)
         if command.name == "exit":
@@ -382,33 +426,50 @@ class AgentCLI:
         desc = meta.get("description") or ""
         return f"{meta['name']}\n{desc}".strip()
 
-    def _handle_copy(self) -> str:
-        if self._last_result is None:
-            return "No response to copy."
-        text = latest_ai_text(self._last_result)
-        if not text:
-            return "No response to copy."
-        if sys.stdout.isatty():
-            sys.stdout.write(format_osc52(text))
-            sys.stdout.flush()
-        return f"Copied {len(text)} chars to clipboard."
+    def _handle_copy(self, arg: str) -> str:
+        index = 1
+        if arg:
+            try:
+                index = int(arg)
+            except ValueError:
+                return "Usage: /copy [N]"
+        if index < 1:
+            return "Usage: /copy [N]"
+        if index > len(self.assistant_replies):
+            return "No assistant reply available to copy."
+        text = self.assistant_replies[-index]
+        sys.stdout.write(format_osc52(text))
+        sys.stdout.flush()
+        return f"Copied assistant reply {index}."
 
-    def _handle_retry(self, arg: str) -> str:
-        if self._last_result is None:
-            return "No previous message to retry."
-        user_text = latest_user_text(self._last_result)
-        if not user_text:
-            return "No previous message to retry."
-        new_text = arg if arg else user_text
-        return self.submit_message(new_text)
+    def _handle_retry(self) -> str:
+        if not self.last_user_message:
+            return "No user message available to retry."
+        return self.submit_message(self.last_user_message)
 
     def _handle_usage(self, arg: str) -> str:
-        from agent_cli.text_input import estimate_tokens
-
         if arg:
-            tokens = estimate_tokens(arg)
-            return f"{tokens} tokens (~{arg.split().__len__()} words)"
-        return "Usage: /usage <text>"
+            return "Usage: /usage"
+        if self.session is None:
+            self.ensure_session()
+        transcript = []
+        if self.session is not None:
+            try:
+                transcript = self.session.transcript()
+            except Exception:
+                transcript = []
+        transcript_text = "\n".join(message.content for message in transcript)
+        return render_usage_summary(
+            session_id=self.session_id or "",
+            model_name=self.model_name,
+            message_count=len(transcript),
+            turn_count=sum(1 for message in transcript if message.role == "user"),
+            transcript_text=transcript_text,
+            checkpointer_available=self.checkpointer is not None,
+            last_call_elapsed_seconds=self.last_call_elapsed_seconds,
+            assistant_reply_count=len(self.assistant_replies),
+            usage_metadata=self.last_usage_metadata,
+        )
 
     def _drain_background_notifications(self) -> None:
         if self.background_registry is None:
@@ -487,7 +548,7 @@ class AgentCLI:
         while True:
             try:
                 self._drain_background_notifications()
-                text = self._prompt("> ").strip()
+                text = sanitize_terminal_input(self._prompt("> ")).strip()
             except EOFError:
                 print()
                 self._stop_active_background_tasks_on_exit()

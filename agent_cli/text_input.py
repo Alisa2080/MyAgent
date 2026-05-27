@@ -72,9 +72,23 @@ def collapse_large_paste(text: str, *, cli_home: str | Path, counter: int) -> Pa
     return PasteCollapse(collapsed=True, placeholder=placeholder, path=path)
 
 
-def expand_paste_references(text: str) -> str:
+def _is_allowed_paste_path(path: Path, *, cli_home: str | Path | None) -> bool:
+    if cli_home is None:
+        return False
+    try:
+        resolved = path.resolve()
+        paste_dir = (Path(cli_home) / "pastes").resolve()
+        resolved.relative_to(paste_dir)
+    except (OSError, ValueError):
+        return False
+    return bool(re.fullmatch(r"paste_\d+_\d{6}\.txt", resolved.name))
+
+
+def expand_paste_references(text: str, *, cli_home: str | Path | None = None) -> str:
     def replace(match: re.Match[str]) -> str:
         path = Path(match.group(1))
+        if not _is_allowed_paste_path(path, cli_home=cli_home):
+            return match.group(0)
         try:
             return path.read_text(encoding="utf-8")
         except OSError:
@@ -181,8 +195,12 @@ def format_file_reference_message(drop: FileDrop) -> str:
     return reference
 
 
-def prepare_user_message(text: str, *, workdir: str | Path) -> str:
-    value = expand_paste_references(sanitize_terminal_input(text)).strip()
+def prepare_user_message(
+    text: str, *, workdir: str | Path, cli_home: str | Path | None = None
+) -> str:
+    value = expand_paste_references(
+        sanitize_terminal_input(text), cli_home=cli_home
+    ).strip()
     drop = detect_file_drop(value, workdir=workdir)
     if drop is not None:
         return format_file_reference_message(drop)
@@ -199,3 +217,38 @@ def estimate_tokens(text: str) -> int:
         return 0
     word_count = len(text.split())
     return max(1, (word_count + 3) // 4)
+
+
+def render_usage_summary(
+    *,
+    session_id: str,
+    model_name: str | None,
+    message_count: int,
+    turn_count: int,
+    transcript_text: str,
+    checkpointer_available: bool,
+    last_call_elapsed_seconds: float | None,
+    assistant_reply_count: int,
+    usage_metadata: dict[str, object] | None = None,
+) -> str:
+    lines = [
+        "Usage:",
+        f"  Session ID: {session_id}",
+        f"  Model: {model_name or 'default'}",
+        f"  Messages: {message_count}",
+        f"  Turns: {turn_count}",
+        f"  Estimated tokens: {estimate_tokens(transcript_text)}",
+        f"  Checkpointer: {'available' if checkpointer_available else 'unavailable'}",
+        f"  Checkpoint message bytes: {len(transcript_text.encode('utf-8'))}",
+        f"  Assistant replies tracked: {assistant_reply_count}",
+    ]
+    if last_call_elapsed_seconds is None:
+        lines.append("  Last call: n/a")
+    else:
+        lines.append(f"  Last call: {last_call_elapsed_seconds:.3f}s")
+    if usage_metadata:
+        for key in ("prompt_tokens", "completion_tokens", "total_tokens"):
+            if key in usage_metadata:
+                label = key.replace("_", " ").title()
+                lines.append(f"  {label}: {usage_metadata[key]}")
+    return "\n".join(lines)

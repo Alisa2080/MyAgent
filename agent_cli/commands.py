@@ -87,20 +87,19 @@ COMMAND_REGISTRY: tuple[CommandDef, ...] = (
     ),
     CommandDef(
         "copy",
-        "Copy the last assistant response to clipboard.",
+        "Copy an assistant response using OSC52.",
         "Clipboard",
+        args_hint="[N]",
     ),
     CommandDef(
         "retry",
-        "Resend the last user message with optional rewrite.",
+        "Retry the last user message.",
         "Session",
-        args_hint="<new_text>",
     ),
     CommandDef(
         "usage",
-        "Estimate tokens for the current input.",
+        "Show lightweight local usage and context stats.",
         "Info",
-        args_hint="<text>",
     ),
     CommandDef("exit", "Exit the CLI.", "Exit", aliases=("quit", "q")),
 )
