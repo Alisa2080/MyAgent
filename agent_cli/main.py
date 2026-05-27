@@ -13,6 +13,7 @@ except ModuleNotFoundError:
 from agent_cli.checkpoints import CheckpointDependencyError, create_sqlite_checkpointer
 from agent_cli.background import BackgroundTaskRegistry, BackgroundTaskStore
 from agent_cli.commands import COMMAND_LOOKUP
+from agent_cli import cron_commands
 from agent_cli.config import (
     ConfigError,
     apply_profile_override,
@@ -118,7 +119,67 @@ def build_parser() -> argparse.ArgumentParser:
     config_set.add_argument("path")
     config_set.add_argument("value")
 
+    cron_parser = subparsers.add_parser(
+        "cron",
+        help="Manage scheduled cron jobs.",
+        parents=[public_options],
+    )
+    cron_subparsers = cron_parser.add_subparsers(dest="cron_command")
+
+    cron_list = cron_subparsers.add_parser("list", parents=[public_options])
+    cron_list.add_argument("--all", action="store_true", dest="include_disabled")
+
+    cron_create = cron_subparsers.add_parser(
+        "create",
+        aliases=["add"],
+        parents=[public_options],
+    )
+    cron_create.add_argument("schedule")
+    cron_create.add_argument("prompt", nargs="?")
+    _add_cron_create_flags(cron_create)
+
+    cron_edit = cron_subparsers.add_parser("edit", parents=[public_options])
+    cron_edit.add_argument("job_id")
+    _add_cron_edit_flags(cron_edit)
+
+    for name in ("pause", "resume", "run"):
+        parser_for_action = cron_subparsers.add_parser(name, parents=[public_options])
+        parser_for_action.add_argument("job_id")
+
+    cron_remove = cron_subparsers.add_parser(
+        "remove",
+        aliases=["rm", "delete"],
+        parents=[public_options],
+    )
+    cron_remove.add_argument("job_id")
+
+    cron_subparsers.add_parser("status", parents=[public_options])
+    cron_subparsers.add_parser("tick", parents=[public_options])
+
     return parser
+
+
+def _add_cron_create_flags(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--name")
+    parser.add_argument("--deliver", choices=("origin", "local"))
+    parser.add_argument("--repeat", type=int)
+    parser.add_argument("--skill", dest="skills", action="append")
+    parser.add_argument("--script")
+    # --workdir is inherited from parent parser
+
+
+def _add_cron_edit_flags(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--schedule")
+    parser.add_argument("--prompt")
+    parser.add_argument("--name")
+    parser.add_argument("--deliver", choices=("origin", "local"))
+    parser.add_argument("--repeat", type=int)
+    parser.add_argument("--skill", dest="skills", action="append")
+    parser.add_argument("--add-skill", dest="add_skills", action="append")
+    parser.add_argument("--remove-skill", dest="remove_skills", action="append")
+    parser.add_argument("--clear-skills", action="store_true")
+    parser.add_argument("--script")
+    # --workdir is inherited from parent parser
 
 
 def make_cli(
@@ -173,6 +234,60 @@ def make_cli(
             built_in_names=set(COMMAND_LOOKUP)
         ),
     )
+
+
+def _run_cron_command(args: argparse.Namespace):
+    subcommand = getattr(args, "cron_command", None)
+    if subcommand is None:
+        return cron_commands.cron_status()
+    if subcommand == "list":
+        return cron_commands.list_cron_jobs(
+            include_disabled=bool(getattr(args, "include_disabled", False))
+        )
+    if subcommand in {"create", "add"}:
+        return cron_commands.create_cron_job(
+            schedule=args.schedule,
+            prompt=args.prompt,
+            top_level=True,
+            name=getattr(args, "name", None),
+            deliver=getattr(args, "deliver", None),
+            repeat=getattr(args, "repeat", None),
+            skills=getattr(args, "skills", None),
+            script=getattr(args, "script", None),
+            workdir=getattr(args, "workdir", None),
+        )
+    if subcommand == "edit":
+        updates = {
+            "schedule": getattr(args, "schedule", None),
+            "prompt": getattr(args, "prompt", None),
+            "name": getattr(args, "name", None),
+            "deliver": getattr(args, "deliver", None),
+            "repeat": getattr(args, "repeat", None),
+            "skills": getattr(args, "skills", None),
+            "script": getattr(args, "script", None),
+            "workdir": getattr(args, "workdir", None),
+        }
+        updates = {key: value for key, value in updates.items() if value is not None}
+        if getattr(args, "clear_skills", False):
+            updates["skills"] = []
+        elif getattr(args, "add_skills", None) or getattr(args, "remove_skills", None):
+            skills = cron_commands.existing_job_skills(args.job_id)
+            remove = set(getattr(args, "remove_skills", None) or [])
+            final_skills = [skill for skill in skills if skill not in remove]
+            for skill in getattr(args, "add_skills", None) or []:
+                if skill not in final_skills:
+                    final_skills.append(skill)
+            updates["skills"] = final_skills
+        return cron_commands.update_cron_job(job_id=args.job_id, **updates)
+    if subcommand in {"pause", "resume", "run"}:
+        return cron_commands.simple_job_action(subcommand, job_id=args.job_id)
+    if subcommand in {"remove", "rm", "delete"}:
+        return cron_commands.simple_job_action("remove", job_id=args.job_id)
+    if subcommand == "status":
+        return cron_commands.cron_status()
+    if subcommand == "tick":
+        return cron_commands.run_tick()
+    return cron_commands.CronCommandResult(f"Unknown cron command: {subcommand}", exit_code=2)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -242,6 +357,13 @@ def main(argv: list[str] | None = None) -> int:
         results = run_health_checks(workdir=workdir, cli_home=cli_home)
         print(render_doctor_output(results))
         return doctor_exit_code(results)
+
+    if command == "cron":
+        cli_home = get_cli_home()
+        load_dotenv_files(cli_home=cli_home, project_root=Path.cwd(), dotenv_module=dotenv)
+        result = _run_cron_command(args)
+        print(result.text)
+        return result.exit_code
 
     setup_cli_logging()
     db_path = ensure_db_parent()
