@@ -50,6 +50,33 @@ COMMAND_REGISTRY: tuple[CommandDef, ...] = (
         completion="path",
     ),
     CommandDef("clear", "Clear the terminal screen.", "Session"),
+    CommandDef(
+        "background",
+        "Run a prompt as an in-process background task.",
+        "Background",
+        aliases=("bg",),
+        args_hint="<prompt>",
+    ),
+    CommandDef("tasks", "List background tasks.", "Background", aliases=("agents",)),
+    CommandDef("queue", "Show active background work.", "Background"),
+    CommandDef(
+        "steer",
+        "Add a steering message to a background task.",
+        "Background",
+        args_hint="<task_id> <message>",
+    ),
+    CommandDef(
+        "stop",
+        "Cooperatively stop a background task.",
+        "Background",
+        args_hint="<task_id>",
+    ),
+    CommandDef(
+        "approve",
+        "Review a background task waiting for approval.",
+        "Background",
+        args_hint="<task_id>",
+    ),
     CommandDef("skills", "List available local skills.", "Skills"),
     CommandDef(
         "skill",

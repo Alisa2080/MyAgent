@@ -11,6 +11,7 @@ except ModuleNotFoundError:
     dotenv = None
 
 from agent_cli.checkpoints import CheckpointDependencyError, create_sqlite_checkpointer
+from agent_cli.background import BackgroundTaskRegistry, BackgroundTaskStore
 from agent_cli.commands import COMMAND_LOOKUP
 from agent_cli.config import (
     ConfigError,
@@ -24,6 +25,7 @@ from agent_cli.rendering import format_sessions
 from agent_cli.repl import AgentCLI, default_agent_factory, default_runner
 from agent_cli.session_store import SessionStore
 from agent_cli.skill_commands import load_skill_commands, load_skill_discovery
+from agent_core.terminal_lifecycle import interrupt_terminal_wait_for_thread_id
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -50,6 +52,32 @@ def make_cli(
     *, args: argparse.Namespace, store: SessionStore, checkpointer, settings
 ) -> AgentCLI:
     workdir = str(Path(args.workdir).expanduser().resolve()) if args.workdir else os.getcwd()
+    background_store = BackgroundTaskStore(store.db_path)
+
+    def run_background(input_data, config):
+        handle = create_sqlite_checkpointer(store.db_path)
+        try:
+            agent = default_agent_factory(handle.checkpointer)
+            return default_runner(agent, input_data, config)
+        finally:
+            handle.close()
+
+    def create_background_session(session_id: str, title: str) -> None:
+        store.create_session(
+            workdir=workdir,
+            model=settings.model_name,
+            title=title,
+            session_id=session_id,
+        )
+
+    background_registry = BackgroundTaskRegistry(
+        store=background_store,
+        session_id_factory=store.new_session_id,
+        session_record_creator=create_background_session,
+        title_factory=lambda prompt: store.title_from_message(prompt),
+        runner=run_background,
+        stop_wait_interrupt=lambda session_id: interrupt_terminal_wait_for_thread_id(session_id),
+    )
     return AgentCLI(
         session_store=store,
         checkpointer=checkpointer,
@@ -59,6 +87,10 @@ def make_cli(
         model_name=settings.model_name,
         default_title=settings.default_title,
         session_id=getattr(args, "resume", None),
+        background_registry=background_registry,
+        profile=settings.profile,
+        cli_home=str(settings.cli_home) if settings.cli_home else None,
+        display_theme=settings.display_theme,
         skill_commands_provider=lambda: load_skill_commands(
             built_in_names=set(COMMAND_LOOKUP)
         ),

@@ -60,6 +60,11 @@ class AgentCLI:
         skill_commands_provider: Callable[[], dict[str, Any]] | None = None,
         skill_discovery_provider: Callable[[], Any] | None = None,
         skill_loader: Callable[[Any], Any] | None = None,
+        background_registry: Any | None = None,
+        profile: str | None = None,
+        cli_home: str | None = None,
+        display_theme: str = "default",
+        show_banner: bool = True,
     ):
         self.session_store = session_store
         self.checkpointer = checkpointer
@@ -72,6 +77,11 @@ class AgentCLI:
         self.skill_commands_provider = skill_commands_provider or (lambda: {})
         self.skill_discovery_provider = skill_discovery_provider
         self.skill_loader = skill_loader
+        self.background_registry = background_registry
+        self.profile = profile
+        self.cli_home = cli_home
+        self.display_theme = display_theme
+        self.show_banner = show_banner
         self._agent: Any | None = None
         # Initialize session after basic attributes are set
         if session_id:
@@ -175,6 +185,18 @@ class AgentCLI:
                 message = build_skill_invocation_message(loaded, arg)
                 return self.submit_message(message)
             return f"Unknown command: {parts[0] if parts else raw}"
+        if command.name == "background":
+            return self._handle_background(arg)
+        if command.name == "tasks":
+            return self._handle_tasks(active_only=False)
+        if command.name == "queue":
+            return self._handle_tasks(active_only=True)
+        if command.name == "steer":
+            return self._handle_steer(arg)
+        if command.name == "stop":
+            return self._handle_stop(arg)
+        if command.name == "approve":
+            return self._handle_approve(arg)
         if command.name == "help":
             return render_help()
         if command.name == "doctor":
@@ -248,6 +270,61 @@ class AgentCLI:
             raise EOFError
         return f"Unhandled command: /{command.name}"
 
+    def _require_background_registry(self):
+        if self.background_registry is None:
+            raise RuntimeError("background tasks are not configured")
+        return self.background_registry
+
+    def _handle_background(self, arg: str) -> str:
+        if not arg.strip():
+            return "Usage: /background <prompt>"
+        record = self._require_background_registry().start(arg)
+        return f"Started background task {record.task_id} · session {record.session_id}"
+
+    def _handle_tasks(self, *, active_only: bool = False) -> str:
+        records = self._require_background_registry().list_tasks(active_only=active_only)
+        if not records:
+            return "No background tasks."
+        lines = ["Background Tasks:"]
+        for record in records:
+            detail = (
+                record.last_error
+                or record.last_result_preview
+                or getattr(record, "prompt_preview", None)
+                or ""
+            )
+            lines.append(
+                f"  {record.task_id}  {record.status:<16} {record.title} "
+                f"session={record.session_id} steer={record.pending_steer_count} {detail}".rstrip()
+            )
+        return "\n".join(lines)
+
+    def _handle_steer(self, arg: str) -> str:
+        parts = arg.split(maxsplit=1)
+        if len(parts) != 2:
+            return "Usage: /steer <task_id> <message>"
+        steer = self._require_background_registry().steer(parts[0], parts[1])
+        return f"Queued steer {steer.id} for {steer.task_id}"
+
+    def _handle_stop(self, arg: str) -> str:
+        task_id = arg.strip()
+        if not task_id:
+            return "Usage: /stop <task_id>"
+        record = self._require_background_registry().stop(task_id)
+        if record.status in {"completing", "completed", "failed", "stopped"}:
+            return f"Background task {record.task_id} is already {record.status}"
+        return f"Stop requested for {record.task_id}"
+
+    def _handle_approve(self, arg: str) -> str:
+        task_id = arg.strip()
+        if not task_id:
+            return "Usage: /approve <task_id>"
+        registry = self._require_background_registry()
+        requests = registry.approval_requests(task_id)
+        resume_value = collect_approval_decisions(requests)
+        registry.approve(task_id, resume_value)
+        return f"Approved background task {task_id}"
+
     def _render_skills(self) -> str:
         if self.skill_discovery_provider is not None:
             discovery = self.skill_discovery_provider()
@@ -279,15 +356,87 @@ class AgentCLI:
         desc = meta.get("description") or ""
         return f"{meta['name']}\n{desc}".strip()
 
+    def _drain_background_notifications(self) -> None:
+        if self.background_registry is None:
+            return
+        for item in self.background_registry.drain_notifications():
+            message = " ".join(str(item.message).split())
+            print(
+                f"[background {item.kind}] {item.task_id} · {item.status} "
+                f"· session {item.session_id} · {message}"
+            )
+
+    def _stop_active_background_tasks_on_exit(self) -> None:
+        if self.background_registry is None:
+            return
+        try:
+            active = self.background_registry.list_tasks(active_only=True, limit=None)
+        except TypeError:
+            active = self.background_registry.list_tasks(active_only=True)
+        if not active:
+            return
+        print(f"Stopping {len(active)} active background task(s)...")
+        for record in active:
+            try:
+                self.background_registry.stop(record.task_id)
+            except Exception as exc:
+                print(f"Failed to stop {record.task_id}: {exc}", file=sys.stderr)
+        join = getattr(self.background_registry, "join", None)
+        if join is None:
+            return
+        for record in active:
+            try:
+                join(record.task_id, timeout=0.5)
+                finalize = getattr(self.background_registry, "finalize_stopping", None)
+                store = getattr(self.background_registry, "store", None)
+                if finalize is not None and store is not None:
+                    current = store.get_task(record.task_id)
+                    if current is not None and current.status in {
+                        "queued",
+                        "running",
+                        "waiting_approval",
+                        "stopping",
+                    }:
+                        finalize(record.task_id)
+            except Exception as exc:
+                print(f"Failed to join {record.task_id}: {exc}", file=sys.stderr)
+
+    def _print_banner(self) -> None:
+        from shutil import get_terminal_size
+
+        from agent_cli.banner import BannerContext, render_banner
+
+        counts = (
+            self.background_registry.summary_counts()
+            if self.background_registry is not None
+            else {}
+        )
+        context = BannerContext(
+            workdir=self.workdir,
+            profile=self.profile,
+            home=self.cli_home,
+            model=self.model_name,
+            session=self.session_id or "",
+            background_counts=counts,
+        )
+        width = get_terminal_size((100, 24)).columns
+        print(render_banner(context, width=width, theme_name=self.display_theme))
+        print("Type /help for commands. Ctrl-D exits.")
+
     def run_repl(self) -> int:
         self.ensure_session()
-        print(f"Session: {self.session_id}")
-        print("Type /help for commands. Ctrl-D exits.")
+        if self.show_banner:
+            self._print_banner()
+        else:
+            print(f"Session: {self.session_id}")
+            print("Type /help for commands. Ctrl-D exits.")
         while True:
             try:
+                self._drain_background_notifications()
                 text = self._prompt("> ").strip()
             except EOFError:
                 print()
+                self._stop_active_background_tasks_on_exit()
                 return 0
             except KeyboardInterrupt:
                 print()
@@ -301,7 +450,9 @@ class AgentCLI:
                     output = self.submit_message(text)
                 if output:
                     print(output)
+                self._drain_background_notifications()
             except EOFError:
+                self._stop_active_background_tasks_on_exit()
                 return 0
             except Exception as exc:
                 print(f"Error: {exc}", file=sys.stderr)

@@ -91,3 +91,19 @@ def test_doctor_fails_semantically_invalid_config(tmp_path, monkeypatch):
 
     assert config.status == "FAIL"
     assert "display.markdown" in config.message
+
+
+def test_doctor_fails_invalid_display_theme(tmp_path, monkeypatch):
+    monkeypatch.setenv("AGENT_CLI_HOME", str(tmp_path))
+    (tmp_path / "config.yaml").write_text(
+        "display:\n  theme: weird\n",
+        encoding="utf-8",
+    )
+
+    from agent_cli.doctor import run_health_checks
+
+    results = run_health_checks(workdir=str(tmp_path))
+    config = next(item for item in results if item.name == "Config")
+
+    assert config.status == "FAIL"
+    assert "display.theme" in config.message

@@ -63,6 +63,64 @@ class FakeStore:
         return normalized[: max_length - 3].rstrip() + "..."
 
 
+class FakeBackgroundRegistry:
+    def __init__(self):
+        self.started = []
+        self.steers = []
+        self.stopped = []
+        self.approved = []
+        self.notifications = []
+        self.records = {}
+        self.list_active_only_calls = []
+        self.list_limit_calls = []
+        self.joined = []
+
+    def start(self, prompt):
+        record = SimpleNamespace(
+            task_id="bg_12345678",
+            session_id="session-bg",
+            title="Background task",
+            status="queued",
+            pending_steer_count=0,
+            last_result_preview=None,
+            last_error=None,
+            updated_at="now",
+            created_at="now",
+        )
+        self.started.append(prompt)
+        self.records[record.task_id] = record
+        return record
+
+    def list_tasks(self, active_only=False, limit=20):
+        self.list_active_only_calls.append(active_only)
+        self.list_limit_calls.append(limit)
+        return list(self.records.values())
+
+    def steer(self, task_id, message):
+        self.steers.append((task_id, message))
+        return SimpleNamespace(id=1, task_id=task_id, message=message)
+
+    def stop(self, task_id):
+        self.stopped.append(task_id)
+        return self.records[task_id]
+
+    def join(self, task_id, timeout=None):
+        self.joined.append((task_id, timeout))
+
+    def approval_requests(self, task_id):
+        from agent_cli.approval import ApprovalRequest
+
+        return [ApprovalRequest({"name": "terminal", "args": {"command": "pwd"}}, {})]
+
+    def approve(self, task_id, resume_value):
+        self.approved.append((task_id, resume_value))
+
+    def drain_notifications(self):
+        items = self.notifications
+        self.notifications = []
+        return items
+
+
 def test_submit_message_invokes_runner_with_thread_id(monkeypatch):
     calls = []
 
@@ -190,6 +248,88 @@ def test_handle_command_new_switches_session():
     assert cli.session_id == "s2"
 
 
+def test_handle_background_command_starts_task():
+    registry = FakeBackgroundRegistry()
+    cli = AgentCLI(
+        session_store=FakeStore(),
+        checkpointer=None,
+        agent_factory=lambda checkpointer: "agent",
+        runner=lambda agent, input_data, config: {},
+        workdir="/repo",
+        model_name=None,
+        background_registry=registry,
+    )
+
+    output = cli.handle_command("/background fix tests")
+
+    assert registry.started == ["fix tests"]
+    assert "Started background task bg_12345678" in output
+    assert "session-bg" in output
+
+
+def test_handle_tasks_and_queue_render_background_tasks():
+    registry = FakeBackgroundRegistry()
+    registry.start("fix tests")
+    cli = AgentCLI(
+        session_store=FakeStore(),
+        checkpointer=None,
+        agent_factory=lambda checkpointer: "agent",
+        runner=lambda agent, input_data, config: {},
+        workdir="/repo",
+        model_name=None,
+        background_registry=registry,
+    )
+
+    assert "bg_12345678" in cli.handle_command("/tasks")
+    assert "bg_12345678" in cli.handle_command("/queue")
+    assert registry.list_active_only_calls == [False, True]
+
+
+def test_handle_steer_stop_and_approve(monkeypatch):
+    registry = FakeBackgroundRegistry()
+    registry.start("fix tests")
+    monkeypatch.setattr(
+        "agent_cli.repl.collect_approval_decisions",
+        lambda requests: {"decisions": [{"type": "approve"}]},
+    )
+    cli = AgentCLI(
+        session_store=FakeStore(),
+        checkpointer=None,
+        agent_factory=lambda checkpointer: "agent",
+        runner=lambda agent, input_data, config: {},
+        workdir="/repo",
+        model_name=None,
+        background_registry=registry,
+    )
+
+    assert "Queued steer" in cli.handle_command("/steer bg_12345678 retry now")
+    assert "Stop requested" in cli.handle_command("/stop bg_12345678")
+    assert "Approved background task" in cli.handle_command("/approve bg_12345678")
+
+    assert registry.steers == [("bg_12345678", "retry now")]
+    assert registry.stopped == ["bg_12345678"]
+    assert registry.approved == [("bg_12345678", {"decisions": [{"type": "approve"}]})]
+
+
+def test_handle_stop_reports_completing_as_already_done():
+    registry = FakeBackgroundRegistry()
+    record = registry.start("fix tests")
+    record.status = "completing"
+    cli = AgentCLI(
+        session_store=FakeStore(),
+        checkpointer=None,
+        agent_factory=lambda checkpointer: "agent",
+        runner=lambda agent, input_data, config: {},
+        workdir="/repo",
+        model_name=None,
+        background_registry=registry,
+    )
+
+    assert cli.handle_command("/stop bg_12345678") == (
+        "Background task bg_12345678 is already completing"
+    )
+
+
 def test_handle_command_resume_rejects_unknown_session():
     cli = AgentCLI(
         session_store=FakeStore(),
@@ -255,6 +395,293 @@ def test_run_repl_uses_prompt_adapter(monkeypatch, capsys):
     assert code == 0
     assert prompts == ["> ", "> "]
     assert "Available commands:" in captured.out
+
+
+def test_run_repl_drains_background_notifications_before_prompt(capsys):
+    from agent_cli.background import BackgroundNotification
+
+    class Registry(FakeBackgroundRegistry):
+        def __init__(self):
+            super().__init__()
+            self.notifications = [
+                BackgroundNotification(
+                    kind="done",
+                    task_id="bg_12345678",
+                    session_id="session-bg",
+                    status="completed",
+                    message="done",
+                )
+            ]
+
+    class FakePrompt:
+        def prompt(self, prompt_text):
+            raise EOFError
+
+    cli = AgentCLI(
+        session_store=FakeStore(),
+        checkpointer=None,
+        agent_factory=lambda checkpointer: "agent",
+        runner=lambda agent, input_data, config: {},
+        workdir="/repo",
+        model_name=None,
+        prompt_session=FakePrompt(),
+        background_registry=Registry(),
+        show_banner=False,
+    )
+
+    assert cli.run_repl() == 0
+    captured = capsys.readouterr()
+    assert "[background done] bg_12345678" in captured.out
+
+
+def test_run_repl_sanitizes_background_notification_messages(capsys):
+    from agent_cli.background import BackgroundNotification
+
+    class Registry(FakeBackgroundRegistry):
+        def __init__(self):
+            super().__init__()
+            self.notifications = [
+                BackgroundNotification(
+                    kind="done",
+                    task_id="bg_12345678",
+                    session_id="session-bg",
+                    status="completed",
+                    message="first line\nsecond line",
+                )
+            ]
+
+    class FakePrompt:
+        def prompt(self, prompt_text):
+            raise EOFError
+
+    cli = AgentCLI(
+        session_store=FakeStore(),
+        checkpointer=None,
+        agent_factory=lambda checkpointer: "agent",
+        runner=lambda agent, input_data, config: {},
+        workdir="/repo",
+        model_name=None,
+        prompt_session=FakePrompt(),
+        background_registry=Registry(),
+        show_banner=False,
+    )
+
+    assert cli.run_repl() == 0
+    captured = capsys.readouterr()
+    assert "first line second line" in captured.out
+    assert "first line\nsecond line" not in captured.out
+
+
+def test_run_repl_stops_active_background_tasks_on_exit(capsys):
+    class Registry(FakeBackgroundRegistry):
+        def list_tasks(self, active_only=False, limit=20):
+            self.list_active_only_calls.append(active_only)
+            self.list_limit_calls.append(limit)
+            return [
+                SimpleNamespace(
+                    task_id="bg_12345678",
+                    session_id="session-bg",
+                    title="Task",
+                    status="running",
+                    pending_steer_count=0,
+                    last_result_preview=None,
+                    last_error=None,
+                    prompt_preview="Task",
+                    updated_at="now",
+                    created_at="now",
+                )
+            ]
+
+        def stop(self, task_id):
+            self.stopped.append(task_id)
+            return SimpleNamespace(task_id=task_id, status="stopping")
+
+    class FakePrompt:
+        def prompt(self, prompt_text):
+            raise EOFError
+
+    registry = Registry()
+    cli = AgentCLI(
+        session_store=FakeStore(),
+        checkpointer=None,
+        agent_factory=lambda checkpointer: "agent",
+        runner=lambda agent, input_data, config: {},
+        workdir="/repo",
+        model_name=None,
+        prompt_session=FakePrompt(),
+        background_registry=registry,
+        show_banner=False,
+    )
+
+    assert cli.run_repl() == 0
+    assert registry.stopped == ["bg_12345678"]
+    assert registry.joined == [("bg_12345678", 0.5)]
+    assert registry.list_limit_calls == [None]
+
+
+def test_run_repl_stops_all_active_background_tasks_on_exit(capsys):
+    class Registry(FakeBackgroundRegistry):
+        def list_tasks(self, active_only=False, limit=20):
+            self.list_active_only_calls.append(active_only)
+            self.list_limit_calls.append(limit)
+            return [
+                SimpleNamespace(
+                    task_id=f"bg_{index:08d}",
+                    session_id=f"session-bg-{index}",
+                    title="Task",
+                    status="running",
+                    pending_steer_count=0,
+                    last_result_preview=None,
+                    last_error=None,
+                    prompt_preview="Task",
+                    updated_at="now",
+                    created_at="now",
+                )
+                for index in range(25)
+            ]
+
+        def stop(self, task_id):
+            self.stopped.append(task_id)
+            return SimpleNamespace(task_id=task_id, status="stopping")
+
+    class FakePrompt:
+        def prompt(self, prompt_text):
+            raise EOFError
+
+    registry = Registry()
+    cli = AgentCLI(
+        session_store=FakeStore(),
+        checkpointer=None,
+        agent_factory=lambda checkpointer: "agent",
+        runner=lambda agent, input_data, config: {},
+        workdir="/repo",
+        model_name=None,
+        prompt_session=FakePrompt(),
+        background_registry=registry,
+        show_banner=False,
+    )
+
+    assert cli.run_repl() == 0
+    assert len(registry.stopped) == 25
+    assert registry.list_limit_calls == [None]
+
+
+def test_run_repl_requests_all_stops_before_joining_on_exit(capsys):
+    class Registry(FakeBackgroundRegistry):
+        def __init__(self):
+            super().__init__()
+            self.events = []
+
+        def list_tasks(self, active_only=False, limit=20):
+            return [
+                SimpleNamespace(
+                    task_id=f"bg_{index:08d}",
+                    session_id=f"session-bg-{index}",
+                    title="Task",
+                    status="running",
+                    pending_steer_count=0,
+                    last_result_preview=None,
+                    last_error=None,
+                    prompt_preview="Task",
+                    updated_at="now",
+                    created_at="now",
+                )
+                for index in range(3)
+            ]
+
+        def stop(self, task_id):
+            self.events.append(("stop", task_id))
+            self.stopped.append(task_id)
+            return SimpleNamespace(task_id=task_id, status="stopping")
+
+        def join(self, task_id, timeout=None):
+            self.events.append(("join", task_id))
+            self.joined.append((task_id, timeout))
+
+    class FakePrompt:
+        def prompt(self, prompt_text):
+            raise EOFError
+
+    registry = Registry()
+    cli = AgentCLI(
+        session_store=FakeStore(),
+        checkpointer=None,
+        agent_factory=lambda checkpointer: "agent",
+        runner=lambda agent, input_data, config: {},
+        workdir="/repo",
+        model_name=None,
+        prompt_session=FakePrompt(),
+        background_registry=registry,
+        show_banner=False,
+    )
+
+    assert cli.run_repl() == 0
+    assert registry.events == [
+        ("stop", "bg_00000000"),
+        ("stop", "bg_00000001"),
+        ("stop", "bg_00000002"),
+        ("join", "bg_00000000"),
+        ("join", "bg_00000001"),
+        ("join", "bg_00000002"),
+    ]
+
+
+def test_run_repl_finalizes_still_active_tasks_after_exit_join(capsys):
+    active_record = SimpleNamespace(
+        task_id="bg_12345678",
+        session_id="session-bg",
+        title="Task",
+        status="stopping",
+        pending_steer_count=0,
+        last_result_preview=None,
+        last_error=None,
+        prompt_preview="Task",
+        updated_at="now",
+        created_at="now",
+    )
+
+    class Store:
+        def get_task(self, task_id):
+            return active_record
+
+    class Registry(FakeBackgroundRegistry):
+        def __init__(self):
+            super().__init__()
+            self.store = Store()
+            self.finalized = []
+
+        def list_tasks(self, active_only=False, limit=20):
+            return [active_record]
+
+        def stop(self, task_id):
+            self.stopped.append(task_id)
+            return active_record
+
+        def finalize_stopping(self, task_id):
+            self.finalized.append(task_id)
+            active_record.status = "stopped"
+            return active_record
+
+    class FakePrompt:
+        def prompt(self, prompt_text):
+            raise EOFError
+
+    registry = Registry()
+    cli = AgentCLI(
+        session_store=FakeStore(),
+        checkpointer=None,
+        agent_factory=lambda checkpointer: "agent",
+        runner=lambda agent, input_data, config: {},
+        workdir="/repo",
+        model_name=None,
+        prompt_session=FakePrompt(),
+        background_registry=registry,
+        show_banner=False,
+    )
+
+    assert cli.run_repl() == 0
+    assert registry.finalized == ["bg_12345678"]
+    assert active_record.status == "stopped"
 
 
 def test_handle_command_history_renders_empty_history():

@@ -304,6 +304,134 @@ def test_main_invalid_display_markdown_returns_code_2(monkeypatch, tmp_path, cap
     assert "display.markdown" in captured.err
 
 
+def test_settings_from_config_reads_display_theme(tmp_path):
+    from agent_cli.config import settings_from_config
+
+    (tmp_path / "config.yaml").write_text("display:\n  theme: slate\n", encoding="utf-8")
+
+    settings = settings_from_config(cli_home=tmp_path, profile=None, cli_model=None)
+
+    assert settings.display_theme == "slate"
+
+
+def test_settings_from_config_rejects_invalid_display_theme(tmp_path):
+    from agent_cli.config import ConfigError, settings_from_config
+
+    (tmp_path / "config.yaml").write_text("display:\n  theme: weird\n", encoding="utf-8")
+
+    try:
+        settings_from_config(cli_home=tmp_path, profile=None, cli_model=None)
+    except ConfigError as exc:
+        assert "display.theme" in str(exc)
+    else:
+        raise AssertionError("expected ConfigError")
+
+
+def test_settings_from_config_rejects_falsy_display_theme(tmp_path):
+    from agent_cli.config import ConfigError, settings_from_config
+
+    (tmp_path / "config.yaml").write_text("display:\n  theme: false\n", encoding="utf-8")
+
+    try:
+        settings_from_config(cli_home=tmp_path, profile=None, cli_model=None)
+    except ConfigError as exc:
+        assert "display.theme" in str(exc)
+    else:
+        raise AssertionError("expected ConfigError")
+
+
+def test_make_cli_wires_background_registry(tmp_path):
+    from types import SimpleNamespace
+
+    from agent_cli.config import RuntimeSettings
+    from agent_cli.main import make_cli
+    from agent_cli.session_store import SessionStore
+
+    args = SimpleNamespace(workdir=str(tmp_path), resume=None)
+    store = SessionStore(tmp_path / "cli.sqlite")
+    cli = make_cli(
+        args=args,
+        store=store,
+        checkpointer=object(),
+        settings=RuntimeSettings(
+            profile="dev",
+            cli_home=tmp_path,
+            model_name="model",
+            display_theme="slate",
+        ),
+    )
+
+    assert cli.background_registry is not None
+    assert cli.profile == "dev"
+    assert cli.cli_home == str(tmp_path)
+    assert cli.display_theme == "slate"
+
+
+def test_make_cli_background_runner_uses_fresh_checkpointer_handle(
+    monkeypatch, tmp_path
+):
+    from types import SimpleNamespace
+
+    from agent_cli.config import RuntimeSettings
+    from agent_cli.main import make_cli
+    from agent_cli.session_store import SessionStore
+
+    import agent_cli.main as main_module
+
+    handles = []
+    runner_calls = []
+
+    class Handle:
+        def __init__(self):
+            self.checkpointer = object()
+            self.closed = False
+
+        def close(self):
+            self.closed = True
+
+    def fake_create_sqlite_checkpointer(path):
+        handle = Handle()
+        handles.append((path, handle))
+        return handle
+
+    monkeypatch.setattr(
+        main_module, "create_sqlite_checkpointer", fake_create_sqlite_checkpointer
+    )
+    monkeypatch.setattr(
+        main_module,
+        "default_agent_factory",
+        lambda checkpointer: {"checkpointer": checkpointer},
+    )
+
+    def fake_runner(agent, input_data, config):
+        runner_calls.append((agent, input_data, config))
+        return {"messages": [{"role": "assistant", "content": "done"}]}
+
+    monkeypatch.setattr(main_module, "default_runner", fake_runner)
+
+    args = SimpleNamespace(workdir=str(tmp_path), resume=None)
+    store = SessionStore(tmp_path / "cli.sqlite")
+    cli = make_cli(
+        args=args,
+        store=store,
+        checkpointer=object(),
+        settings=RuntimeSettings(
+            profile="dev",
+            cli_home=tmp_path,
+            model_name="model",
+            display_theme="slate",
+        ),
+    )
+
+    record = cli.background_registry.start("background work")
+    cli.background_registry.join(record.task_id, timeout=2)
+
+    assert len(handles) == 1
+    assert handles[0][0] == store.db_path
+    assert handles[0][1].closed is True
+    assert runner_calls[0][0]["checkpointer"] is handles[0][1].checkpointer
+
+
 def test_main_doctor_reports_malformed_config_without_startup_failure(monkeypatch, tmp_path, capsys):
     monkeypatch.setenv("AGENT_CLI_HOME", str(tmp_path))
     (tmp_path / "config.yaml").write_text("model: [", encoding="utf-8")
