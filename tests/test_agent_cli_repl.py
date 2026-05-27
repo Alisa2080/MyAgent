@@ -1467,6 +1467,26 @@ def test_run_repl_skips_cron_scheduler_when_disabled(monkeypatch):
     assert cli.run_repl() == 0
 
 
+def test_run_repl_logs_cron_scheduler_start_failure(monkeypatch, caplog):
+    import logging
+
+    import agent_cli.repl as repl
+
+    monkeypatch.setattr(
+        repl,
+        "start_cron_scheduler",
+        lambda interval_seconds: (_ for _ in ()).throw(RuntimeError("cron boom")),
+    )
+
+    cli = make_cli(cron_enabled=True)
+    monkeypatch.setattr(cli, "_prompt", lambda prompt: (_ for _ in ()).throw(EOFError()))
+
+    with caplog.at_level(logging.ERROR, logger="agent_cli.repl"):
+        assert cli.run_repl() == 0
+
+    assert "Failed to start cron scheduler." in caplog.text
+
+
 def test_cron_notifications_print_then_inject_next_turn(monkeypatch, capsys):
     import agent_cli.repl as repl
 
@@ -1543,3 +1563,37 @@ def test_cron_notifications_are_restored_when_runner_raises(monkeypatch):
         raise AssertionError("expected submit_message to raise")
 
     assert cli.pending_cron_events == [event]
+
+
+def test_cron_notification_fallback_includes_output_path(monkeypatch):
+    import agent_cli.repl as repl
+
+    event = {
+        "job_id": "job-1",
+        "job_name": "report",
+        "status": "ok",
+        "final_response": "daily report done",
+        "output_path": "/tmp/out.md",
+    }
+
+    monkeypatch.setattr(
+        repl,
+        "format_cron_notification_message",
+        lambda events: (_ for _ in ()).throw(RuntimeError("format failed")),
+    )
+
+    captured_input = {}
+
+    def runner(agent, input_data, config):
+        captured_input.update(input_data)
+        return {"messages": [{"role": "assistant", "content": "ok"}]}
+
+    cli = make_cli(runner=runner)
+    cli.pending_cron_events = [event]
+
+    cli.submit_message("what changed?")
+
+    message = captured_input["messages"][0]["content"]
+    assert "job_id=job-1" in message
+    assert "status=ok" in message
+    assert "output_path=/tmp/out.md" in message

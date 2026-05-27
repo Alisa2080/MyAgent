@@ -58,6 +58,13 @@ def test_phase_3_background_commands_are_registered():
     assert "/steer <task_id> <message>" in help_text
 
 
+def test_cron_command_is_registered_with_subcommand_hint():
+    assert resolve_command("/cron").name == "cron"
+
+    help_text = render_help()
+    assert "/cron [subcommand]" in help_text
+
+
 def test_commands_expose_completion_metadata():
     completion_names = [item.name for item in commands_for_completion()]
 

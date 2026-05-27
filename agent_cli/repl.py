@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sys
 import time
+import logging
 from collections.abc import Callable
 from typing import Any
 
@@ -32,6 +33,7 @@ from cron.notifications import (
 
 AgentFactory = Callable[[Any], Any]
 Runner = Callable[[Any, dict[str, Any] | Any, dict[str, Any]], Any]
+logger = logging.getLogger(__name__)
 
 
 def _title_from_message(
@@ -175,7 +177,9 @@ class AgentCLI:
                     processed = f"{cron_update}\n\n## User Message\n\n{processed}"
             except Exception:
                 fallback = "\n".join(
-                    f"- job_id={event.get('job_id')} status={event.get('status')}"
+                    f"- job_id={event.get('job_id')} "
+                    f"status={event.get('status')} "
+                    f"output_path={event.get('output_path') or '-'}"
                     for event in cron_events_for_turn
                 )
                 processed = f"[IMPORTANT: Cron job update]\n{fallback}\n\n## User Message\n\n{processed}"
@@ -444,6 +448,7 @@ class AgentCLI:
                 interval_seconds=self.cron_interval_seconds
             )
         except Exception as exc:
+            logger.exception("Failed to start cron scheduler.")
             print(f"Warning: failed to start cron scheduler: {exc}", file=sys.stderr)
             self._started_cron_scheduler = False
 
