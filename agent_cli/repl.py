@@ -91,6 +91,10 @@ class AgentCLI:
                 model_name=model_name,
                 session_store_for_checkpoints=checkpointer,
                 workdir=workdir,
+                profile=self.profile,
+                display_theme=self.display_theme,
+                cli_home=self.cli_home,
+                db_path=str(session_store.db_path) if hasattr(session_store, "db_path") else None,
             )
         else:
             self.session = None
@@ -123,6 +127,10 @@ class AgentCLI:
             model_name=self.model_name,
             session_store_for_checkpoints=self.checkpointer,
             workdir=self.workdir,
+            profile=self.profile,
+            display_theme=self.display_theme,
+            cli_home=self.cli_home,
+            db_path=str(self.session_store.db_path) if hasattr(self.session_store, "db_path") else None,
         )
         return self.session_id
 
@@ -215,6 +223,10 @@ class AgentCLI:
                 model_name=self.model_name,
                 session_store_for_checkpoints=self.checkpointer,
                 workdir=self.workdir,
+                profile=self.profile,
+                display_theme=self.display_theme,
+                cli_home=self.cli_home,
+                db_path=str(self.session_store.db_path) if hasattr(self.session_store, "db_path") else None,
             )
             return f"Started session: {record.session_id}"
         if command.name == "sessions":
@@ -233,6 +245,10 @@ class AgentCLI:
                 model_name=self.model_name,
                 session_store_for_checkpoints=self.checkpointer,
                 workdir=self.workdir,
+                profile=self.profile,
+                display_theme=self.display_theme,
+                cli_home=self.cli_home,
+                db_path=str(self.session_store.db_path) if hasattr(self.session_store, "db_path") else None,
             )
             return f"Resumed session: {record.session_id}"
         if command.name == "status":
@@ -251,7 +267,7 @@ class AgentCLI:
                 try:
                     limit = int(arg)
                 except ValueError:
-                    pass
+                    return "Usage: /history [N]"
             return render_history(self.session, limit=limit)
         if command.name == "export":
             if self.session is None:

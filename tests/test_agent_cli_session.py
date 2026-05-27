@@ -77,9 +77,57 @@ def test_session_export_empty_history_does_not_create_file():
     with tempfile.TemporaryDirectory() as tmp:
         store = SessionStore(Path(tmp) / "cli.sqlite")
         session = Session(session_store=store, session_id="export-test")
-        
+
         export_path = Path(tmp) / "export.md"
         result = session.export_markdown(export_path)
-        
+
+        assert not export_path.exists()
+        assert "No messages" in result
+
+
+def test_session_status_includes_runtime_metadata_and_counts():
+    """Session status should include profile, theme, cli_home, db_path."""
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
+        store = SessionStore(tmp_path / "cli.sqlite")
+        session = Session(
+            session_store=store,
+            session_id="status-test",
+            model_name="model",
+            session_store_for_checkpoints="cp",
+            workdir=str(tmp_path),
+            profile="dev",
+            display_theme="slate",
+            cli_home=str(tmp_path),
+            db_path=str(tmp_path / "cli.sqlite"),
+        )
+
+        status = session.status()
+
+        assert status.profile == "dev"
+        assert status.display_theme == "slate"
+        assert status.cli_home == str(tmp_path)
+        assert status.db_path == str(tmp_path / "cli.sqlite")
+        assert status.checkpointer_available is True
+
+
+def test_session_export_relative_path_resolves_against_workdir():
+    """Export should resolve relative paths against workdir."""
+    with tempfile.TemporaryDirectory() as tmp:
+        store = SessionStore(Path(tmp) / "cli.sqlite")
+        workdir = Path(tmp) / "repo"
+        workdir.mkdir()
+        session = Session(
+            session_store=store,
+            session_id="export-relative",
+            model_name="model",
+            session_store_for_checkpoints=None,
+            workdir=str(workdir),
+        )
+
+        result = session.export_markdown("exports/session.md")
+        export_path = workdir / "exports" / "session.md"
+
+        # Empty history - file should not be created
         assert not export_path.exists()
         assert "No messages" in result

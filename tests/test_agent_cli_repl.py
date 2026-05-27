@@ -902,3 +902,18 @@ def test_render_skills_shows_dynamic_command_and_conflict(monkeypatch):
 
     assert "python-debug - Debug Python. (/python-debug)" in output
     assert "help - Builtin conflict. (conflicts with built-in command /help)" in output
+
+
+def test_handle_command_history_rejects_invalid_limit():
+    cli = AgentCLI(
+        session_store=FakeStore(),
+        checkpointer=None,
+        agent_factory=lambda checkpointer: "agent",
+        runner=lambda agent, input_data, config: {},
+        workdir="/repo",
+        model_name=None,
+    )
+
+    result = cli.handle_command("/history nope")
+
+    assert result == "Usage: /history [N]"
