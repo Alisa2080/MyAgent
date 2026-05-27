@@ -7,6 +7,7 @@ from typing import Any
 
 from langgraph.types import Command
 
+from agent_cli.command_context import CommandContext
 from agent_cli.commands import COMMAND_LOOKUP, resolve_command
 from agent_cli.approval import collect_approval_decisions
 from agent_cli.command_handlers import build_command_handlers
@@ -90,7 +91,8 @@ class AgentCLI:
         self.assistant_replies: list[str] = []
         self.last_call_elapsed_seconds: float | None = None
         self.last_usage_metadata: dict[str, Any] | None = None
-        self.command_handlers = build_command_handlers(self)
+        self.command_context = CommandContext(self)
+        self.command_handlers = build_command_handlers(self.command_context)
         # Initialize session after basic attributes are set
         if session_id:
             self.session = Session(
@@ -279,19 +281,18 @@ class AgentCLI:
             if skill_name in dynamic:
                 from agent_cli.skill_commands import (
                     build_skill_invocation_message,
-                    load_skill_for_command,
                 )
 
-                loader = self.skill_loader or load_skill_for_command
+                loader = self.command_context.load_skill
                 loaded = loader(dynamic[skill_name])
                 message = build_skill_invocation_message(loaded, arg)
-                return self.submit_message(message)
+                return self.command_context.submit_message(message)
             return f"Unknown command: {token if token else raw}"
 
         handler = self.command_handlers.get(command.effective_handler_key)
         if handler is None:
             return f"Unhandled command: /{command.name}"
-        return handler(self, arg, command)
+        return handler(self.command_context, arg, command)
 
     def _require_background_registry(self):
         if self.background_registry is None:

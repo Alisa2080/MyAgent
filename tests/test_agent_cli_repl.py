@@ -1188,6 +1188,8 @@ def test_run_repl_sanitizes_input_before_command_detection(capsys):
 
 
 def test_handle_command_dispatches_through_handler_registry():
+    from agent_cli.command_context import CommandContext
+
     calls = []
     cli = AgentCLI(
         session_store=FakeStore(),
@@ -1198,14 +1200,16 @@ def test_handle_command_dispatches_through_handler_registry():
         model_name=None,
     )
 
-    def fake_handler(cli_arg, arg, command):
-        calls.append((cli_arg, arg, command.name))
+    def fake_handler(ctx_arg, arg, command):
+        calls.append((ctx_arg, arg, command.name))
         return "handled"
 
     cli.command_handlers = {"help": fake_handler}
 
     assert cli.handle_command("/help extra") == "handled"
-    assert calls == [(cli, "extra", "help")]
+    assert isinstance(calls[0][0], CommandContext)
+    assert calls[0][0].cli is cli
+    assert calls[0][1:] == ("extra", "help")
 
 
 def test_all_builtin_commands_have_registered_handlers():
@@ -1220,7 +1224,7 @@ def test_all_builtin_commands_have_registered_handlers():
         workdir="/repo",
         model_name=None,
     )
-    handlers = build_command_handlers(cli)
+    handlers = build_command_handlers(cli.command_context)
 
     missing = [
         command.name
@@ -1341,3 +1345,24 @@ def test_tail_renders_result_error_and_steers():
     assert "latest result" in output
     assert "latest error" in output
     assert "extra instruction" in output
+
+
+def test_command_handlers_do_not_depend_on_agent_cli_private_helpers():
+    from pathlib import Path
+
+    handler_dir = Path("agent_cli/command_handlers")
+    forbidden = (
+        "._set_session",
+        "._require_background_registry",
+        "._effective_cli_home",
+        "from agent_cli.repl import AgentCLI",
+    )
+
+    offenders = {}
+    for path in handler_dir.glob("*.py"):
+        text = path.read_text(encoding="utf-8")
+        found = [item for item in forbidden if item in text]
+        if found:
+            offenders[str(path)] = found
+
+    assert offenders == {}
