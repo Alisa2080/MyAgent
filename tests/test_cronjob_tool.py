@@ -517,6 +517,22 @@ def test_job_summary_includes_required_fields():
     assert set(summary) == REQUIRED_SUMMARY_FIELDS
 
 
+def test_agent_cli_default_factory_includes_cronjob(monkeypatch):
+    import agent_cli.repl as repl
+
+    captured = {}
+
+    def fake_build_agent(**kwargs):
+        captured.update(kwargs)
+        return "agent"
+
+    monkeypatch.setattr("agent_core.builders.build_agent", fake_build_agent)
+
+    assert repl.default_agent_factory("cp") == "agent"
+    assert captured["checkpointer"] == "cp"
+    assert captured["include_cron_tools"] is True
+
+
 def test_run_cronjob_action_accepts_explicit_origin_thread(monkeypatch):
     cronjob_tool = _cronjob_tool()
     captured = {}

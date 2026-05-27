@@ -233,6 +233,8 @@ def make_cli(
         skill_discovery_provider=lambda: load_skill_discovery(
             built_in_names=set(COMMAND_LOOKUP)
         ),
+        cron_enabled=settings.cron_enabled,
+        cron_interval_seconds=settings.cron_interval_seconds,
     )
 
 

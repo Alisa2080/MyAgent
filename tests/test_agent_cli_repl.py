@@ -1390,3 +1390,123 @@ def test_handle_cron_list_dispatches_to_cron_handler(monkeypatch):
     )
 
     assert cli.handle_command("/cron list --all") == "all=True"
+
+
+def make_cli(**kwargs):
+    params = {
+        "session_store": FakeStore(),
+        "checkpointer": "cp",
+        "agent_factory": lambda checkpointer: "agent",
+        "runner": lambda agent, input_data, config: {
+            "messages": [{"role": "assistant", "content": "ok"}]
+        },
+        "workdir": "/repo",
+        "model_name": "model",
+        "show_banner": False,
+    }
+    params.update(kwargs)
+    return AgentCLI(**params)
+
+
+def test_run_repl_starts_and_stops_cron_scheduler(monkeypatch):
+    import agent_cli.repl as repl
+
+    calls = []
+    monkeypatch.setattr(
+        repl,
+        "start_cron_scheduler",
+        lambda interval_seconds: calls.append(("start", interval_seconds)) or True,
+    )
+    monkeypatch.setattr(
+        repl,
+        "stop_cron_scheduler",
+        lambda timeout=None: calls.append(("stop", timeout)) or True,
+    )
+
+    cli = make_cli(cron_enabled=True, cron_interval_seconds=7)
+    monkeypatch.setattr(cli, "_prompt", lambda prompt: (_ for _ in ()).throw(EOFError()))
+
+    assert cli.run_repl() == 0
+    assert calls == [("start", 7), ("stop", 2.0)]
+
+
+def test_run_repl_does_not_stop_scheduler_it_did_not_start(monkeypatch):
+    import agent_cli.repl as repl
+
+    calls = []
+    monkeypatch.setattr(
+        repl,
+        "start_cron_scheduler",
+        lambda interval_seconds: calls.append(("start", interval_seconds)) or False,
+    )
+    monkeypatch.setattr(
+        repl,
+        "stop_cron_scheduler",
+        lambda timeout=None: calls.append(("stop", timeout)) or True,
+    )
+
+    cli = make_cli(cron_enabled=True, cron_interval_seconds=7)
+    monkeypatch.setattr(cli, "_prompt", lambda prompt: (_ for _ in ()).throw(EOFError()))
+
+    assert cli.run_repl() == 0
+    assert calls == [("start", 7)]
+
+
+def test_run_repl_skips_cron_scheduler_when_disabled(monkeypatch):
+    import agent_cli.repl as repl
+
+    monkeypatch.setattr(
+        repl,
+        "start_cron_scheduler",
+        lambda interval_seconds: (_ for _ in ()).throw(AssertionError("no start")),
+    )
+
+    cli = make_cli(cron_enabled=False)
+    monkeypatch.setattr(cli, "_prompt", lambda prompt: (_ for _ in ()).throw(EOFError()))
+
+    assert cli.run_repl() == 0
+
+
+def test_cron_notifications_print_then_inject_next_turn(monkeypatch, capsys):
+    import agent_cli.repl as repl
+
+    event = {
+        "job_id": "job-1",
+        "job_name": "report",
+        "status": "ok",
+        "final_response": "daily report done",
+        "output_path": "/tmp/out.md",
+    }
+    drained = {"done": False}
+
+    def fake_drain(thread_id):
+        if drained["done"]:
+            return []
+        drained["done"] = True
+        return [event]
+
+    monkeypatch.setattr(repl, "drain_cron_notifications_for_thread_id", fake_drain)
+    monkeypatch.setattr(
+        repl,
+        "format_cron_notification_message",
+        lambda events: "CRON UPDATE: " + events[0]["final_response"],
+    )
+
+    captured_input = {}
+
+    def runner(agent, input_data, config):
+        captured_input.update(input_data)
+        return {"messages": [{"role": "assistant", "content": "ok"}]}
+
+    cli = make_cli(runner=runner)
+    cli.session_id = "session-1"
+
+    cli._drain_cron_notifications()
+    assert "cron ok" in capsys.readouterr().out
+
+    cli.submit_message("what changed?")
+
+    message = captured_input["messages"][0]["content"]
+    assert "CRON UPDATE: daily report done" in message
+    assert "what changed?" in message
+    assert cli.pending_cron_events == []

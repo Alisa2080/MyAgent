@@ -23,6 +23,11 @@ from agent_cli.text_input import (
     prepare_user_message,
     sanitize_terminal_input,
 )
+from agent_core.cron_lifecycle import start_cron_scheduler, stop_cron_scheduler
+from cron.notifications import (
+    drain_cron_notifications_for_thread_id,
+    format_cron_notification_message,
+)
 
 
 AgentFactory = Callable[[Any], Any]
@@ -66,6 +71,8 @@ class AgentCLI:
         display_markdown: str = "render",
         dotenv_module: Any | None = None,
         show_banner: bool = True,
+        cron_enabled: bool = True,
+        cron_interval_seconds: int = 60,
     ):
         self.session_store = session_store
         self.checkpointer = checkpointer
@@ -85,6 +92,10 @@ class AgentCLI:
         self.display_markdown = display_markdown
         self.dotenv_module = dotenv_module
         self.show_banner = show_banner
+        self.cron_enabled = cron_enabled
+        self.cron_interval_seconds = cron_interval_seconds
+        self._started_cron_scheduler = False
+        self.pending_cron_events: list[dict[str, Any]] = []
         self._agent: Any | None = None
         self._last_result: Any = None
         self.last_user_message: str | None = None
@@ -155,6 +166,18 @@ class AgentCLI:
             workdir=self.workdir,
             cli_home=self._effective_cli_home(),
         )
+        if self.pending_cron_events:
+            try:
+                cron_update = format_cron_notification_message(self.pending_cron_events)
+                if cron_update:
+                    processed = f"{cron_update}\n\n## User Message\n\n{processed}"
+            except Exception:
+                fallback = "\n".join(
+                    f"- job_id={event.get('job_id')} status={event.get('status')}"
+                    for event in self.pending_cron_events
+                )
+                processed = f"[IMPORTANT: Cron job update]\n{fallback}\n\n## User Message\n\n{processed}"
+            self.pending_cron_events = []
         self.last_user_message = processed
         started_at = time.perf_counter()
         existing_session = self.session_id is not None
@@ -299,6 +322,26 @@ class AgentCLI:
             raise RuntimeError("background tasks are not configured")
         return self.background_registry
 
+    def _drain_cron_notifications(self) -> None:
+        if self.session_id:
+            try:
+                events = drain_cron_notifications_for_thread_id(self.session_id)
+            except Exception as exc:
+                print(f"Warning: failed to read cron notifications: {exc}", file=sys.stderr)
+                events = []
+            for event in events:
+                self.pending_cron_events.append(event)
+                job_name = event.get("job_name") or "(unnamed)"
+                job_id = event.get("job_id") or "(unknown)"
+                status = event.get("status") or "unknown"
+                output_path = event.get("output_path") or "-"
+                preview = " ".join(str(event.get("final_response") or event.get("error") or "").split())
+                if len(preview) > 120:
+                    preview = preview[:117].rstrip() + "..."
+                print(
+                    f"[cron {status}] {job_name} ({job_id}) output={output_path} {preview}".rstrip()
+                )
+
     def _drain_background_notifications(self) -> None:
         if self.background_registry is None:
             return
@@ -387,6 +430,27 @@ class AgentCLI:
         if touched:
             print("Inspect background task history with /tasks all")
 
+    def _start_cron_scheduler_for_repl(self) -> None:
+        if not self.cron_enabled:
+            return
+        try:
+            self._started_cron_scheduler = start_cron_scheduler(
+                interval_seconds=self.cron_interval_seconds
+            )
+        except Exception as exc:
+            print(f"Warning: failed to start cron scheduler: {exc}", file=sys.stderr)
+            self._started_cron_scheduler = False
+
+    def _stop_cron_scheduler_on_exit(self) -> None:
+        if not self._started_cron_scheduler:
+            return
+        try:
+            stop_cron_scheduler(timeout=2.0)
+        except Exception as exc:
+            print(f"Warning: failed to stop cron scheduler: {exc}", file=sys.stderr)
+        finally:
+            self._started_cron_scheduler = False
+
     def _print_banner(self) -> None:
         from shutil import get_terminal_size
 
@@ -411,38 +475,44 @@ class AgentCLI:
 
     def run_repl(self) -> int:
         self.ensure_session()
-        if self.show_banner:
-            self._print_banner()
-        else:
-            print(f"Session: {self.session_id}")
-            print("Type /help for commands. Ctrl-D exits.")
-        while True:
-            try:
-                self._drain_background_notifications()
-                text = sanitize_terminal_input(self._prompt("> ")).strip()
-            except EOFError:
-                print()
-                self._stop_active_background_tasks_on_exit()
-                return 0
-            except KeyboardInterrupt:
-                print()
-                continue
-            if not text:
-                continue
-            try:
-                if text.startswith("/"):
-                    output = self.handle_command(text)
-                else:
-                    output = self.submit_message(text)
-                if output:
-                    print(output)
-                self._drain_background_notifications()
-            except EOFError:
-                self._stop_active_background_tasks_on_exit()
-                return 0
-            except Exception as exc:
-                print(f"Error: {exc}", file=sys.stderr)
-                continue
+        self._start_cron_scheduler_for_repl()
+        try:
+            if self.show_banner:
+                self._print_banner()
+            else:
+                print(f"Session: {self.session_id}")
+                print("Type /help for commands. Ctrl-D exits.")
+            while True:
+                try:
+                    self._drain_cron_notifications()
+                    self._drain_background_notifications()
+                    text = sanitize_terminal_input(self._prompt("> ")).strip()
+                except EOFError:
+                    print()
+                    self._stop_active_background_tasks_on_exit()
+                    return 0
+                except KeyboardInterrupt:
+                    print()
+                    continue
+                if not text:
+                    continue
+                try:
+                    if text.startswith("/"):
+                        output = self.handle_command(text)
+                    else:
+                        output = self.submit_message(text)
+                    if output:
+                        print(output)
+                    self._drain_cron_notifications()
+                    self._drain_background_notifications()
+                except EOFError:
+                    self._stop_active_background_tasks_on_exit()
+                    return 0
+                except Exception as exc:
+                    print(f"Error: {exc}", file=sys.stderr)
+                    continue
+        finally:
+            self._stop_cron_scheduler_on_exit()
 
     def _prompt(self, prompt_text: str) -> str:
         if self.prompt_session is None:
@@ -462,7 +532,7 @@ class AgentCLI:
 def default_agent_factory(checkpointer: Any) -> Any:
     from agent_core.builders import build_agent
 
-    return build_agent(checkpointer=checkpointer)
+    return build_agent(include_cron_tools=True, checkpointer=checkpointer)
 
 
 def default_runner(agent: Any, input_data: dict[str, Any], config: dict[str, Any]) -> Any:
