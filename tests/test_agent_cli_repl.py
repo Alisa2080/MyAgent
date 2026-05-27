@@ -1510,3 +1510,36 @@ def test_cron_notifications_print_then_inject_next_turn(monkeypatch, capsys):
     assert "CRON UPDATE: daily report done" in message
     assert "what changed?" in message
     assert cli.pending_cron_events == []
+
+
+def test_cron_notifications_are_restored_when_runner_raises(monkeypatch):
+    import agent_cli.repl as repl
+
+    event = {
+        "job_id": "job-1",
+        "job_name": "report",
+        "status": "ok",
+        "final_response": "daily report done",
+        "output_path": "/tmp/out.md",
+    }
+
+    monkeypatch.setattr(
+        repl,
+        "format_cron_notification_message",
+        lambda events: "CRON UPDATE: " + events[0]["final_response"],
+    )
+
+    def runner(agent, input_data, config):
+        raise RuntimeError("agent failed")
+
+    cli = make_cli(runner=runner)
+    cli.pending_cron_events = [event]
+
+    try:
+        cli.submit_message("what changed?")
+    except RuntimeError as exc:
+        assert str(exc) == "agent failed"
+    else:
+        raise AssertionError("expected submit_message to raise")
+
+    assert cli.pending_cron_events == [event]

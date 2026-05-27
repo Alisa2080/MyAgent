@@ -166,15 +166,17 @@ class AgentCLI:
             workdir=self.workdir,
             cli_home=self._effective_cli_home(),
         )
+        cron_events_for_turn: list[dict[str, Any]] = []
         if self.pending_cron_events:
+            cron_events_for_turn = list(self.pending_cron_events)
             try:
-                cron_update = format_cron_notification_message(self.pending_cron_events)
+                cron_update = format_cron_notification_message(cron_events_for_turn)
                 if cron_update:
                     processed = f"{cron_update}\n\n## User Message\n\n{processed}"
             except Exception:
                 fallback = "\n".join(
                     f"- job_id={event.get('job_id')} status={event.get('status')}"
-                    for event in self.pending_cron_events
+                    for event in cron_events_for_turn
                 )
                 processed = f"[IMPORTANT: Cron job update]\n{fallback}\n\n## User Message\n\n{processed}"
             self.pending_cron_events = []
@@ -193,6 +195,10 @@ class AgentCLI:
                 {"messages": [{"role": "user", "content": processed}]},
                 {"configurable": {"thread_id": session_id}},
             )
+        except Exception:
+            if cron_events_for_turn:
+                self.pending_cron_events = cron_events_for_turn + self.pending_cron_events
+            raise
         finally:
             self.last_call_elapsed_seconds = time.perf_counter() - started_at
         result = self._handle_interrupts(result, session_id=session_id)

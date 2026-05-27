@@ -88,7 +88,22 @@ def create_cron_job(
 
 
 def update_cron_job(*, job_id: str, **kwargs: Any) -> CronCommandResult:
-    result = run_cronjob_action("update", job_id=job_id, **kwargs)
+    session_id = kwargs.pop("session_id", None)
+    top_level = bool(kwargs.pop("top_level", False))
+    deliver = kwargs.get("deliver")
+    if deliver == "origin" and (top_level or not session_id):
+        return CronCommandResult(
+            "origin delivery requires an active CLI session",
+            exit_code=2,
+        )
+    if deliver == "origin":
+        kwargs["origin"] = {"thread_id": session_id}
+    result = run_cronjob_action(
+        "update",
+        origin_thread_id=session_id if deliver == "origin" else None,
+        job_id=job_id,
+        **kwargs,
+    )
     if not result.get("success"):
         return _format_error(result)
     job = result.get("job") or {}
@@ -103,9 +118,20 @@ def simple_job_action(action: str, *, job_id: str, reason: str | None = None) ->
     if not result.get("success"):
         return _format_error(result)
     if action == "remove":
+        if not result.get("removed", False):
+            return CronCommandResult(
+                f"Cron job not found: {job_id}.",
+                exit_code=2,
+            )
         return CronCommandResult(f"Removed cron job {job_id}.")
     job = result.get("job") or {}
-    return CronCommandResult(f"{action.capitalize()}d cron job {job.get('job_id', job_id)}.")
+    labels = {
+        "pause": "Paused",
+        "resume": "Resumed",
+        "run": "Ran",
+    }
+    label = labels.get(action, f"{action.capitalize()}d")
+    return CronCommandResult(f"{label} cron job {job.get('job_id', job_id)}.")
 
 
 def cron_status() -> CronCommandResult:

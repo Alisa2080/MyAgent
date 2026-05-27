@@ -280,7 +280,11 @@ def _run_cron_command(args: argparse.Namespace):
                 if skill not in final_skills:
                     final_skills.append(skill)
             updates["skills"] = final_skills
-        return cron_commands.update_cron_job(job_id=args.job_id, **updates)
+        return cron_commands.update_cron_job(
+            job_id=args.job_id,
+            top_level=True,
+            **updates,
+        )
     if subcommand in {"pause", "resume", "run"}:
         return cron_commands.simple_job_action(subcommand, job_id=args.job_id)
     if subcommand in {"remove", "rm", "delete"}:

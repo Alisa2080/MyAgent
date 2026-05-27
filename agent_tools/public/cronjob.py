@@ -234,6 +234,12 @@ def _cronjob_impl(
                 return script_error
 
             thread_id = origin_thread_id or _runtime_thread_id(runtime)
+            if deliver == "origin" and not thread_id:
+                return {
+                    "success": False,
+                    "code": "missing_origin_thread",
+                    "error": "deliver='origin' requires an active thread id.",
+                }
             origin = {"thread_id": thread_id} if thread_id else None
             job = create_job(
                 prompt=prompt,
@@ -304,6 +310,18 @@ def _cronjob_impl(
 
             if "repeat" in updates:
                 updates["repeat"] = _normalize_repeat(updates["repeat"])
+
+            if updates.get("deliver") == "origin":
+                thread_id = origin_thread_id or _runtime_thread_id(runtime)
+                if not thread_id:
+                    return {
+                        "success": False,
+                        "code": "missing_origin_thread",
+                        "error": "deliver='origin' requires an active thread id.",
+                    }
+                updates["origin"] = {"thread_id": thread_id}
+            elif updates.get("deliver") == "local":
+                updates["origin"] = None
 
             return {"success": True, "job": _format_job(update_job(job_id, updates))}
 

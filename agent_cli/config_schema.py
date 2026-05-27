@@ -119,12 +119,18 @@ def parse_config(data: dict[str, Any]) -> AgentCLIConfig:
         raise ConfigValidationError("cron.enabled", "must be a boolean")
 
     interval_value = cron.get("interval_seconds", 60)
-    try:
-        cron_interval_seconds = int(interval_value)
-    except (TypeError, ValueError):
+    if isinstance(interval_value, bool):
         raise ConfigValidationError(
             "cron.interval_seconds", "must be a positive integer"
-        ) from None
+        )
+    if isinstance(interval_value, int):
+        cron_interval_seconds = interval_value
+    elif isinstance(interval_value, str) and interval_value.isdigit():
+        cron_interval_seconds = int(interval_value)
+    else:
+        raise ConfigValidationError(
+            "cron.interval_seconds", "must be a positive integer"
+        )
     if cron_interval_seconds <= 0:
         raise ConfigValidationError(
             "cron.interval_seconds", "must be a positive integer"

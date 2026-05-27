@@ -211,15 +211,43 @@ def test_cronjob_create_accepts_supported_deliveries(monkeypatch, deliver):
 
     monkeypatch.setattr(cronjob_tool, "create_job", fake_create_job)
 
+    kwargs = {}
+    if deliver == "origin":
+        kwargs["origin_thread_id"] = "thread-1"
+
     result = cronjob_tool._cronjob_impl(
         action="create",
         prompt="write report",
         schedule="30m",
         deliver=deliver,
+        **kwargs,
     )
 
     assert result["success"] is True
     assert created["deliver"] == deliver
+
+
+def test_cronjob_create_rejects_origin_without_thread(monkeypatch):
+    cronjob_tool = _cronjob_tool()
+    create_called = False
+
+    def fake_create_job(**kwargs):
+        nonlocal create_called
+        create_called = True
+        return _job()
+
+    monkeypatch.setattr(cronjob_tool, "create_job", fake_create_job)
+
+    result = cronjob_tool._cronjob_impl(
+        action="create",
+        prompt="write report",
+        schedule="30m",
+        deliver="origin",
+    )
+
+    assert result["success"] is False
+    assert result["code"] == "missing_origin_thread"
+    assert create_called is False
 
 
 def test_cronjob_list_formats_jobs(monkeypatch):
@@ -252,11 +280,16 @@ def test_cronjob_update_accepts_supported_deliveries(monkeypatch, deliver):
 
     monkeypatch.setattr(cronjob_tool, "update_job", fake_update_job)
 
+    kwargs = {}
+    if deliver == "origin":
+        kwargs["origin_thread_id"] = "thread-1"
+
     result = cronjob_tool._cronjob_impl(
         action="update",
         job_id="job-1",
         prompt="updated report",
         deliver=deliver,
+        **kwargs,
     )
 
     assert result["success"] is True
@@ -265,6 +298,8 @@ def test_cronjob_update_accepts_supported_deliveries(monkeypatch, deliver):
         assert "deliver" not in updated["updates"]
     else:
         assert updated["updates"]["deliver"] == deliver
+    if deliver == "origin":
+        assert updated["updates"]["origin"] == {"thread_id": "thread-1"}
 
 
 def test_cronjob_pause_resume_remove_and_run_dispatch(monkeypatch):

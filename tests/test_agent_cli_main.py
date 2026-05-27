@@ -674,6 +674,18 @@ def test_main_cron_create_rejects_origin(monkeypatch, tmp_path, capsys):
     assert "origin delivery requires an active CLI session" in captured.out
 
 
+def test_main_cron_edit_rejects_origin(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("AGENT_CLI_HOME", str(tmp_path))
+
+    import agent_cli.main as main_module
+
+    code = main_module.main(["cron", "edit", "job-1", "--deliver", "origin"])
+
+    captured = capsys.readouterr()
+    assert code == 2
+    assert "origin delivery requires an active CLI session" in captured.out
+
+
 def test_main_cron_tick_returns_service_exit_code(monkeypatch, tmp_path, capsys):
     monkeypatch.setenv("AGENT_CLI_HOME", str(tmp_path))
 

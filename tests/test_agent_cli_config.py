@@ -91,6 +91,14 @@ def test_parse_config_rejects_invalid_cron_interval():
     assert str(exc.value) == "cron.interval_seconds: must be a positive integer"
 
 
+@pytest.mark.parametrize("value", [True, False, 1.5, "1.5", "abc"])
+def test_parse_config_rejects_non_integer_cron_interval(value):
+    with pytest.raises(ConfigValidationError) as exc:
+        parse_config({"cron": {"interval_seconds": value}})
+
+    assert str(exc.value) == "cron.interval_seconds: must be a positive integer"
+
+
 def test_parse_config_rejects_unknown_cron_key():
     import pytest
 

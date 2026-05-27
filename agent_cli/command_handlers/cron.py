@@ -143,7 +143,11 @@ def handle_cron(ctx, arg, command):
                 if skill not in final_skills:
                     final_skills.append(skill)
             updates["skills"] = final_skills
-        return cron_commands.update_cron_job(job_id=job_id, **updates).text
+        return cron_commands.update_cron_job(
+            job_id=job_id,
+            session_id=ctx.session_id,
+            **updates,
+        ).text
     if subcommand in {"pause", "resume", "run", "remove", "rm", "delete"}:
         if not positionals:
             return _usage()

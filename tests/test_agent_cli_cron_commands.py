@@ -79,6 +79,50 @@ def test_top_level_origin_delivery_is_rejected():
     assert "origin delivery requires an active CLI session" in result.text
 
 
+def test_update_origin_delivery_binds_session_thread(monkeypatch):
+    import agent_cli.cron_commands as cron_commands
+
+    calls = []
+
+    def fake_action(action, *, origin_thread_id=None, **kwargs):
+        calls.append((action, origin_thread_id, kwargs))
+        return {"success": True, "job": {"job_id": "job-1"}}
+
+    monkeypatch.setattr(cron_commands, "run_cronjob_action", fake_action)
+
+    result = cron_commands.update_cron_job(
+        job_id="job-1",
+        deliver="origin",
+        session_id="session-1",
+    )
+
+    assert result.exit_code == 0
+    assert calls == [
+        (
+            "update",
+            "session-1",
+            {
+                "job_id": "job-1",
+                "deliver": "origin",
+                "origin": {"thread_id": "session-1"},
+            },
+        )
+    ]
+
+
+def test_top_level_update_origin_delivery_is_rejected():
+    import agent_cli.cron_commands as cron_commands
+
+    result = cron_commands.update_cron_job(
+        job_id="job-1",
+        deliver="origin",
+        top_level=True,
+    )
+
+    assert result.exit_code == 2
+    assert "origin delivery requires an active CLI session" in result.text
+
+
 def test_status_renders_scheduler_and_paths(monkeypatch, tmp_path):
     import agent_cli.cron_commands as cron_commands
 
@@ -112,3 +156,36 @@ def test_tick_returns_failure_exit_when_job_fails(monkeypatch):
     assert result.exit_code == 1
     assert "failed=1" in result.text
     assert "job-1" in result.text
+
+
+def test_remove_reports_missing_job(monkeypatch):
+    import agent_cli.cron_commands as cron_commands
+
+    monkeypatch.setattr(
+        cron_commands,
+        "run_cronjob_action",
+        lambda action, **kwargs: {"success": True, "removed": False},
+    )
+
+    result = cron_commands.simple_job_action("remove", job_id="missing")
+
+    assert result.exit_code == 2
+    assert "Cron job not found: missing" in result.text
+
+
+def test_run_action_uses_ran_label(monkeypatch):
+    import agent_cli.cron_commands as cron_commands
+
+    monkeypatch.setattr(
+        cron_commands,
+        "run_cronjob_action",
+        lambda action, **kwargs: {
+            "success": True,
+            "job": {"job_id": "job-1"},
+        },
+    )
+
+    result = cron_commands.simple_job_action("run", job_id="job-1")
+
+    assert result.exit_code == 0
+    assert result.text == "Ran cron job job-1."
