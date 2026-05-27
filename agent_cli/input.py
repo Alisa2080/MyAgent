@@ -8,9 +8,12 @@ from prompt_toolkit import PromptSession
 from prompt_toolkit.completion import Completer, Completion
 from prompt_toolkit.document import Document
 from prompt_toolkit.history import FileHistory
+from prompt_toolkit.key_binding import KeyBindings
+from prompt_toolkit.keys import Keys
 
 from agent_cli.commands import commands_for_completion, resolve_command
 from agent_cli.session_store import SessionStore
+from agent_cli.text_input import collapse_large_paste, sanitize_terminal_input
 
 
 class SlashCommandCompleter(Completer):
@@ -110,9 +113,43 @@ def build_prompt_session(
     session_store: SessionStore,
     workdir: str,
     skill_commands_provider=None,
+    cli_home: str | Path | None = None,
 ) -> PromptSession:
     path = Path(history_path)
     path.parent.mkdir(parents=True, exist_ok=True)
+
+    key_bindings = KeyBindings()
+    paste_counter = [0]
+    paste_home = Path(cli_home) if cli_home is not None else path.parent
+    paste_home.mkdir(parents=True, exist_ok=True)
+
+    @key_bindings.add(Keys.BracketedPaste, eager=True)
+    def _handle_bracketed_paste(event):
+        pasted_text = sanitize_terminal_input(event.data or "")
+        if not pasted_text:
+            return
+        buffer = event.current_buffer
+        try:
+            if buffer.text.strip().startswith("/"):
+                buffer.insert_text(pasted_text)
+                return
+            paste_counter[0] += 1
+            collapsed = collapse_large_paste(
+                pasted_text,
+                cli_home=paste_home,
+                counter=paste_counter[0],
+            )
+        except OSError:
+            buffer.insert_text(pasted_text)
+            return
+        if not collapsed.collapsed:
+            buffer.insert_text(collapsed.placeholder)
+            return
+        prefix = ""
+        if buffer.cursor_position > 0 and buffer.text[buffer.cursor_position - 1] != "\n":
+            prefix = "\n"
+        buffer.insert_text(prefix + collapsed.placeholder)
+
     return PromptSession(
         history=FileHistory(str(path)),
         completer=SlashCommandCompleter(
@@ -120,4 +157,5 @@ def build_prompt_session(
             workdir=workdir,
             skill_commands_provider=skill_commands_provider,
         ),
+        key_bindings=key_bindings,
     )

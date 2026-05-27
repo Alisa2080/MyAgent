@@ -162,3 +162,17 @@ def test_format_osc52_encodes_text_for_clipboard():
 def test_estimate_tokens_is_deterministic_and_nonzero():
     assert estimate_tokens("one two three four five") == 2
     assert estimate_tokens("") == 0
+
+
+def test_build_prompt_session_accepts_cli_home_for_paste_collapse(tmp_path):
+    store = SessionStore(tmp_path / "cli.sqlite")
+
+    session = build_prompt_session(
+        history_path=tmp_path / "history.txt",
+        session_store=store,
+        workdir=str(tmp_path),
+        cli_home=tmp_path / "cli-home",
+    )
+
+    assert session is not None
+    assert Path(tmp_path / "cli-home").exists()

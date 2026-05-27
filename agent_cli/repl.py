@@ -484,6 +484,7 @@ class AgentCLI:
                 session_store=self.session_store,
                 workdir=self.workdir,
                 skill_commands_provider=self.skill_commands_provider,
+                cli_home=self.cli_home or ensure_cli_home(),
             )
         return self.prompt_session.prompt(prompt_text)
 
