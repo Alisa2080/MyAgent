@@ -96,6 +96,12 @@ COMMAND_REGISTRY: tuple[CommandDef, ...] = (
         "Session",
         args_hint="<new_text>",
     ),
+    CommandDef(
+        "usage",
+        "Estimate tokens for the current input.",
+        "Info",
+        args_hint="<text>",
+    ),
     CommandDef("exit", "Exit the CLI.", "Exit", aliases=("quit", "q")),
 )
 

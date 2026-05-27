@@ -220,3 +220,10 @@ def test_latest_user_text_returns_empty_for_no_user_message():
         {"role": "assistant", "content": "hi there"},
     ]}
     assert latest_user_text(result) == ""
+
+
+def test_usage_command_in_registry():
+    from agent_cli.commands import COMMAND_LOOKUP
+
+    assert "usage" in COMMAND_LOOKUP
+    assert COMMAND_LOOKUP["usage"].name == "usage"

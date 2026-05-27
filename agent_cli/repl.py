@@ -290,6 +290,8 @@ class AgentCLI:
             return self._handle_copy()
         if command.name == "retry":
             return self._handle_retry(arg)
+        if command.name == "usage":
+            return self._handle_usage(arg)
         if command.name == "exit":
             raise EOFError
         return f"Unhandled command: /{command.name}"
@@ -399,6 +401,14 @@ class AgentCLI:
             return "No previous message to retry."
         new_text = arg if arg else user_text
         return self.submit_message(new_text)
+
+    def _handle_usage(self, arg: str) -> str:
+        from agent_cli.text_input import estimate_tokens
+
+        if arg:
+            tokens = estimate_tokens(arg)
+            return f"{tokens} tokens (~{arg.split().__len__()} words)"
+        return "Usage: /usage <text>"
 
     def _drain_background_notifications(self) -> None:
         if self.background_registry is None:
