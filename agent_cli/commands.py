@@ -85,6 +85,17 @@ COMMAND_REGISTRY: tuple[CommandDef, ...] = (
         args_hint="<name>",
         completion="skill",
     ),
+    CommandDef(
+        "copy",
+        "Copy the last assistant response to clipboard.",
+        "Clipboard",
+    ),
+    CommandDef(
+        "retry",
+        "Resend the last user message with optional rewrite.",
+        "Session",
+        args_hint="<new_text>",
+    ),
     CommandDef("exit", "Exit the CLI.", "Exit", aliases=("quit", "q")),
 )
 

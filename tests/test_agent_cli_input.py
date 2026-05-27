@@ -192,3 +192,31 @@ def test_prepare_user_message_expands_paste_and_detects_files(tmp_path):
 
     assert "User referenced file" in processed
     assert "line1\nline2\nline3\nline4\nline5" in processed
+
+
+def test_copy_and_retry_commands_in_registry():
+    from agent_cli.commands import COMMAND_LOOKUP
+
+    assert "copy" in COMMAND_LOOKUP
+    assert "retry" in COMMAND_LOOKUP
+    assert COMMAND_LOOKUP["copy"].name == "copy"
+    assert COMMAND_LOOKUP["retry"].name == "retry"
+
+
+def test_latest_user_text_extracts_user_message():
+    from agent_cli.rendering import latest_user_text
+
+    result = {"messages": [
+        {"role": "user", "content": "hello"},
+        {"role": "assistant", "content": "hi there"},
+    ]}
+    assert latest_user_text(result) == "hello"
+
+
+def test_latest_user_text_returns_empty_for_no_user_message():
+    from agent_cli.rendering import latest_user_text
+
+    result = {"messages": [
+        {"role": "assistant", "content": "hi there"},
+    ]}
+    assert latest_user_text(result) == ""

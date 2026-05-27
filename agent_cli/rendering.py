@@ -46,6 +46,17 @@ def latest_ai_text(result: Any) -> str:
     return str(final) if final else ""
 
 
+def latest_user_text(result: Any) -> str:
+    if not isinstance(result, dict):
+        return ""
+    messages = result.get("messages") or []
+    for message in reversed(messages):
+        role = _message_role(message)
+        if role == "user":
+            return _message_content(message)
+    return ""
+
+
 def format_sessions(rows: list[Any]) -> str:
     if not rows:
         return "No sessions found."

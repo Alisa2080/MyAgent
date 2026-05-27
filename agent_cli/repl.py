@@ -15,7 +15,7 @@ from agent_cli.interrupts import (
     extract_interrupt_review_requests,
     has_interrupt,
 )
-from agent_cli.rendering import format_sessions, latest_ai_text
+from agent_cli.rendering import format_sessions, latest_ai_text, latest_user_text
 from agent_cli.session import (
     Session,
     render_session_status,
@@ -24,7 +24,7 @@ from agent_cli.session import (
     export_to_markdown,
 )
 from agent_cli.session_store import SessionStore
-from agent_cli.text_input import prepare_user_message
+from agent_cli.text_input import prepare_user_message, format_osc52
 
 
 AgentFactory = Callable[[Any], Any]
@@ -84,6 +84,7 @@ class AgentCLI:
         self.display_theme = display_theme
         self.show_banner = show_banner
         self._agent: Any | None = None
+        self._last_result: Any = None
         # Initialize session after basic attributes are set
         if session_id:
             self.session = Session(
@@ -164,6 +165,7 @@ class AgentCLI:
                 self.session_store, processed, max_length=80
             ),
         )
+        self._last_result = result
         return latest_ai_text(result)
 
     def _handle_interrupts(self, result: Any, *, session_id: str | None = None) -> Any:
@@ -284,6 +286,10 @@ class AgentCLI:
             return self._render_skills()
         if command.name == "skill":
             return self._render_skill(arg)
+        if command.name == "copy":
+            return self._handle_copy()
+        if command.name == "retry":
+            return self._handle_retry(arg)
         if command.name == "exit":
             raise EOFError
         return f"Unhandled command: /{command.name}"
@@ -373,6 +379,26 @@ class AgentCLI:
             return f"Skill not found: {name}"
         desc = meta.get("description") or ""
         return f"{meta['name']}\n{desc}".strip()
+
+    def _handle_copy(self) -> str:
+        if self._last_result is None:
+            return "No response to copy."
+        text = latest_ai_text(self._last_result)
+        if not text:
+            return "No response to copy."
+        if sys.stdout.isatty():
+            sys.stdout.write(format_osc52(text))
+            sys.stdout.flush()
+        return f"Copied {len(text)} chars to clipboard."
+
+    def _handle_retry(self, arg: str) -> str:
+        if self._last_result is None:
+            return "No previous message to retry."
+        user_text = latest_user_text(self._last_result)
+        if not user_text:
+            return "No previous message to retry."
+        new_text = arg if arg else user_text
+        return self.submit_message(new_text)
 
     def _drain_background_notifications(self) -> None:
         if self.background_registry is None:
