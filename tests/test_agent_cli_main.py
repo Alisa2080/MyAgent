@@ -596,3 +596,42 @@ def test_main_config_set_rejects_unknown_path(monkeypatch, tmp_path, capsys):
     captured = capsys.readouterr()
     assert code == 2
     assert "unknown.path" in captured.err
+
+
+def test_main_config_leaf_commands_accept_public_options_after_leaf(
+    monkeypatch, tmp_path, capsys
+):
+    monkeypatch.delenv("AGENT_CLI_HOME", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+    import agent_cli.main as main_module
+
+    code = main_module.main(
+        ["config", "set", "display.markdown", "strip", "--profile", "review"]
+    )
+
+    captured = capsys.readouterr()
+    assert code == 0
+    assert (
+        tmp_path / ".langchain-agent" / "profiles" / "review" / "config.yaml"
+    ).exists()
+
+
+def test_main_config_set_reports_write_errors(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("AGENT_CLI_HOME", str(tmp_path))
+
+    import agent_cli.main as main_module
+
+    monkeypatch.setattr(
+        main_module,
+        "save_config_file",
+        lambda path, data: (_ for _ in ()).throw(
+            main_module.ConfigError("cannot write config")
+        ),
+    )
+
+    code = main_module.main(["config", "set", "display.markdown", "strip"])
+
+    captured = capsys.readouterr()
+    assert code == 2
+    assert "cannot write config" in captured.err

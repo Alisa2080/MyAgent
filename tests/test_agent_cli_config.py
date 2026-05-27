@@ -28,6 +28,27 @@ def test_parse_config_reports_path_for_invalid_markdown():
     assert "strip" in exc.value.message
 
 
+def test_parse_config_rejects_explicit_empty_markdown():
+    with pytest.raises(ConfigValidationError) as exc:
+        parse_config({"display": {"markdown": ""}})
+
+    assert exc.value.path == "display.markdown"
+
+
+def test_parse_config_rejects_boolean_markdown():
+    with pytest.raises(ConfigValidationError) as exc:
+        parse_config({"display": {"markdown": False}})
+
+    assert exc.value.path == "display.markdown"
+
+
+def test_parse_config_rejects_empty_default_title():
+    with pytest.raises(ConfigValidationError) as exc:
+        parse_config({"session": {"default_title": ""}})
+
+    assert exc.value.path == "session.default_title"
+
+
 def test_parse_config_rejects_unknown_path():
     with pytest.raises(ConfigValidationError) as exc:
         parse_config({"unknown": True})

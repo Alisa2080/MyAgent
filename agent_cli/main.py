@@ -99,10 +99,22 @@ def build_parser() -> argparse.ArgumentParser:
         parents=[public_options],
     )
     config_subparsers = config_parser.add_subparsers(dest="config_command")
-    config_subparsers.add_parser("show", help="Show normalized CLI config.")
-    config_get = config_subparsers.add_parser("get", help="Get a config value.")
+    config_subparsers.add_parser(
+        "show",
+        help="Show normalized CLI config.",
+        parents=[public_options],
+    )
+    config_get = config_subparsers.add_parser(
+        "get",
+        help="Get a config value.",
+        parents=[public_options],
+    )
     config_get.add_argument("path")
-    config_set = config_subparsers.add_parser("set", help="Set a config value.")
+    config_set = config_subparsers.add_parser(
+        "set",
+        help="Set a config value.",
+        parents=[public_options],
+    )
     config_set.add_argument("path")
     config_set.add_argument("value")
 
@@ -204,7 +216,7 @@ def main(argv: list[str] | None = None) -> int:
                 value = get_config_path_value(config, args.path)
                 print(value)
                 return 0
-            except ConfigValidationError as exc:
+            except (ConfigError, ConfigValidationError) as exc:
                 print(str(exc), file=sys.stderr)
                 return 2
         elif config_cmd == "set":
@@ -213,7 +225,7 @@ def main(argv: list[str] | None = None) -> int:
                 updated_raw = set_config_path_value(raw, args.path, value)
                 save_config_file(config_path, updated_raw)
                 return 0
-            except ConfigValidationError as exc:
+            except (ConfigError, ConfigValidationError) as exc:
                 print(str(exc), file=sys.stderr)
                 return 2
         else:

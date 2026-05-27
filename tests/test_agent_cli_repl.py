@@ -84,8 +84,12 @@ class FakeBackgroundRegistry:
             pending_steer_count=0,
             last_result_preview=None,
             last_error=None,
+            prompt_preview=prompt,
             updated_at="now",
             created_at="now",
+            started_at=None,
+            finished_at=None,
+            cancel_requested=False,
         )
         self.started.append(prompt)
         self.records[record.task_id] = record
@@ -449,6 +453,7 @@ def test_run_repl_drains_background_notifications_before_prompt(capsys):
     assert cli.run_repl() == 0
     captured = capsys.readouterr()
     assert "[background done] bg_12345678" in captured.out
+    assert "resume with /resume session-bg" in captured.out
 
 
 def test_run_repl_sanitizes_background_notification_messages(capsys):
@@ -487,6 +492,65 @@ def test_run_repl_sanitizes_background_notification_messages(capsys):
     captured = capsys.readouterr()
     assert "first line second line" in captured.out
     assert "first line\nsecond line" not in captured.out
+
+
+def test_background_failure_notification_includes_inspect_action(capsys):
+    from agent_cli.background import BackgroundNotification
+
+    registry = FakeBackgroundRegistry()
+    registry.notifications = [
+        BackgroundNotification(
+            kind="failed",
+            task_id="bg_12345678",
+            session_id="session-bg",
+            status="failed",
+            message="boom",
+        )
+    ]
+    cli = AgentCLI(
+        session_store=FakeStore(),
+        checkpointer=None,
+        agent_factory=lambda checkpointer: "agent",
+        runner=lambda agent, input_data, config: {},
+        workdir="/repo",
+        model_name=None,
+        background_registry=registry,
+    )
+
+    cli._drain_background_notifications()
+
+    captured = capsys.readouterr()
+    assert "inspect with /tasks bg_12345678" in captured.out
+
+
+def test_background_stopped_notification_includes_session(capsys):
+    from agent_cli.background import BackgroundNotification
+
+    registry = FakeBackgroundRegistry()
+    registry.notifications = [
+        BackgroundNotification(
+            kind="stopped",
+            task_id="bg_12345678",
+            session_id="session-bg",
+            status="stopped",
+            message="stopped",
+        )
+    ]
+    cli = AgentCLI(
+        session_store=FakeStore(),
+        checkpointer=None,
+        agent_factory=lambda checkpointer: "agent",
+        runner=lambda agent, input_data, config: {},
+        workdir="/repo",
+        model_name=None,
+        background_registry=registry,
+    )
+
+    cli._drain_background_notifications()
+
+    captured = capsys.readouterr()
+    assert "Stopped bg_12345678" in captured.out
+    assert "session session-bg" in captured.out
 
 
 def test_run_repl_stops_active_background_tasks_on_exit(capsys):
@@ -531,9 +595,12 @@ def test_run_repl_stops_active_background_tasks_on_exit(capsys):
     )
 
     assert cli.run_repl() == 0
+    captured = capsys.readouterr()
     assert registry.stopped == ["bg_12345678"]
     assert registry.joined == [("bg_12345678", 0.5)]
     assert registry.list_limit_calls == [None]
+    assert "Stop requested: bg_12345678" in captured.out
+    assert "Inspect background task history with /tasks all" in captured.out
 
 
 def test_run_repl_stops_all_active_background_tasks_on_exit(capsys):
@@ -697,8 +764,66 @@ def test_run_repl_finalizes_still_active_tasks_after_exit_join(capsys):
     )
 
     assert cli.run_repl() == 0
+    captured = capsys.readouterr()
     assert registry.finalized == ["bg_12345678"]
     assert active_record.status == "stopped"
+    assert "Stopped after join: bg_12345678" in captured.out
+
+
+def test_run_repl_reports_tasks_still_active_after_exit_join(capsys):
+    active_record = SimpleNamespace(
+        task_id="bg_12345678",
+        session_id="session-bg",
+        title="Task",
+        status="running",
+        pending_steer_count=0,
+        last_result_preview=None,
+        last_error=None,
+        prompt_preview="Task",
+        updated_at="now",
+        created_at="now",
+        started_at=None,
+        finished_at=None,
+        cancel_requested=False,
+    )
+
+    class Store:
+        def get_task(self, task_id):
+            return active_record
+
+    class Registry(FakeBackgroundRegistry):
+        def __init__(self):
+            super().__init__()
+            self.store = Store()
+
+        def list_tasks(self, active_only=False, limit=20):
+            return [active_record]
+
+        def stop(self, task_id):
+            self.stopped.append(task_id)
+            active_record.status = "running"
+            return active_record
+
+    class FakePrompt:
+        def prompt(self, prompt_text):
+            raise EOFError
+
+    registry = Registry()
+    cli = AgentCLI(
+        session_store=FakeStore(),
+        checkpointer=None,
+        agent_factory=lambda checkpointer: "agent",
+        runner=lambda agent, input_data, config: {},
+        workdir="/repo",
+        model_name=None,
+        prompt_session=FakePrompt(),
+        background_registry=registry,
+        show_banner=False,
+    )
+
+    assert cli.run_repl() == 0
+    captured = capsys.readouterr()
+    assert "Still active after join: bg_12345678" in captured.out
 
 
 def test_handle_command_history_renders_empty_history():
@@ -1164,6 +1289,11 @@ def test_tasks_with_task_id_renders_detail_and_resume_hint():
     record = registry.start("do work")
     record.status = "completed"
     record.last_result_preview = "done"
+    record.last_error = None
+    record.started_at = "started"
+    record.finished_at = "finished"
+    record.cancel_requested = True
+    record.pending_steer_count = 2
     cli = AgentCLI(
         session_store=FakeStore(),
         checkpointer=None,
@@ -1178,6 +1308,15 @@ def test_tasks_with_task_id_renders_detail_and_resume_hint():
 
     assert record.task_id in output
     assert "completed" in output
+    assert "Created: now" in output
+    assert "Updated: now" in output
+    assert "Started: started" in output
+    assert "Finished: finished" in output
+    assert "Cancel requested: yes" in output
+    assert "Pending steers: 2" in output
+    assert "Prompt: do work" in output
+    assert "Result: done" in output
+    assert "Error: -" in output
     assert f"/resume {record.session_id}" in output
 
 

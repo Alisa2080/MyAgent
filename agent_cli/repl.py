@@ -303,10 +303,28 @@ class AgentCLI:
             return
         for item in self.background_registry.drain_notifications():
             message = " ".join(str(item.message).split())
-            print(
-                f"[background {item.kind}] {item.task_id} · {item.status} "
-                f"· session {item.session_id} · {message}"
-            )
+            if item.status == "completed":
+                print(
+                    f"[background {item.kind}] {item.task_id} · completed "
+                    f"· session {item.session_id} · {message} "
+                    f"· resume with /resume {item.session_id}"
+                )
+            elif item.status == "failed":
+                print(
+                    f"[background {item.kind}] {item.task_id} · failed "
+                    f"· session {item.session_id} · {message} "
+                    f"· inspect with /tasks {item.task_id}"
+                )
+            elif item.status == "stopped":
+                print(
+                    f"[background {item.kind}] Stopped {item.task_id} "
+                    f"· session {item.session_id} · {message}"
+                )
+            else:
+                print(
+                    f"[background {item.kind}] {item.task_id} · {item.status} "
+                    f"· session {item.session_id} · {message}"
+                )
 
     def _stop_active_background_tasks_on_exit(self) -> None:
         if self.background_registry is None:
@@ -318,30 +336,55 @@ class AgentCLI:
         if not active:
             return
         print(f"Stopping {len(active)} active background task(s)...")
+        touched = False
         for record in active:
             try:
-                self.background_registry.stop(record.task_id)
+                updated = self.background_registry.stop(record.task_id)
+                touched = True
+                if getattr(updated, "status", None) in {
+                    "completed",
+                    "failed",
+                    "stopped",
+                    "completing",
+                }:
+                    print(f"Already terminal: {record.task_id} ({updated.status})")
+                else:
+                    print(f"Stop requested: {record.task_id}")
             except Exception as exc:
                 print(f"Failed to stop {record.task_id}: {exc}", file=sys.stderr)
         join = getattr(self.background_registry, "join", None)
         if join is None:
+            if touched:
+                print("Inspect background task history with /tasks all")
             return
         for record in active:
             try:
                 join(record.task_id, timeout=0.5)
                 finalize = getattr(self.background_registry, "finalize_stopping", None)
                 store = getattr(self.background_registry, "store", None)
-                if finalize is not None and store is not None:
-                    current = store.get_task(record.task_id)
-                    if current is not None and current.status in {
+                current = store.get_task(record.task_id) if store is not None else None
+                if finalize is not None and current is not None:
+                    if current.status in {
                         "queued",
                         "running",
                         "waiting_approval",
                         "stopping",
                     }:
                         finalize(record.task_id)
+                        current = store.get_task(record.task_id)
+                if current is not None:
+                    if current.status in {
+                        "completed",
+                        "failed",
+                        "stopped",
+                    }:
+                        print(f"Stopped after join: {record.task_id}")
+                    else:
+                        print(f"Still active after join: {record.task_id}")
             except Exception as exc:
                 print(f"Failed to join {record.task_id}: {exc}", file=sys.stderr)
+        if touched:
+            print("Inspect background task history with /tasks all")
 
     def _print_banner(self) -> None:
         from shutil import get_terminal_size

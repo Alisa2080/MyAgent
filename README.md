@@ -145,6 +145,9 @@ python -m agent_cli chat --resume <session_id>
 python -m agent_cli ask "Summarize this repository"
 python -m agent_cli sessions
 python -m agent_cli doctor --workdir /home/miku/projects/langchain
+python -m agent_cli config show
+python -m agent_cli config get display.theme
+python -m agent_cli config set display.markdown strip
 ```
 
 Public options can be passed before or after a subcommand:
@@ -153,6 +156,7 @@ Public options can be passed before or after a subcommand:
 python -m agent_cli --profile dev doctor --workdir /repo
 python -m agent_cli doctor --profile dev --workdir /repo
 python -m agent_cli ask --model gpt-4.1 "hello"
+python -m agent_cli config show --profile dev
 ```
 
 Options:
@@ -182,6 +186,16 @@ session:
   default_title: New session
 ```
 
+Supported config keys:
+
+- `display.markdown`: `render`, `strip`, or `raw` for live assistant output.
+- `display.theme`: one of the built-in CLI themes.
+- `model.name`: default model display/config value when `--model` is not passed.
+- `session.default_title`: title used for new empty sessions.
+
+Use `python -m agent_cli config show|get|set` to inspect and edit this file.
+`config set` validates the whole schema before saving.
+
 Inside chat, use `/help` to list slash commands.
 
 Session commands:
@@ -197,7 +211,10 @@ Session commands:
 Background commands:
 
 - `/background <prompt>` - Start an in-process background task in a new session.
-- `/tasks` - List background tasks.
+- `/tasks` - List recent background tasks.
+- `/tasks all` - List a larger recent task history across states.
+- `/tasks <task_id>` - Show task details and the session resume command.
+- `/tail <task_id>` - Show the latest persisted result, error, and steer messages.
 - `/queue` - Show active background work.
 - `/steer <task_id> <message>` - Queue a steering message for a task.
 - `/approve <task_id>` - Continue a task waiting for human approval.
@@ -208,6 +225,7 @@ Skill and utility commands:
 - `/skills` - List available local skills and dynamic skill slash commands.
 - `/skill <name>` - Show skill details.
 - `/doctor` - Run local health checks.
+- `/reload` - Reload `.env` and `config.yaml` without restarting the REPL.
 - `/clear` - Clear the terminal.
 - `/exit` - Exit the CLI.
 
@@ -225,7 +243,8 @@ Troubleshooting:
 - Malformed `config.yaml`: `doctor` reports FAIL and chat startup returns code `2`.
 - SQLite or CLI home not writable: choose another `AGENT_CLI_HOME` or fix permissions.
 - Unknown session id: run `python -m agent_cli sessions` and retry with a listed id.
-- Stale background task warnings: restart the CLI and inspect `/tasks`; stale rows are metadata only unless a live worker exists.
+- Stale background task warnings: restart the CLI and inspect `/tasks all`; stale rows are metadata only unless a live worker exists.
+- Background task completed: use `/tasks <task_id>` or `/resume <session_id>` from the notification.
 
 ## CLI Commands
 
@@ -246,7 +265,10 @@ The Agent CLI supports these slash commands:
 
 ### Background Commands
 - `/background <prompt>` - Start an in-process background task in a new session.
-- `/tasks` - List all background tasks.
+- `/tasks` - List recent background tasks.
+- `/tasks all` - List a larger recent task history across states.
+- `/tasks <task_id>` - Show detailed task metadata and resume hint.
+- `/tail <task_id>` - Show latest persisted result, error, and steer messages.
 - `/queue` - Show active background work.
 - `/steer <task_id> <message>` - Queue a steering message for a task.
 - `/approve <task_id>` - Continue a task waiting for human approval.
@@ -262,6 +284,7 @@ The Agent CLI supports these slash commands:
 - `/skill <name>` - Show skill details.
 - `/usage` - Show local session usage, estimated tokens, checkpoint status, and last-call latency.
 - `/doctor` - Run local health checks.
+- `/reload` - Reload `.env` and `config.yaml`.
 - `/clear` - Clear the terminal.
 - `/exit` - Exit the CLI.
 

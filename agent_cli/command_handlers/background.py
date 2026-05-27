@@ -54,17 +54,28 @@ def render_task_detail(cli, task_id):
     record = registry.get_task(task_id)
     if record is None:
         return f"Unknown background task: {task_id}"
+    result = record.last_result_preview or "-"
+    error = record.last_error or "-"
+    prompt = getattr(record, "prompt_preview", None) or "-"
+    started_at = getattr(record, "started_at", None) or "-"
+    finished_at = getattr(record, "finished_at", None) or "-"
+    cancel_requested = "yes" if getattr(record, "cancel_requested", False) else "no"
     lines = [
         f"Task: {record.task_id}",
         f"  Status: {record.status}",
         f"  Title: {record.title}",
         f"  Session: {record.session_id}",
+        f"  Created: {record.created_at}",
+        f"  Updated: {record.updated_at}",
+        f"  Started: {started_at}",
+        f"  Finished: {finished_at}",
+        f"  Cancel requested: {cancel_requested}",
+        f"  Pending steers: {record.pending_steer_count}",
+        f"  Prompt: {prompt}",
+        f"  Result: {result}",
+        f"  Error: {error}",
+        f"  Resume: /resume {record.session_id}",
     ]
-    if record.last_result_preview:
-        lines.append(f"  Result: {record.last_result_preview}")
-    if record.last_error:
-        lines.append(f"  Error: {record.last_error}")
-    lines.append(f"  Resume: /resume {record.session_id}")
     return "\n".join(lines)
 
 

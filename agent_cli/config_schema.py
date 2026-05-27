@@ -78,7 +78,10 @@ def parse_config(data: dict[str, Any]) -> AgentCLIConfig:
     model = _mapping(data.get("model"), "model")
     session = _mapping(data.get("session"), "session")
 
-    markdown = str(display.get("markdown") or "render")
+    markdown_value = display.get("markdown", "render")
+    if markdown_value is None:
+        markdown_value = "render"
+    markdown = str(markdown_value)
     if markdown not in DISPLAY_MARKDOWN_VALUES:
         allowed = ", ".join(sorted(DISPLAY_MARKDOWN_VALUES))
         raise ConfigValidationError("display.markdown", f"must be one of: {allowed}")
@@ -93,7 +96,10 @@ def parse_config(data: dict[str, Any]) -> AgentCLIConfig:
     if model_name is not None:
         model_name = str(model_name)
 
-    default_title = str(session.get("default_title") or "New session").strip()
+    title_value = session.get("default_title", "New session")
+    if title_value is None:
+        title_value = "New session"
+    default_title = str(title_value).strip()
     if not default_title:
         raise ConfigValidationError("session.default_title", "must not be empty")
 
