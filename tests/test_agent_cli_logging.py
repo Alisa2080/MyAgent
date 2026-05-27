@@ -22,6 +22,16 @@ def test_setup_cli_logging_creates_file():
         assert log_file.exists()
 
 
+def test_setup_cli_logging_defaults_to_logs_directory(monkeypatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        monkeypatch.setenv("AGENT_CLI_HOME", tmp)
+        logger = setup_cli_logging()
+
+        assert (Path(tmp) / "logs" / "agent.log").exists()
+        assert (Path(tmp) / "logs" / "errors.log").exists()
+        assert len(logger.handlers) >= 3
+
+
 def test_setup_cli_logging_writes_to_file():
     with tempfile.TemporaryDirectory() as tmp:
         log_file = Path(tmp) / "test.log"

@@ -8,6 +8,22 @@ from pathlib import Path
 from agent_cli.paths import ensure_cli_home
 
 
+def _add_file_handler(
+    logger: logging.Logger,
+    log_file: Path,
+    level: int,
+    formatter: logging.Formatter,
+) -> None:
+    try:
+        log_file.parent.mkdir(parents=True, exist_ok=True)
+        file_handler = logging.FileHandler(log_file)
+    except (PermissionError, OSError):
+        return
+    file_handler.setLevel(level)
+    file_handler.setFormatter(formatter)
+    logger.addHandler(file_handler)
+
+
 def setup_cli_logging(
     level: int = logging.INFO,
     log_file: Path | None = None,
@@ -30,18 +46,14 @@ def setup_cli_logging(
     logger.addHandler(console_handler)
     
     if log_file is None:
-        log_file = ensure_cli_home() / "cli.log"
-    
-    log_file = Path(log_file)
-    
-    try:
-        log_file.parent.mkdir(parents=True, exist_ok=True)
-        file_handler = logging.FileHandler(log_file)
-        file_handler.setLevel(logging.DEBUG)
-        file_handler.setFormatter(formatter)
-        logger.addHandler(file_handler)
-    except (PermissionError, OSError):
-        pass
+        try:
+            logs_dir = ensure_cli_home() / "logs"
+        except (PermissionError, OSError):
+            return logger
+        _add_file_handler(logger, logs_dir / "agent.log", logging.DEBUG, formatter)
+        _add_file_handler(logger, logs_dir / "errors.log", logging.WARNING, formatter)
+    else:
+        _add_file_handler(logger, Path(log_file), logging.DEBUG, formatter)
     
     return logger
 

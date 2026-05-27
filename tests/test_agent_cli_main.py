@@ -222,6 +222,47 @@ def test_python_module_profile_sessions_smoke(tmp_path):
     assert (tmp_path / ".langchain-agent" / "profiles" / "dev" / "cli.sqlite").exists()
 
 
+def test_main_argv_none_preserves_public_options_before_subcommand(
+    monkeypatch, tmp_path, capsys
+):
+    monkeypatch.setenv("AGENT_CLI_HOME", str(tmp_path / "home"))
+    missing = tmp_path / "missing"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["agent_cli", "--workdir", str(missing), "doctor"],
+    )
+
+    import agent_cli.main as main_module
+
+    code = main_module.main()
+
+    captured = capsys.readouterr()
+    assert code == 1
+    assert "FAIL" in captured.out
+    assert "Workdir" in captured.out
+    assert str(missing) in captured.out
+
+
+def test_main_doctor_reports_invalid_cli_home_without_traceback(
+    monkeypatch, tmp_path, capsys
+):
+    cli_home_file = tmp_path / "not-a-dir"
+    cli_home_file.write_text("not a directory", encoding="utf-8")
+    monkeypatch.setenv("AGENT_CLI_HOME", str(cli_home_file))
+
+    import agent_cli.main as main_module
+
+    code = main_module.main(["doctor", "--workdir", str(tmp_path)])
+
+    captured = capsys.readouterr()
+    assert code == 1
+    assert "FAIL" in captured.out
+    assert "CLI Home" in captured.out
+    assert str(cli_home_file) in captured.out
+    assert "Traceback" not in captured.err
+
+
 def test_main_invalid_profile_returns_code_2(monkeypatch, capsys):
     monkeypatch.delenv("AGENT_CLI_HOME", raising=False)
 
@@ -453,7 +494,7 @@ def test_main_doctor_returns_1_when_health_check_fails(monkeypatch, tmp_path, ca
 
     # Monkeypatch run_health_checks at the source module level
     original_run = doctor_module.run_health_checks
-    doctor_module.run_health_checks = lambda workdir, tmp_path=None, cli_home=None: [
+    doctor_module.run_health_checks = lambda workdir, cli_home=None: [
         doctor_module.HealthCheck("config", "FAIL", "bad config")
     ]
 
@@ -473,7 +514,7 @@ def test_main_doctor_returns_0_for_warn_only(monkeypatch, tmp_path, capsys):
     import agent_cli.doctor as doctor_module
 
     original_run = doctor_module.run_health_checks
-    doctor_module.run_health_checks = lambda workdir, tmp_path=None, cli_home=None: [
+    doctor_module.run_health_checks = lambda workdir, cli_home=None: [
         doctor_module.HealthCheck("OPENAI_API_KEY", "WARN", "not set")
     ]
 

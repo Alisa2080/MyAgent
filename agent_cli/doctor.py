@@ -180,9 +180,7 @@ def check_background_tasks(db_path: Path) -> HealthCheck:
     return ok("Background Tasks", "metadata readable")
 
 
-def run_health_checks(
-    workdir: str, tmp_path: Path | None = None, cli_home: Path | None = None
-) -> list[HealthCheck]:
+def run_health_checks(workdir: str, cli_home: Path | None = None) -> list[HealthCheck]:
     if cli_home is None:
         cli_home = get_cli_home()
     db_path = cli_home / "cli.sqlite"

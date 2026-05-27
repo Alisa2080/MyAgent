@@ -20,7 +20,7 @@ from agent_cli.config import (
     settings_from_config,
 )
 from agent_cli.logging_config import setup_cli_logging
-from agent_cli.paths import ensure_db_parent
+from agent_cli.paths import ensure_db_parent, get_cli_home
 from agent_cli.rendering import format_sessions
 from agent_cli.repl import AgentCLI, default_agent_factory, default_runner
 from agent_cli.session_store import SessionStore
@@ -137,18 +137,18 @@ def make_cli(
 
 
 def main(argv: list[str] | None = None) -> int:
+    effective_argv = sys.argv[1:] if argv is None else argv
     try:
-        profile_application = apply_profile_override(argv)
+        profile_application = apply_profile_override(effective_argv)
     except ValueError as exc:
         print(f"Invalid profile: {exc}", file=sys.stderr)
         return 2
-    setup_cli_logging()
     parser = build_parser()
-    args = parser.parse_args(argv)
+    args = parser.parse_args(effective_argv)
     command = args.command or "chat"
 
     # Workaround for argparse parent bug: restore values from pre-parse
-    pre_parsed = _pre_parse_public_options(argv)
+    pre_parsed = _pre_parse_public_options(effective_argv)
     if pre_parsed["workdir"] is not None:
         args.workdir = pre_parsed["workdir"]
     if pre_parsed["model"] is not None:
@@ -156,18 +156,21 @@ def main(argv: list[str] | None = None) -> int:
     if pre_parsed["profile"] is not None:
         args.profile = pre_parsed["profile"]
 
+    if command == "doctor":
+        from agent_cli.doctor import doctor_exit_code, render_doctor_output, run_health_checks
+
+        cli_home = get_cli_home()
+        workdir = str(Path(args.workdir).expanduser().resolve()) if args.workdir else os.getcwd()
+        load_dotenv_files(cli_home=cli_home, project_root=Path.cwd(), dotenv_module=dotenv)
+        results = run_health_checks(workdir=workdir, cli_home=cli_home)
+        print(render_doctor_output(results))
+        return doctor_exit_code(results)
+
+    setup_cli_logging()
     db_path = ensure_db_parent()
     cli_home = db_path.parent
 
     load_dotenv_files(cli_home=cli_home, project_root=Path.cwd(), dotenv_module=dotenv)
-
-    if command == "doctor":
-        from agent_cli.doctor import doctor_exit_code, render_doctor_output, run_health_checks
-
-        workdir = str(Path(args.workdir).expanduser().resolve()) if args.workdir else os.getcwd()
-        results = run_health_checks(workdir=workdir, cli_home=cli_home)
-        print(render_doctor_output(results))
-        return doctor_exit_code(results)
 
     try:
         settings = settings_from_config(
