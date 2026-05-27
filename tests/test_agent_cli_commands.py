@@ -179,3 +179,20 @@ def test_readme_agent_cli_docs_cover_current_capabilities():
     assert "logs" in text.lower()
     assert "OPENAI_API_KEY" in text
     assert "edit JSON" in text or "edit" in text
+
+
+def test_every_builtin_command_has_handler_key():
+    from agent_cli.commands import COMMAND_REGISTRY
+
+    for command in COMMAND_REGISTRY:
+        assert command.effective_handler_key
+        assert command.effective_handler_key == (command.handler_key or command.name)
+
+
+def test_aliases_resolve_to_canonical_handler_key():
+    from agent_cli.commands import resolve_command
+
+    command = resolve_command("/h")
+    assert command is not None
+    assert command.name == "help"
+    assert command.effective_handler_key == "help"

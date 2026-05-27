@@ -11,6 +11,7 @@ from langgraph.types import Command
 from agent_cli.commands import COMMAND_LOOKUP, render_help, resolve_command
 from agent_cli.doctor import render_doctor_output, run_health_checks
 from agent_cli.approval import collect_approval_decisions
+from agent_cli.command_handlers import build_command_handlers
 from agent_cli.interrupts import (
     extract_interrupt_requests,
     extract_interrupt_review_requests,
@@ -95,6 +96,7 @@ class AgentCLI:
         self.assistant_replies: list[str] = []
         self.last_call_elapsed_seconds: float | None = None
         self.last_usage_metadata: dict[str, Any] | None = None
+        self.command_handlers = build_command_handlers(self)
         # Initialize session after basic attributes are set
         if session_id:
             self.session = Session(
@@ -226,21 +228,31 @@ class AgentCLI:
     def handle_command(self, raw: str) -> str | None:
         raw = sanitize_terminal_input(raw)
         parts = raw.strip().split(maxsplit=1)
-        command = resolve_command(parts[0] if parts else "")
+        token = parts[0] if parts else ""
+        command = resolve_command(token)
         arg = parts[1].strip() if len(parts) > 1 else ""
-        
-        # Check for dynamic skill commands
+
         if command is None:
             dynamic = self.skill_commands_provider()
-            skill_name = parts[0].lstrip("/") if parts else ""
+            skill_name = token.lstrip("/") if token else ""
             if skill_name in dynamic:
-                from agent_cli.skill_commands import build_skill_invocation_message, load_skill_for_command
+                from agent_cli.skill_commands import (
+                    build_skill_invocation_message,
+                    load_skill_for_command,
+                )
 
                 loader = self.skill_loader or load_skill_for_command
                 loaded = loader(dynamic[skill_name])
                 message = build_skill_invocation_message(loaded, arg)
                 return self.submit_message(message)
-            return f"Unknown command: {parts[0] if parts else raw}"
+            return f"Unknown command: {token if token else raw}"
+
+        handler = self.command_handlers.get(command.effective_handler_key)
+        if handler is None:
+            return f"Unhandled command: /{command.name}"
+        return handler(self, arg, command)
+
+    def _legacy_handle_command(self, command, arg: str) -> str | None:
         if command.name == "background":
             return self._handle_background(arg)
         if command.name == "tasks":

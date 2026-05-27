@@ -15,11 +15,16 @@ class CommandDef:
     aliases: tuple[str, ...] = ()
     args_hint: str = ""
     completion: CompletionKind = "none"
+    handler_key: str | None = None
 
     @property
     def usage(self) -> str:
         suffix = f" {self.args_hint}" if self.args_hint else ""
         return f"/{self.name}{suffix}"
+
+    @property
+    def effective_handler_key(self) -> str:
+        return self.handler_key or self.name
 
 
 COMMAND_REGISTRY: tuple[CommandDef, ...] = (

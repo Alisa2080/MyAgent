@@ -1043,3 +1043,46 @@ def test_run_repl_sanitizes_input_before_command_detection(capsys):
     assert cli.run_repl() == 0
     captured = capsys.readouterr()
     assert "Available commands:" in captured.out
+
+
+def test_handle_command_dispatches_through_handler_registry():
+    calls = []
+    cli = AgentCLI(
+        session_store=FakeStore(),
+        checkpointer=None,
+        agent_factory=lambda checkpointer: "agent",
+        runner=lambda agent, input_data, config: {},
+        workdir="/repo",
+        model_name=None,
+    )
+
+    def fake_handler(cli_arg, arg, command):
+        calls.append((cli_arg, arg, command.name))
+        return "handled"
+
+    cli.command_handlers = {"help": fake_handler}
+
+    assert cli.handle_command("/help extra") == "handled"
+    assert calls == [(cli, "extra", "help")]
+
+
+def test_all_builtin_commands_have_registered_handlers():
+    from agent_cli.command_handlers import build_command_handlers
+    from agent_cli.commands import COMMAND_REGISTRY
+
+    cli = AgentCLI(
+        session_store=FakeStore(),
+        checkpointer=None,
+        agent_factory=lambda checkpointer: "agent",
+        runner=lambda agent, input_data, config: {},
+        workdir="/repo",
+        model_name=None,
+    )
+    handlers = build_command_handlers(cli)
+
+    missing = [
+        command.name
+        for command in COMMAND_REGISTRY
+        if command.effective_handler_key not in handlers
+    ]
+    assert missing == []
