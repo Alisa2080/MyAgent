@@ -281,7 +281,6 @@ class AgentCLI:
             if skill_name in dynamic:
                 from agent_cli.skill_commands import (
                     build_skill_invocation_message,
-                    load_skill_for_command,
                 )
 
                 loader = self.command_context.load_skill

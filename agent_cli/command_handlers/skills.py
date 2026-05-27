@@ -1,8 +1,5 @@
 from __future__ import annotations
 
-from agent_cli.commands import COMMAND_LOOKUP
-
-
 def skills_handlers():
     return {"skills": handle_skills, "skill": handle_skill}
 
