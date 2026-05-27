@@ -176,3 +176,19 @@ def test_build_prompt_session_accepts_cli_home_for_paste_collapse(tmp_path):
 
     assert session is not None
     assert Path(tmp_path / "cli-home").exists()
+
+
+def test_prepare_user_message_expands_paste_and_detects_files(tmp_path):
+    from agent_cli.text_input import collapse_large_paste, prepare_user_message
+
+    target = tmp_path / "notes.md"
+    target.write_text("my notes content", encoding="utf-8")
+
+    paste = collapse_large_paste("line1\nline2\nline3\nline4\nline5", cli_home=tmp_path, counter=1)
+    assert paste.collapsed is True
+
+    raw_input = f"{target.name} read this and {paste.placeholder}"
+    processed = prepare_user_message(raw_input, workdir=str(tmp_path))
+
+    assert "User referenced file" in processed
+    assert "line1\nline2\nline3\nline4\nline5" in processed

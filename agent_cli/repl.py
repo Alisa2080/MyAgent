@@ -24,6 +24,7 @@ from agent_cli.session import (
     export_to_markdown,
 )
 from agent_cli.session_store import SessionStore
+from agent_cli.text_input import prepare_user_message
 
 
 AgentFactory = Callable[[Any], Any]
@@ -142,9 +143,10 @@ class AgentCLI:
         else:
             session_id = self.session_store.new_session_id()
             title = _title_from_message(self.session_store, text)
+        processed = prepare_user_message(text, workdir=self.workdir)
         result = self.runner(
             self.agent,
-            {"messages": [{"role": "user", "content": text}]},
+            {"messages": [{"role": "user", "content": processed}]},
             {"configurable": {"thread_id": session_id}},
         )
         result = self._handle_interrupts(result, session_id=session_id)
@@ -159,7 +161,7 @@ class AgentCLI:
         self.session_store.touch_session(
             session_id,
             last_message_preview=_title_from_message(
-                self.session_store, text, max_length=80
+                self.session_store, processed, max_length=80
             ),
         )
         return latest_ai_text(result)
