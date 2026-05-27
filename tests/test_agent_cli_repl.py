@@ -1366,3 +1366,27 @@ def test_command_handlers_do_not_depend_on_agent_cli_private_helpers():
             offenders[str(path)] = found
 
     assert offenders == {}
+
+
+def test_handle_cron_list_dispatches_to_cron_handler(monkeypatch):
+    import agent_cli.command_handlers.cron as cron_handler
+    from agent_cli.repl import AgentCLI
+
+    monkeypatch.setattr(
+        cron_handler.cron_commands,
+        "list_cron_jobs",
+        lambda include_disabled=False: cron_handler.cron_commands.CronCommandResult(
+            f"all={include_disabled}"
+        ),
+    )
+
+    cli = AgentCLI(
+        session_store=FakeStore(),
+        checkpointer="cp",
+        agent_factory=lambda checkpointer: "agent",
+        runner=lambda agent, input_data, config: {},
+        workdir="/repo",
+        model_name="model",
+    )
+
+    assert cli.handle_command("/cron list --all") == "all=True"

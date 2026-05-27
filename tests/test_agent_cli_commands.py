@@ -196,3 +196,12 @@ def test_aliases_resolve_to_canonical_handler_key():
     assert command is not None
     assert command.name == "help"
     assert command.effective_handler_key == "help"
+
+
+def test_cron_command_is_registered_and_in_help():
+    from agent_cli.commands import COMMAND_LOOKUP, render_help
+
+    assert "cron" in COMMAND_LOOKUP
+    help_text = render_help()
+    assert "/cron" in help_text
+    assert "Manage scheduled cron jobs." in help_text

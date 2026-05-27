@@ -103,6 +103,7 @@ COMMAND_REGISTRY: tuple[CommandDef, ...] = (
         "Clipboard",
         args_hint="[N]",
     ),
+    CommandDef("cron", "Manage scheduled cron jobs.", "Cron"),
     CommandDef(
         "retry",
         "Retry the last user message.",
