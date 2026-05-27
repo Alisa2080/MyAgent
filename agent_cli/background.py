@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import queue
 import sqlite3
 import threading
@@ -47,6 +48,16 @@ CREATE TABLE IF NOT EXISTS cli_background_tasks (
   finished_at TEXT,
   cancel_requested INTEGER NOT NULL DEFAULT 0,
   pending_steer_count INTEGER NOT NULL DEFAULT 0
+);
+"""
+
+
+OWNER_SCHEMA = """
+CREATE TABLE IF NOT EXISTS cli_background_owners (
+  owner_id TEXT PRIMARY KEY,
+  process_id INTEGER NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
 );
 """
 
@@ -121,6 +132,8 @@ class BackgroundTaskRegistry:
         title_factory: Callable[[str], str],
         runner: Callable[[Any, dict[str, Any]], Any],
         stop_wait_interrupt: Callable[[str], Any] | None = None,
+        reconcile_stale_tasks: bool = True,
+        owner_id: str | None = None,
     ):
         self.store = store
         self.session_id_factory = session_id_factory
@@ -128,9 +141,13 @@ class BackgroundTaskRegistry:
         self.title_factory = title_factory
         self.runner = runner
         self.stop_wait_interrupt = stop_wait_interrupt or (lambda session_id: None)
+        self.owner_id = owner_id or f"owner_{os.getpid()}_{uuid.uuid4().hex[:8]}"
         self._lock = threading.RLock()
         self._runtime: dict[str, _RuntimeTask] = {}
         self._notifications: queue.Queue[BackgroundNotification] = queue.Queue()
+        self.store.register_owner(self.owner_id, process_id=os.getpid())
+        if reconcile_stale_tasks:
+            self.store.mark_stale_active_tasks_stopped(current_owner_id=self.owner_id)
 
     @staticmethod
     def new_task_id() -> str:
@@ -148,6 +165,7 @@ class BackgroundTaskRegistry:
             session_id=session_id,
             title=title,
             prompt_preview=prompt[:200],
+            owner_id=self.owner_id,
         )
         approval_event = threading.Event()
         thread = threading.Thread(
@@ -168,7 +186,8 @@ class BackgroundTaskRegistry:
         self, *, active_only: bool = False, limit: int | None = 20
     ) -> list[BackgroundTaskRecord]:
         statuses = ACTIVE_TASK_STATUSES if active_only else None
-        return self.store.list_tasks(statuses=statuses, limit=limit)
+        owner_id = self.owner_id if active_only else None
+        return self.store.list_tasks(statuses=statuses, limit=limit, owner_id=owner_id)
 
     def steer(self, task_id: str, message: str) -> BackgroundSteerRecord:
         record = self.store.get_task(task_id)
@@ -211,7 +230,7 @@ class BackgroundTaskRegistry:
             raise ValueError(f"unknown background task: {task_id}")
         if record.status in TERMINAL_TASK_STATUSES or not record.cancel_requested:
             return record
-        return self.store.set_status(task_id, "stopped", finished=True)
+        return self.store.mark_stopped(task_id)
 
     def wait_for_status(self, task_id: str, status: str, *, timeout: float) -> None:
         deadline = datetime.now(timezone.utc).timestamp() + timeout
@@ -343,19 +362,26 @@ class BackgroundTaskRegistry:
                 finished=True,
             )
             self._notify(kind="failed", record=failed, message=failed.last_error or "failed")
+        finally:
+            with self._lock:
+                self._runtime.pop(task_id, None)
 
     def _stop_requested(self, task_id: str) -> bool:
         record = self.store.get_task(task_id)
         return bool(record and record.cancel_requested)
 
     def _pause_for_approval(self, task_id: str, result: Any) -> None:
-        waiting = self.store.set_status(task_id, "waiting_approval")
         with self._lock:
             runtime = self._runtime.get(task_id)
             if runtime is None:
                 return
             runtime.interrupt_result = result
             runtime.resume_value = _NO_RESUME_VALUE
+        waiting = self.store.mark_waiting_approval(task_id)
+        if waiting.status != "waiting_approval":
+            if waiting.status == "stopped":
+                self._notify(kind="stopped", record=waiting, message="stopped")
+            return
         self._notify(
             kind="attention",
             record=waiting,
@@ -364,7 +390,7 @@ class BackgroundTaskRegistry:
 
         while True:
             if self._stop_requested(task_id):
-                stopped = self.store.set_status(task_id, "stopped", finished=True)
+                stopped = self.store.mark_stopped(task_id)
                 self._notify(kind="stopped", record=stopped, message="stopped")
                 return
             with self._lock:
@@ -379,7 +405,11 @@ class BackgroundTaskRegistry:
                 approval_event.wait(0.05)
                 approval_event.clear()
 
-        self.store.set_status(task_id, "running")
+        running = self.store.mark_running_after_approval(task_id)
+        if running.status != "running":
+            if running.status == "stopped":
+                self._notify(kind="stopped", record=running, message="stopped")
+            return
         resumed = self.runner(
             Command(resume=resume_value),
             {"configurable": {"thread_id": waiting.session_id}},
@@ -434,6 +464,39 @@ class BackgroundTaskStore:
         with self.connect() as conn:
             conn.execute(TASK_SCHEMA)
             conn.execute(STEER_SCHEMA)
+            conn.execute(OWNER_SCHEMA)
+            columns = {
+                row[1]
+                for row in conn.execute("PRAGMA table_info(cli_background_tasks)").fetchall()
+            }
+            if "owner_id" not in columns:
+                conn.execute("ALTER TABLE cli_background_tasks ADD COLUMN owner_id TEXT")
+
+    def register_owner(self, owner_id: str, *, process_id: int) -> None:
+        now = self.now()
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO cli_background_owners (owner_id, process_id, created_at, updated_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(owner_id) DO UPDATE SET
+                    process_id = excluded.process_id,
+                    updated_at = excluded.updated_at
+                """,
+                (owner_id, process_id, now, now),
+            )
+
+    @staticmethod
+    def _process_is_running(process_id: int) -> bool:
+        if process_id <= 0:
+            return False
+        try:
+            os.kill(process_id, 0)
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True
+        return True
 
     @staticmethod
     def _task_from_row(row: sqlite3.Row | tuple) -> BackgroundTaskRecord:
@@ -471,6 +534,7 @@ class BackgroundTaskStore:
         session_id: str,
         title: str,
         prompt_preview: str,
+        owner_id: str | None = None,
     ) -> BackgroundTaskRecord:
         now = self.now()
         with self.connect() as conn:
@@ -479,11 +543,12 @@ class BackgroundTaskStore:
                 INSERT INTO cli_background_tasks (
                     task_id, session_id, title, status, prompt_preview,
                     last_result_preview, last_error, created_at, updated_at,
-                    started_at, finished_at, cancel_requested, pending_steer_count
+                    started_at, finished_at, cancel_requested, pending_steer_count,
+                    owner_id
                 )
-                VALUES (?, ?, ?, 'queued', ?, NULL, NULL, ?, ?, NULL, NULL, 0, 0)
+                VALUES (?, ?, ?, 'queued', ?, NULL, NULL, ?, ?, NULL, NULL, 0, 0, ?)
                 """,
-                (task_id, session_id, title, prompt_preview, now, now),
+                (task_id, session_id, title, prompt_preview, now, now, owner_id),
             )
         record = self.get_task(task_id)
         if record is None:
@@ -509,13 +574,18 @@ class BackgroundTaskStore:
         *,
         statuses: set[str] | None = None,
         limit: int | None = 20,
+        owner_id: str | None = None,
     ) -> list[BackgroundTaskRecord]:
-        where = ""
+        clauses: list[str] = []
         params: list[object] = []
         if statuses:
             placeholders = ", ".join("?" for _ in statuses)
-            where = f"WHERE status IN ({placeholders})"
+            clauses.append(f"status IN ({placeholders})")
             params.extend(sorted(statuses))
+        if owner_id is not None:
+            clauses.append("owner_id = ?")
+            params.append(owner_id)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         limit_clause = ""
         if limit is not None:
             limit_clause = "LIMIT ?"
@@ -547,23 +617,30 @@ class BackgroundTaskStore:
     ) -> BackgroundTaskRecord:
         if status not in TASK_STATUSES:
             raise ValueError(f"invalid background task status: {status}")
-        existing = self.get_task(task_id)
-        if existing is None:
-            raise ValueError(f"unknown background task: {task_id}")
         now = self.now()
-        finished_at = now if finished else existing.finished_at
-        cancel_value = (
-            int(cancel_requested)
-            if cancel_requested is not None
-            else int(existing.cancel_requested)
-        )
-        result_preview = (
-            last_result_preview
-            if last_result_preview is not None
-            else existing.last_result_preview
-        )
-        error_value = last_error if last_error is not None else existing.last_error
         with self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                """
+                SELECT task_id, session_id, title, status, prompt_preview,
+                       last_result_preview, last_error, created_at, updated_at,
+                       started_at, finished_at, cancel_requested, pending_steer_count
+                FROM cli_background_tasks
+                WHERE task_id = ?
+                """,
+                (task_id,),
+            ).fetchone()
+            if row is None:
+                raise ValueError(f"unknown background task: {task_id}")
+            existing = self._task_from_row(row)
+            finished_at = now if finished else existing.finished_at
+            cancel_value = int(existing.cancel_requested or bool(cancel_requested))
+            result_preview = (
+                last_result_preview
+                if last_result_preview is not None
+                else existing.last_result_preview
+            )
+            error_value = last_error if last_error is not None else existing.last_error
             conn.execute(
                 """
                 UPDATE cli_background_tasks
@@ -585,6 +662,130 @@ class BackgroundTaskStore:
         if updated is None:
             raise RuntimeError(f"failed to update background task {task_id}")
         return updated
+
+    def mark_stopped(self, task_id: str) -> BackgroundTaskRecord:
+        return self.set_status(task_id, "stopped", cancel_requested=True, finished=True)
+
+    def mark_waiting_approval(self, task_id: str) -> BackgroundTaskRecord:
+        now = self.now()
+        with self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                """
+                SELECT task_id, session_id, title, status, prompt_preview,
+                       last_result_preview, last_error, created_at, updated_at,
+                       started_at, finished_at, cancel_requested, pending_steer_count
+                FROM cli_background_tasks
+                WHERE task_id = ?
+                """,
+                (task_id,),
+            ).fetchone()
+            if row is None:
+                raise ValueError(f"unknown background task: {task_id}")
+            existing = self._task_from_row(row)
+            if existing.status in TERMINAL_TASK_STATUSES:
+                return existing
+            if existing.status == "stopping" or existing.cancel_requested:
+                conn.execute(
+                    """
+                    UPDATE cli_background_tasks
+                    SET status = 'stopped', updated_at = ?, finished_at = ?,
+                        cancel_requested = 1
+                    WHERE task_id = ?
+                    """,
+                    (now, now, task_id),
+                )
+            else:
+                conn.execute(
+                    """
+                    UPDATE cli_background_tasks
+                    SET status = 'waiting_approval', updated_at = ?
+                    WHERE task_id = ?
+                    """,
+                    (now, task_id),
+                )
+        updated = self.get_task(task_id)
+        if updated is None:
+            raise RuntimeError(f"failed to mark background task waiting {task_id}")
+        return updated
+
+    def mark_running_after_approval(self, task_id: str) -> BackgroundTaskRecord:
+        now = self.now()
+        with self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                """
+                SELECT task_id, session_id, title, status, prompt_preview,
+                       last_result_preview, last_error, created_at, updated_at,
+                       started_at, finished_at, cancel_requested, pending_steer_count
+                FROM cli_background_tasks
+                WHERE task_id = ?
+                """,
+                (task_id,),
+            ).fetchone()
+            if row is None:
+                raise ValueError(f"unknown background task: {task_id}")
+            existing = self._task_from_row(row)
+            if existing.status in TERMINAL_TASK_STATUSES:
+                return existing
+            if existing.status == "stopping" or existing.cancel_requested:
+                conn.execute(
+                    """
+                    UPDATE cli_background_tasks
+                    SET status = 'stopped', updated_at = ?, finished_at = ?,
+                        cancel_requested = 1
+                    WHERE task_id = ?
+                    """,
+                    (now, now, task_id),
+                )
+            elif existing.status == "waiting_approval":
+                conn.execute(
+                    """
+                    UPDATE cli_background_tasks
+                    SET status = 'running', updated_at = ?
+                    WHERE task_id = ?
+                    """,
+                    (now, task_id),
+                )
+        updated = self.get_task(task_id)
+        if updated is None:
+            raise RuntimeError(f"failed to resume background task {task_id}")
+        return updated
+
+    def mark_stale_active_tasks_stopped(self, *, current_owner_id: str) -> None:
+        now = self.now()
+        placeholders = ", ".join("?" for _ in ACTIVE_TASK_STATUSES)
+        live_owner_rows = []
+        with self.connect() as conn:
+            for owner_id, process_id in conn.execute(
+                "SELECT owner_id, process_id FROM cli_background_owners"
+            ).fetchall():
+                if self._process_is_running(int(process_id)):
+                    live_owner_rows.append(owner_id)
+            if current_owner_id not in live_owner_rows:
+                live_owner_rows.append(current_owner_id)
+            live_placeholders = ", ".join("?" for _ in live_owner_rows)
+            owner_clause = (
+                "owner_id IS NULL"
+                if not live_owner_rows
+                else f"(owner_id IS NULL OR owner_id NOT IN ({live_placeholders}))"
+            )
+            conn.execute(
+                f"""
+                UPDATE cli_background_tasks
+                SET status = 'stopped', updated_at = ?, finished_at = ?,
+                    cancel_requested = 1,
+                    last_error = COALESCE(last_error, ?)
+                WHERE status IN ({placeholders}) AND {owner_clause}
+                """,
+                [
+                    now,
+                    now,
+                    "stopped because the previous CLI process is no longer running",
+                    *sorted(ACTIVE_TASK_STATUSES),
+                    *live_owner_rows,
+                ],
+            )
 
     def mark_started(self, task_id: str) -> BackgroundTaskRecord:
         now = self.now()

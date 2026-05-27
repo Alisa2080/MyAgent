@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 from threading import Event
 
@@ -242,6 +243,54 @@ def test_background_registry_waits_for_approval_and_resumes(tmp_path: Path):
     assert store.get_task(record.task_id).last_result_preview == "approved done"
 
 
+def test_background_registry_preserves_fast_approval_during_pause_setup(tmp_path: Path):
+    from langgraph.types import Command
+
+    registry = None
+
+    class RacingStore(BackgroundTaskStore):
+        def mark_waiting_approval(self, task_id: str):
+            record = super().mark_waiting_approval(task_id)
+            if record.status == "waiting_approval":
+                registry.approve(task_id, {"decisions": [{"type": "approve"}]})
+            return record
+
+    store = RacingStore(tmp_path / "cli.sqlite")
+    calls = []
+
+    def runner(input_data, config):
+        calls.append(input_data)
+        if len(calls) == 1:
+            return {
+                "__interrupt__": [
+                    {
+                        "value": {
+                            "action_requests": [
+                                {"name": "terminal", "args": {"command": "pwd"}}
+                            ],
+                            "review_configs": [{"description": "review"}],
+                        }
+                    }
+                ]
+            }
+        assert isinstance(input_data, Command)
+        assert input_data.resume == {"decisions": [{"type": "approve"}]}
+        return {"messages": [{"role": "assistant", "content": "approved done"}]}
+
+    registry = BackgroundTaskRegistry(
+        store=store,
+        session_id_factory=lambda: "session-1",
+        title_factory=lambda prompt: "Task title",
+        runner=runner,
+    )
+
+    record = registry.start("needs approval")
+    registry.join(record.task_id, timeout=2)
+
+    assert store.get_task(record.task_id).status == "completed"
+    assert store.get_task(record.task_id).last_result_preview == "approved done"
+
+
 def test_background_registry_allows_none_approval_resume(tmp_path: Path):
     from langgraph.types import Command
 
@@ -439,6 +488,7 @@ def test_background_registry_rejects_steer_while_stopping(tmp_path: Path):
         session_id_factory=lambda: "session-1",
         title_factory=lambda prompt: "Task title",
         runner=lambda input_data, config: {},
+        reconcile_stale_tasks=False,
     )
 
     try:
@@ -522,6 +572,7 @@ def test_background_registry_finalize_requires_cancel_requested(tmp_path: Path):
         session_id_factory=lambda: "session-1",
         title_factory=lambda prompt: "Task title",
         runner=lambda input_data, config: {},
+        reconcile_stale_tasks=False,
     )
 
     record = registry.finalize_stopping("bg_12345678")
@@ -579,6 +630,119 @@ def test_background_store_does_not_start_stopping_task(tmp_path: Path):
 
     assert started.status == "stopping"
     assert started.cancel_requested is True
+
+
+def test_background_store_waiting_approval_preserves_cancel_request(tmp_path: Path):
+    store = BackgroundTaskStore(tmp_path / "cli.sqlite")
+    store.create_task(
+        task_id="bg_12345678",
+        session_id="session-1",
+        title="Fix tests",
+        prompt_preview="Fix tests please",
+    )
+    store.mark_started("bg_12345678")
+    store.request_stop("bg_12345678")
+
+    waiting = store.mark_waiting_approval("bg_12345678")
+
+    assert waiting.status == "stopped"
+    assert waiting.cancel_requested is True
+
+
+def test_background_store_approval_resume_preserves_stop_request(tmp_path: Path):
+    store = BackgroundTaskStore(tmp_path / "cli.sqlite")
+    store.create_task(
+        task_id="bg_12345678",
+        session_id="session-1",
+        title="Fix tests",
+        prompt_preview="Fix tests please",
+    )
+    store.mark_started("bg_12345678")
+    waiting = store.mark_waiting_approval("bg_12345678")
+    store.request_stop("bg_12345678")
+
+    running = store.mark_running_after_approval("bg_12345678")
+
+    assert waiting.status == "waiting_approval"
+    assert running.status == "stopped"
+    assert running.cancel_requested is True
+
+
+def test_background_registry_reconciles_stale_active_tasks(tmp_path: Path):
+    store = BackgroundTaskStore(tmp_path / "cli.sqlite")
+    for task_id, status in [
+        ("bg_queued", "queued"),
+        ("bg_running", "running"),
+        ("bg_waiting", "waiting_approval"),
+        ("bg_completing", "completing"),
+        ("bg_stopping", "stopping"),
+    ]:
+        store.create_task(
+            task_id=task_id,
+            session_id=f"session-{task_id}",
+            title="Task title",
+            prompt_preview="Fix tests please",
+        )
+        store.set_status(task_id, status)
+
+    BackgroundTaskRegistry(
+        store=store,
+        session_id_factory=lambda: "session-1",
+        title_factory=lambda prompt: "Task title",
+        runner=lambda input_data, config: {},
+    )
+
+    records = {record.task_id: record for record in store.list_tasks(limit=None)}
+    for task_id in [
+        "bg_queued",
+        "bg_running",
+        "bg_waiting",
+        "bg_completing",
+        "bg_stopping",
+    ]:
+        assert records[task_id].status == "stopped"
+        assert "previous CLI process" in records[task_id].last_error
+
+
+def test_background_registry_does_not_reconcile_live_owner_tasks(tmp_path: Path):
+    store = BackgroundTaskStore(tmp_path / "cli.sqlite")
+    store.register_owner("other-owner", process_id=os.getpid())
+    store.create_task(
+        task_id="bg_other",
+        session_id="session-other",
+        title="Task title",
+        prompt_preview="Fix tests please",
+        owner_id="other-owner",
+    )
+    store.mark_started("bg_other")
+
+    BackgroundTaskRegistry(
+        store=store,
+        session_id_factory=lambda: "session-1",
+        title_factory=lambda prompt: "Task title",
+        runner=lambda input_data, config: {},
+        owner_id="current-owner",
+    )
+
+    assert store.get_task("bg_other").status == "running"
+
+
+def test_background_registry_removes_runtime_after_completion(tmp_path: Path):
+    store = BackgroundTaskStore(tmp_path / "cli.sqlite")
+
+    registry = BackgroundTaskRegistry(
+        store=store,
+        session_id_factory=lambda: "session-1",
+        title_factory=lambda prompt: "Task title",
+        runner=lambda input_data, config: {
+            "messages": [{"role": "assistant", "content": "done"}]
+        },
+    )
+
+    record = registry.start("first instruction")
+    registry.join(record.task_id, timeout=2)
+
+    assert record.task_id not in registry._runtime
 
 
 def test_background_registry_stop_before_worker_turn_skips_runner(tmp_path: Path):
