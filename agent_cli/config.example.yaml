@@ -5,3 +5,6 @@ model:
   name: null
 session:
   default_title: New session
+cron:
+  enabled: true
+  interval_seconds: 60

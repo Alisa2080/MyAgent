@@ -635,3 +635,70 @@ def test_main_config_set_reports_write_errors(monkeypatch, tmp_path, capsys):
     captured = capsys.readouterr()
     assert code == 2
     assert "cannot write config" in captured.err
+
+
+def test_main_cron_list_does_not_create_checkpointer(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("AGENT_CLI_HOME", str(tmp_path))
+
+    import agent_cli.main as main_module
+    from agent_cli.cron_commands import CronCommandResult
+
+    monkeypatch.setattr(
+        main_module.cron_commands,
+        "list_cron_jobs",
+        lambda include_disabled=False: CronCommandResult(f"all={include_disabled}"),
+    )
+    monkeypatch.setattr(
+        main_module,
+        "create_sqlite_checkpointer",
+        lambda path: (_ for _ in ()).throw(AssertionError("no checkpointer")),
+    )
+
+    code = main_module.main(["cron", "list", "--all"])
+
+    assert code == 0
+    assert "all=True" in capsys.readouterr().out
+
+
+def test_main_cron_create_rejects_origin(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("AGENT_CLI_HOME", str(tmp_path))
+
+    import agent_cli.main as main_module
+
+    code = main_module.main(
+        ["cron", "create", "30m", "write report", "--deliver", "origin"]
+    )
+
+    captured = capsys.readouterr()
+    assert code == 2
+    assert "origin delivery requires an active CLI session" in captured.out
+
+
+def test_main_cron_edit_rejects_origin(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("AGENT_CLI_HOME", str(tmp_path))
+
+    import agent_cli.main as main_module
+
+    code = main_module.main(["cron", "edit", "job-1", "--deliver", "origin"])
+
+    captured = capsys.readouterr()
+    assert code == 2
+    assert "origin delivery requires an active CLI session" in captured.out
+
+
+def test_main_cron_tick_returns_service_exit_code(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("AGENT_CLI_HOME", str(tmp_path))
+
+    import agent_cli.main as main_module
+    from agent_cli.cron_commands import CronCommandResult
+
+    monkeypatch.setattr(
+        main_module.cron_commands,
+        "run_tick",
+        lambda: CronCommandResult("failed=1", exit_code=1),
+    )
+
+    code = main_module.main(["cron", "tick"])
+
+    assert code == 1
+    assert "failed=1" in capsys.readouterr().out

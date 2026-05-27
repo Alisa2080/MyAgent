@@ -74,6 +74,20 @@ def _runtime_thread_id(runtime: ToolRuntime | None) -> str | None:
     return RuntimeContext.from_config(config).thread_id
 
 
+def run_cronjob_action(
+    action: str,
+    *,
+    origin_thread_id: str | None = None,
+    **kwargs: Any,
+) -> dict[str, Any]:
+    return _cronjob_impl(
+        action=action,
+        runtime=None,
+        origin_thread_id=origin_thread_id,
+        **kwargs,
+    )
+
+
 def _scan_prompt(prompt: str) -> str | None:
     for char in _INVISIBLE_CHARS:
         if char in prompt:
@@ -185,7 +199,12 @@ def _normalize_repeat(repeat: Any) -> Any:
         return repeat
 
 
-def _cronjob_impl(action: str, runtime: ToolRuntime | None = None, **kwargs: Any) -> dict[str, Any]:
+def _cronjob_impl(
+    action: str,
+    runtime: ToolRuntime | None = None,
+    origin_thread_id: str | None = None,
+    **kwargs: Any,
+) -> dict[str, Any]:
     normalized = (action or "").strip().lower()
     deliver = kwargs.get("deliver")
     delivery_error = _delivery_error(deliver)
@@ -214,7 +233,13 @@ def _cronjob_impl(action: str, runtime: ToolRuntime | None = None, **kwargs: Any
             if script_error:
                 return script_error
 
-            thread_id = _runtime_thread_id(runtime)
+            thread_id = origin_thread_id or _runtime_thread_id(runtime)
+            if deliver == "origin" and not thread_id:
+                return {
+                    "success": False,
+                    "code": "missing_origin_thread",
+                    "error": "deliver='origin' requires an active thread id.",
+                }
             origin = {"thread_id": thread_id} if thread_id else None
             job = create_job(
                 prompt=prompt,
@@ -286,6 +311,18 @@ def _cronjob_impl(action: str, runtime: ToolRuntime | None = None, **kwargs: Any
             if "repeat" in updates:
                 updates["repeat"] = _normalize_repeat(updates["repeat"])
 
+            if updates.get("deliver") == "origin":
+                thread_id = origin_thread_id or _runtime_thread_id(runtime)
+                if not thread_id:
+                    return {
+                        "success": False,
+                        "code": "missing_origin_thread",
+                        "error": "deliver='origin' requires an active thread id.",
+                    }
+                updates["origin"] = {"thread_id": thread_id}
+            elif updates.get("deliver") == "local":
+                updates["origin"] = None
+
             return {"success": True, "job": _format_job(update_job(job_id, updates))}
 
         return {"success": False, "code": "unknown_action", "error": f"Unknown cron action {action!r}."}
@@ -315,9 +352,9 @@ def cronjob(
     workdir: str | None = None,
 ) -> ToolMessage:
     """Manage unattended scheduled cron jobs. Only local and origin delivery are supported."""
-    result = _cronjob_impl(
+    result = run_cronjob_action(
         action=action,
-        runtime=runtime,
+        origin_thread_id=_runtime_thread_id(runtime),
         job_id=job_id,
         prompt=prompt,
         schedule=schedule,

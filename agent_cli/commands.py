@@ -104,6 +104,12 @@ COMMAND_REGISTRY: tuple[CommandDef, ...] = (
         args_hint="[N]",
     ),
     CommandDef(
+        "cron",
+        "Manage scheduled cron jobs.",
+        "Cron",
+        args_hint="[subcommand]",
+    ),
+    CommandDef(
         "retry",
         "Retry the last user message.",
         "Session",

@@ -58,6 +58,13 @@ def test_phase_3_background_commands_are_registered():
     assert "/steer <task_id> <message>" in help_text
 
 
+def test_cron_command_is_registered_with_subcommand_hint():
+    assert resolve_command("/cron").name == "cron"
+
+    help_text = render_help()
+    assert "/cron [subcommand]" in help_text
+
+
 def test_commands_expose_completion_metadata():
     completion_names = [item.name for item in commands_for_completion()]
 
@@ -196,3 +203,12 @@ def test_aliases_resolve_to_canonical_handler_key():
     assert command is not None
     assert command.name == "help"
     assert command.effective_handler_key == "help"
+
+
+def test_cron_command_is_registered_and_in_help():
+    from agent_cli.commands import COMMAND_LOOKUP, render_help
+
+    assert "cron" in COMMAND_LOOKUP
+    help_text = render_help()
+    assert "/cron" in help_text
+    assert "Manage scheduled cron jobs." in help_text

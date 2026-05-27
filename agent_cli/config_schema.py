@@ -40,17 +40,25 @@ class SessionConfig:
 
 
 @dataclass(frozen=True)
+class CronConfig:
+    enabled: bool = True
+    interval_seconds: int = 60
+
+
+@dataclass(frozen=True)
 class AgentCLIConfig:
     display: DisplayConfig = DisplayConfig()
     model: ModelConfig = ModelConfig()
     session: SessionConfig = SessionConfig()
+    cron: CronConfig = CronConfig()
 
 
-ALLOWED_TOP_LEVEL = {"display", "model", "session"}
+ALLOWED_TOP_LEVEL = {"display", "model", "session", "cron"}
 ALLOWED_CHILDREN = {
     "display": {"markdown", "theme"},
     "model": {"name"},
     "session": {"default_title"},
+    "cron": {"enabled", "interval_seconds"},
 }
 
 
@@ -77,6 +85,7 @@ def parse_config(data: dict[str, Any]) -> AgentCLIConfig:
     display = _mapping(data.get("display"), "display")
     model = _mapping(data.get("model"), "model")
     session = _mapping(data.get("session"), "session")
+    cron = _mapping(data.get("cron"), "cron")
 
     markdown_value = display.get("markdown", "render")
     if markdown_value is None:
@@ -103,10 +112,38 @@ def parse_config(data: dict[str, Any]) -> AgentCLIConfig:
     if not default_title:
         raise ConfigValidationError("session.default_title", "must not be empty")
 
+    cron_enabled_value = cron.get("enabled", True)
+    if isinstance(cron_enabled_value, bool):
+        cron_enabled = cron_enabled_value
+    else:
+        raise ConfigValidationError("cron.enabled", "must be a boolean")
+
+    interval_value = cron.get("interval_seconds", 60)
+    if isinstance(interval_value, bool):
+        raise ConfigValidationError(
+            "cron.interval_seconds", "must be a positive integer"
+        )
+    if isinstance(interval_value, int):
+        cron_interval_seconds = interval_value
+    elif isinstance(interval_value, str) and interval_value.isdigit():
+        cron_interval_seconds = int(interval_value)
+    else:
+        raise ConfigValidationError(
+            "cron.interval_seconds", "must be a positive integer"
+        )
+    if cron_interval_seconds <= 0:
+        raise ConfigValidationError(
+            "cron.interval_seconds", "must be a positive integer"
+        )
+
     return AgentCLIConfig(
         display=DisplayConfig(markdown=markdown, theme=theme),
         model=ModelConfig(name=model_name),
         session=SessionConfig(default_title=default_title),
+        cron=CronConfig(
+            enabled=cron_enabled,
+            interval_seconds=cron_interval_seconds,
+        ),
     )
 
 
@@ -118,6 +155,10 @@ def config_to_dict(config: AgentCLIConfig) -> dict[str, Any]:
         },
         "model": {"name": config.model.name},
         "session": {"default_title": config.session.default_title},
+        "cron": {
+            "enabled": config.cron.enabled,
+            "interval_seconds": config.cron.interval_seconds,
+        },
     }
 
 
@@ -130,6 +171,10 @@ def get_config_path_value(config: AgentCLIConfig, path: str) -> Any:
         return config.model.name
     if path == "session.default_title":
         return config.session.default_title
+    if path == "cron.enabled":
+        return config.cron.enabled
+    if path == "cron.interval_seconds":
+        return config.cron.interval_seconds
     raise ConfigValidationError(path, "unknown config key")
 
 
@@ -139,6 +184,8 @@ def set_config_path_value(data: dict[str, Any], path: str, value: Any) -> dict[s
         "display.theme",
         "model.name",
         "session.default_title",
+        "cron.enabled",
+        "cron.interval_seconds",
     }:
         raise ConfigValidationError(path, "unknown config key")
     section, key = path.split(".", 1)

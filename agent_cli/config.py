@@ -32,6 +32,8 @@ class RuntimeSettings:
     display_theme: str = "default"
     config_path: Path | None = None
     dotenv_paths: tuple[Path, ...] = ()
+    cron_enabled: bool = True
+    cron_interval_seconds: int = 60
 
 
 PROFILE_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
@@ -130,6 +132,8 @@ def settings_from_config(
         display_markdown=parsed.display.markdown,
         display_theme=parsed.display.theme,
         config_path=config_path,
+        cron_enabled=parsed.cron.enabled,
+        cron_interval_seconds=parsed.cron.interval_seconds,
     )
 
 
