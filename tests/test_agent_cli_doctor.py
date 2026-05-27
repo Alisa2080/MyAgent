@@ -212,3 +212,17 @@ def test_doctor_fails_invalid_display_theme(tmp_path, monkeypatch):
 
     assert config.status == "FAIL"
     assert "display.theme" in config.message
+
+
+def test_doctor_reports_config_schema_path(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / "config.yaml").write_text("display:\n  markdown: weird\n", encoding="utf-8")
+
+    from agent_cli.doctor import run_health_checks
+
+    results = run_health_checks(workdir=str(tmp_path), cli_home=home)
+    config = next(result for result in results if result.name == "Config")
+
+    assert config.status == "FAIL"
+    assert "display.markdown" in config.message

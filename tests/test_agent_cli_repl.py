@@ -1140,3 +1140,20 @@ def test_reload_updates_runtime_settings_and_clears_agent(tmp_path, monkeypatch)
     assert cli.display_theme == "slate"
     assert cli.display_markdown == "strip"
     assert cli._agent is None
+
+
+def test_display_markdown_strip_formats_live_assistant_output():
+    def fake_runner(agent, input_data, config):
+        return {"messages": [{"role": "assistant", "content": "**hello** `world`"}]}
+
+    cli = AgentCLI(
+        session_store=FakeStore(),
+        checkpointer="cp",
+        agent_factory=lambda checkpointer: "agent",
+        runner=fake_runner,
+        workdir="/repo",
+        model_name="model",
+        display_markdown="strip",
+    )
+
+    assert cli.submit_message("hi") == "hello world"

@@ -14,6 +14,7 @@ from agent_cli.interrupts import (
     extract_interrupt_review_requests,
     has_interrupt,
 )
+from agent_cli.output_format import format_assistant_output
 from agent_cli.rendering import latest_ai_text
 from agent_cli.session import Session
 from agent_cli.session_store import SessionStore
@@ -189,6 +190,7 @@ class AgentCLI:
         output = latest_ai_text(result)
         if output:
             self.assistant_replies.append(output)
+            return format_assistant_output(output, self.display_markdown)
         return output
 
     def _effective_cli_home(self):
