@@ -5,6 +5,22 @@ from agent_cli.session import Session, SessionStatus, render_session_status, upd
 from agent_cli.session_store import SessionStore
 
 
+class FakeCheckpointer:
+    def get_tuple(self, config):
+        return {
+            "checkpoint": {
+                "channel_values": {
+                    "messages": [
+                        {"role": "system", "content": "ignore"},
+                        {"role": "user", "content": "hi"},
+                        {"role": "assistant", "content": "hello"},
+                        {"role": "tool", "content": "ignore"},
+                    ]
+                }
+            }
+        }
+
+
 def test_session_status_returns_info():
     with tempfile.TemporaryDirectory() as tmp:
         store = SessionStore(Path(tmp) / "cli.sqlite")
@@ -94,7 +110,7 @@ def test_session_status_includes_runtime_metadata_and_counts():
             session_store=store,
             session_id="status-test",
             model_name="model",
-            session_store_for_checkpoints="cp",
+            session_store_for_checkpoints=FakeCheckpointer(),
             workdir=str(tmp_path),
             profile="dev",
             display_theme="slate",
@@ -109,6 +125,8 @@ def test_session_status_includes_runtime_metadata_and_counts():
         assert status.cli_home == str(tmp_path)
         assert status.db_path == str(tmp_path / "cli.sqlite")
         assert status.checkpointer_available is True
+        assert status.message_count == 2
+        assert status.turn_count == 1
 
 
 def test_session_export_relative_path_resolves_against_workdir():
@@ -121,13 +139,18 @@ def test_session_export_relative_path_resolves_against_workdir():
             session_store=store,
             session_id="export-relative",
             model_name="model",
-            session_store_for_checkpoints=None,
+            session_store_for_checkpoints=FakeCheckpointer(),
             workdir=str(workdir),
         )
 
         result = session.export_markdown("exports/session.md")
         export_path = workdir / "exports" / "session.md"
 
-        # Empty history - file should not be created
-        assert not export_path.exists()
-        assert "No messages" in result
+        assert export_path.exists()
+        text = export_path.read_text(encoding="utf-8")
+        assert "Exported 2 messages" in result
+        assert "- Workdir: " + str(workdir) in text
+        assert "- Messages: 2" in text
+        assert "- Turns: 1" in text
+        assert "## User" in text
+        assert "## Assistant" in text

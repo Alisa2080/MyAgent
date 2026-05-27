@@ -10,8 +10,7 @@ from pathlib import Path
 from typing import Literal
 
 from agent_cli.config import ConfigError, settings_from_config
-from agent_cli.paths import get_cli_home, get_db_path
-from agent_cli.session_store import SessionStore
+from agent_cli.paths import get_cli_home
 
 
 DoctorStatus = Literal["OK", "WARN", "FAIL"]
@@ -150,16 +149,32 @@ def check_background_tasks(db_path: Path) -> HealthCheck:
         rows = store.list_tasks(statuses=ACTIVE_TASK_STATUSES, limit=200)
         stale = [row for row in rows if getattr(row, "cancel_requested", False)]
         ownerless = 0
+        dead_owner_ids: set[str] = set()
         with store.connect() as conn:
             ownerless = conn.execute(
                 "SELECT COUNT(*) FROM cli_background_tasks "
                 "WHERE status IN ('queued', 'running', 'waiting_approval', 'completing', 'stopping') "
                 "AND owner_id IS NULL"
             ).fetchone()[0]
+            owner_rows = conn.execute(
+                "SELECT DISTINCT t.owner_id, o.process_id "
+                "FROM cli_background_tasks t "
+                "LEFT JOIN cli_background_owners o ON t.owner_id = o.owner_id "
+                "WHERE t.status IN ('queued', 'running', 'waiting_approval', 'completing', 'stopping') "
+                "AND t.owner_id IS NOT NULL"
+            ).fetchall()
+        for owner_id, process_id in owner_rows:
+            if process_id is None or not BackgroundTaskStore._process_is_running(int(process_id)):
+                dead_owner_ids.add(str(owner_id))
     except Exception as exc:
         return fail("Background Tasks", f"cannot inspect background task metadata: {exc}")
     if ownerless:
         return warn("Background Tasks", f"{ownerless} active task(s) have no owner metadata")
+    if dead_owner_ids:
+        return warn(
+            "Background Tasks",
+            f"{len(dead_owner_ids)} active owner(s) are dead or stale",
+        )
     if stale:
         return warn("Background Tasks", f"{len(stale)} active task(s) look stale")
     return ok("Background Tasks", "metadata readable")
@@ -170,7 +185,7 @@ def run_health_checks(
 ) -> list[HealthCheck]:
     if cli_home is None:
         cli_home = get_cli_home()
-    db_path = get_db_path()
+    db_path = cli_home / "cli.sqlite"
     cwd = Path.cwd()
 
     results: list[HealthCheck] = [

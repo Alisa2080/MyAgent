@@ -111,6 +111,21 @@ def test_run_health_checks_reports_storage_and_openai_key(tmp_path, monkeypatch)
     assert by_name["OPENAI_API_KEY"].status == "WARN"
 
 
+def test_run_health_checks_uses_explicit_cli_home_for_database(tmp_path, monkeypatch):
+    ambient_home = tmp_path / "ambient"
+    explicit_home = tmp_path / "explicit"
+    monkeypatch.setenv("AGENT_CLI_HOME", str(ambient_home))
+
+    results = run_health_checks(workdir=str(tmp_path), cli_home=explicit_home)
+    by_name = {item.name: item for item in results}
+
+    assert by_name["SQLite DB"].status == "OK"
+    assert by_name["SQLite DB"].message == str(explicit_home / "cli.sqlite")
+    assert by_name["Background Tasks"].status in {"OK", "WARN"}
+    assert (explicit_home / "cli.sqlite").exists()
+    assert not (ambient_home / "cli.sqlite").exists()
+
+
 def test_doctor_reports_stale_background_task_as_warn(tmp_path, monkeypatch):
     monkeypatch.setenv("AGENT_CLI_HOME", str(tmp_path))
 
@@ -130,6 +145,28 @@ def test_doctor_reports_stale_background_task_as_warn(tmp_path, monkeypatch):
 
     assert background.status == "WARN"
     assert "stale" in background.message.lower() or "owner" in background.message.lower()
+
+
+def test_doctor_reports_dead_background_owner_as_warn(tmp_path, monkeypatch):
+    monkeypatch.setenv("AGENT_CLI_HOME", str(tmp_path))
+
+    from agent_cli.background import BackgroundTaskStore
+
+    store = BackgroundTaskStore(tmp_path / "cli.sqlite")
+    store.register_owner("dead-owner", process_id=99999999)
+    store.create_task(
+        task_id="bg_dead",
+        session_id="session-dead",
+        title="Dead",
+        prompt_preview="work",
+        owner_id="dead-owner",
+    )
+
+    results = run_health_checks(workdir=str(tmp_path), cli_home=tmp_path)
+    background = next(item for item in results if item.name == "Background Tasks")
+
+    assert background.status == "WARN"
+    assert "dead" in background.message.lower() or "stale" in background.message.lower()
 
 
 def test_doctor_reports_config_and_dotenv_paths(tmp_path, monkeypatch):
