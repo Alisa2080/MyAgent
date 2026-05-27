@@ -161,3 +161,21 @@ def test_build_skill_invocation_message_includes_content_and_supporting_files():
     assert "# Python Debug" in message
     assert "- references/example.md" in message
     assert "User request:\nfix traceback" in message
+
+
+def test_readme_agent_cli_docs_cover_current_capabilities():
+    from pathlib import Path
+
+    text = Path("README.md").read_text(encoding="utf-8")
+
+    assert "--profile" in text
+    assert "config.yaml" in text
+    assert "/background" in text
+    assert "/tasks" in text
+    assert "/queue" in text
+    assert "/steer" in text
+    assert "/approve" in text
+    assert "/stop" in text
+    assert "logs" in text.lower()
+    assert "OPENAI_API_KEY" in text
+    assert "edit JSON" in text or "edit" in text

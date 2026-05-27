@@ -130,47 +130,135 @@ Cron output is saved under the configured Hermes home. `deliver="origin"` queues
 
 ## Agent CLI
 
-This repository includes a minimal local CLI for the LangGraph agent:
+This repository includes a local terminal CLI for the LangGraph agent. It
+supports interactive chat, one-shot questions, session resume, local health
+checks, profile-specific state, skill commands, human approval decisions, and
+in-process background tasks.
 
 Chat and ask modes require the LangGraph SQLite checkpointer package
-(`langgraph-checkpoint-sqlite`) because the MVP stores conversation state in
-SQLite. `sessions` and `--help` do not require it. Install it in the project
-environment with `python -m pip install langgraph-checkpoint-sqlite`.
+(`langgraph-checkpoint-sqlite`) because conversation state is stored in SQLite.
+`sessions`, `doctor`, and `--help` do not need to start an agent model call.
 
 ```bash
 python -m agent_cli
+python -m agent_cli chat --resume <session_id>
 python -m agent_cli ask "Summarize this repository"
 python -m agent_cli sessions
-python -m agent_cli chat --resume <session_id>
+python -m agent_cli doctor --workdir /home/miku/projects/langchain
 ```
 
-The CLI stores LangGraph checkpoints and lightweight session metadata in
-`~/.langchain-agent/cli.sqlite` by default. Set `AGENT_CLI_HOME` to place this
-state elsewhere.
+Public options can be passed before or after a subcommand:
 
-Inside chat, use `/help` to list slash commands. The MVP supports basic
-approve/reject prompts for human-in-the-loop interrupts.
+```bash
+python -m agent_cli --profile dev doctor --workdir /repo
+python -m agent_cli doctor --profile dev --workdir /repo
+python -m agent_cli ask --model gpt-4.1 "hello"
+```
+
+Options:
+
+- `--workdir <path>`: workspace directory for the CLI session.
+- `--model <name>`: model display metadata for session lists and status.
+- `--profile, -p <name>`: use `~/.langchain-agent/profiles/<name>` as CLI home
+  unless `AGENT_CLI_HOME` is explicitly set.
+
+State locations:
+
+- Default CLI home: `~/.langchain-agent`
+- Override: `AGENT_CLI_HOME=/path/to/home`
+- SQLite database: `<cli_home>/cli.sqlite`
+- Prompt history: `<cli_home>/history.txt`
+- Logs: `<cli_home>/logs/agent.log` and `<cli_home>/logs/errors.log`
+
+Optional `<cli_home>/config.yaml`:
+
+```yaml
+display:
+  markdown: render
+  theme: default
+model:
+  name: gpt-4.1
+session:
+  default_title: New session
+```
+
+Inside chat, use `/help` to list slash commands.
+
+Session commands:
+
+- `/status` - Show session metadata, workdir, model, profile, storage paths, and message counts.
+- `/title <name>` - Set session title.
+- `/history [N]` - Show filtered user/assistant history.
+- `/export <path.md>` - Export filtered history to Markdown.
+- `/new` - Start a new session.
+- `/resume <session_id>` - Resume a previous session.
+- `/sessions` - List recent sessions.
+
+Background commands:
+
+- `/background <prompt>` - Start an in-process background task in a new session.
+- `/tasks` - List background tasks.
+- `/queue` - Show active background work.
+- `/steer <task_id> <message>` - Queue a steering message for a task.
+- `/approve <task_id>` - Continue a task waiting for human approval.
+- `/stop <task_id>` - Request cooperative stop.
+
+Skill and utility commands:
+
+- `/skills` - List available local skills and dynamic skill slash commands.
+- `/skill <name>` - Show skill details.
+- `/doctor` - Run local health checks.
+- `/clear` - Clear the terminal.
+- `/exit` - Exit the CLI.
+
+Human approval prompts support approving, rejecting with a message, editing tool
+arguments as JSON, responding to the agent, and approving or rejecting all
+remaining requests.
+
+`python -m agent_cli doctor` prints stable `OK`, `WARN`, and `FAIL` lines. WARN
+does not make the command fail; any FAIL exits with code `1`.
+
+Troubleshooting:
+
+- Missing `langgraph-checkpoint-sqlite`: install it in the project environment.
+- Missing `OPENAI_API_KEY`: `doctor` reports WARN; chat may still fail if the configured model requires OpenAI.
+- Malformed `config.yaml`: `doctor` reports FAIL and chat startup returns code `2`.
+- SQLite or CLI home not writable: choose another `AGENT_CLI_HOME` or fix permissions.
+- Unknown session id: run `python -m agent_cli sessions` and retry with a listed id.
+- Stale background task warnings: restart the CLI and inspect `/tasks`; stale rows are metadata only unless a live worker exists.
 
 ## CLI Commands
 
 The Agent CLI supports these slash commands:
 
 ### Session Commands
-- `/status` - Show current session status
-- `/title <name>` - Set session title
-- `/history [N]` - Show session history (optionally limit to N messages)
-- `/export <path.md>` - Export session history to Markdown file
+- `/status` - Show session metadata, workdir, model, profile, storage paths, and message counts.
+- `/title <name>` - Set session title.
+- `/history [N]` - Show filtered user/assistant history.
+- `/export <path.md>` - Export filtered history to Markdown.
+- `/new` - Start a new session.
+- `/resume <session_id>` - Resume a previous session.
+- `/sessions` - List recent sessions.
+
+### Background Commands
+- `/background <prompt>` - Start an in-process background task in a new session.
+- `/tasks` - List all background tasks.
+- `/queue` - Show active background work.
+- `/steer <task_id> <message>` - Queue a steering message for a task.
+- `/approve <task_id>` - Continue a task waiting for human approval.
+- `/stop <task_id>` - Request cooperative stop.
 
 ### Navigation Commands
-- `/new` - Start a new session
-- `/resume <session_id>` - Resume a previous session
-- `/sessions` - List recent sessions
+- `/new` - Start a new session.
+- `/resume <session_id>` - Resume a previous session.
+- `/sessions` - List recent sessions.
 
-### Info Commands
-- `/help` - Show available commands
-- `/doctor` - Run health checks
-- `/skills` - List available skills
-- `/skill <name>` - Show skill details
+### Skill and Utility Commands
+- `/skills` - List available local skills and dynamic skill slash commands.
+- `/skill <name>` - Show skill details.
+- `/doctor` - Run local health checks.
+- `/clear` - Clear the terminal.
+- `/exit` - Exit the CLI.
 
 ### Tab Completion
 Type `/` followed by a partial command to see completions:
