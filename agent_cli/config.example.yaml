@@ -1,0 +1,7 @@
+display:
+  markdown: render
+  theme: default
+model:
+  name: null
+session:
+  default_title: New session

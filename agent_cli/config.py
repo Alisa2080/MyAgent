@@ -12,7 +12,14 @@ try:
 except ModuleNotFoundError:
     yaml = None
 
-from agent_cli.theme import SUPPORTED_THEMES
+from agent_cli.config_schema import (
+    DISPLAY_MARKDOWN_VALUES,
+    DISPLAY_THEME_VALUES,
+    ConfigValidationError,
+    config_to_dict,
+    parse_config,
+    set_config_path_value,
+)
 
 
 @dataclass(frozen=True)
@@ -28,8 +35,6 @@ class RuntimeSettings:
 
 
 PROFILE_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
-DISPLAY_MARKDOWN_VALUES = {"render", "strip", "raw"}
-DISPLAY_THEME_VALUES = set(SUPPORTED_THEMES)
 
 
 @dataclass(frozen=True)
@@ -89,33 +94,31 @@ def load_config_file(path: Path) -> dict[str, Any]:
     return data
 
 
+def load_normalized_config(cli_home: Path):
+    config_path = cli_home / "config.yaml"
+    raw = load_config_file(config_path)
+    return parse_config(raw), raw, config_path
+
+
+def save_config_file(path: Path, data: dict[str, Any]) -> None:
+    if yaml is None:
+        raise ConfigError("PyYAML is required to write config.yaml.")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(yaml.safe_dump(data, sort_keys=True), encoding="utf-8")
+
+
 def settings_from_config(
     *,
     cli_home: Path,
     profile: str | None,
     cli_model: str | None,
 ) -> RuntimeSettings:
-    config_path = cli_home / "config.yaml"
-    config = load_config_file(config_path)
-    model_section = config.get("model") if isinstance(config.get("model"), dict) else {}
-    session_section = config.get("session") if isinstance(config.get("session"), dict) else {}
-    display_section = config.get("display") if isinstance(config.get("display"), dict) else {}
+    try:
+        parsed, _, config_path = load_normalized_config(cli_home)
+    except ConfigValidationError as exc:
+        raise ConfigError(str(exc)) from exc
 
-    default_title = str(session_section.get("default_title") or "New session")
-    display_markdown = str(display_section.get("markdown") or "render")
-    if display_markdown not in DISPLAY_MARKDOWN_VALUES:
-        raise ConfigError(
-            "display.markdown must be one of: "
-            + ", ".join(sorted(DISPLAY_MARKDOWN_VALUES))
-        )
-    raw_display_theme = display_section.get("theme", "default")
-    display_theme = "default" if raw_display_theme is None else str(raw_display_theme)
-    if display_theme not in DISPLAY_THEME_VALUES:
-        raise ConfigError(
-            "display.theme must be one of: "
-            + ", ".join(sorted(DISPLAY_THEME_VALUES))
-        )
-    model_name = cli_model or model_section.get("name")
+    model_name = cli_model or parsed.model.name
     if model_name is not None:
         model_name = str(model_name)
 
@@ -123,9 +126,9 @@ def settings_from_config(
         profile=profile,
         cli_home=cli_home,
         model_name=model_name,
-        default_title=default_title,
-        display_markdown=display_markdown,
-        display_theme=display_theme,
+        default_title=parsed.session.default_title,
+        display_markdown=parsed.display.markdown,
+        display_theme=parsed.display.theme,
         config_path=config_path,
     )
 
