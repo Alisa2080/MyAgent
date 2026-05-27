@@ -67,6 +67,10 @@ class CommandContext:
     def last_usage_metadata(self):
         return self.cli.last_usage_metadata
 
+    @property
+    def default_title(self):
+        return self.cli.default_title
+
     def ensure_session(self, first_message: str | None = None) -> str:
         return self.cli.ensure_session(first_message)
 

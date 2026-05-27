@@ -11,12 +11,12 @@ from agent_cli.command_handlers.session import session_handlers
 from agent_cli.command_handlers.skills import skills_handlers
 
 if TYPE_CHECKING:
-    from agent_cli.repl import AgentCLI
+    from agent_cli.command_context import CommandContext
 
-CommandHandler = Callable[["AgentCLI", str, CommandDef], str | None]
+CommandHandler = Callable[["CommandContext", str, CommandDef], str | None]
 
 
-def build_command_handlers(cli: "AgentCLI") -> dict[str, CommandHandler]:
+def build_command_handlers(ctx: "CommandContext") -> dict[str, CommandHandler]:
     handlers: dict[str, CommandHandler] = {}
     for group in (
         debug_handlers(),
