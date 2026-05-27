@@ -515,3 +515,65 @@ def test_job_summary_includes_required_fields():
     summary = cronjob_tool._format_job(_job())
 
     assert set(summary) == REQUIRED_SUMMARY_FIELDS
+
+
+def test_run_cronjob_action_accepts_explicit_origin_thread(monkeypatch):
+    cronjob_tool = _cronjob_tool()
+    captured = {}
+
+    def fake_create_job(**kwargs):
+        captured.update(kwargs)
+        return {
+            "id": "job-1",
+            "name": "report",
+            "prompt": "write report",
+            "schedule_display": "30m",
+            "repeat": {"times": 1, "completed": 0},
+            "deliver": "origin",
+            "next_run_at": "2026-05-27T12:00:00+08:00",
+            "last_run_at": None,
+            "last_status": None,
+            "enabled": True,
+            "state": "scheduled",
+            "skills": [],
+            "workdir": None,
+        }
+
+    monkeypatch.setattr(cronjob_tool, "create_job", fake_create_job)
+
+    result = cronjob_tool.run_cronjob_action(
+        "create",
+        origin_thread_id="session-1",
+        prompt="write report",
+        schedule="30m",
+        deliver="origin",
+        name="report",
+    )
+
+    assert result["success"] is True
+    assert captured["origin"] == {"thread_id": "session-1"}
+
+
+def test_cronjob_tool_uses_shared_action_helper(monkeypatch):
+    cronjob_tool = _cronjob_tool()
+    calls = []
+
+    def fake_action(action, *, origin_thread_id=None, **kwargs):
+        calls.append((action, origin_thread_id, kwargs))
+        return {"success": True, "message": "ok"}
+
+    monkeypatch.setattr(cronjob_tool, "run_cronjob_action", fake_action)
+
+    class Runtime:
+        config = {"configurable": {"thread_id": "thread-1"}}
+
+    message = cronjob_tool.cronjob.func(
+        action="list",
+        runtime=Runtime(),
+        include_disabled=True,
+    )
+
+    assert calls[0][0] == "list"
+    assert calls[0][1] == "thread-1"
+    assert calls[0][2]["include_disabled"] is True
+    assert "ok" in str(message.content)
