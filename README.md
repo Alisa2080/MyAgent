@@ -239,6 +239,10 @@ The Agent CLI supports these slash commands:
 - `/new` - Start a new session.
 - `/resume <session_id>` - Resume a previous session.
 - `/sessions` - List recent sessions.
+- `/retry [new_text]` - Resend the last user message, optionally with new text.
+
+### Clipboard Commands
+- `/copy` - Copy the last assistant response to clipboard via OSC 52.
 
 ### Background Commands
 - `/background <prompt>` - Start an in-process background task in a new session.
@@ -256,6 +260,7 @@ The Agent CLI supports these slash commands:
 ### Skill and Utility Commands
 - `/skills` - List available local skills and dynamic skill slash commands.
 - `/skill <name>` - Show skill details.
+- `/usage <text>` - Estimate tokens for the given text.
 - `/doctor` - Run local health checks.
 - `/clear` - Clear the terminal.
 - `/exit` - Exit the CLI.
@@ -266,3 +271,14 @@ Type `/` followed by a partial command to see completions:
 - Session IDs (for `/resume`)
 - Skill names (for `/skill`)
 - File paths (for `/export`)
+
+### Terminal Input Features
+
+#### Bracketed Paste Support
+The CLI handles bracketed paste mode sequences from terminals. Pastes with 5+ lines are automatically collapsed and saved to `<cli_home>/pastes/` to keep the prompt clean.
+
+#### File Drop Detection
+When a file path is entered as input, the CLI detects it and formats it as `[User referenced file: <path>]` for better agent understanding.
+
+#### Input Sanitization
+Terminal control sequences (CPR, DSR, bracketed paste wrappers) are automatically stripped from input.
