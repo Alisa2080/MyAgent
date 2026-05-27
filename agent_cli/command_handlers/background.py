@@ -7,6 +7,7 @@ def background_handlers():
     return {
         "background": handle_background,
         "tasks": handle_tasks,
+        "tail": handle_tail,
         "queue": handle_queue,
         "steer": handle_steer,
         "stop": handle_stop,
@@ -64,6 +65,26 @@ def render_task_detail(cli, task_id):
     if record.last_error:
         lines.append(f"  Error: {record.last_error}")
     lines.append(f"  Resume: /resume {record.session_id}")
+    return "\n".join(lines)
+
+
+def handle_tail(cli, arg, command):
+    task_id = arg.strip()
+    if not task_id:
+        return "Usage: /tail <task_id>"
+    registry = cli._require_background_registry()
+    record = registry.get_task(task_id)
+    if record is None:
+        return f"Unknown background task: {task_id}"
+    steers = registry.get_steers(task_id, limit=20)
+    lines = [f"Tail for {record.task_id}:"]
+    lines.append(f"  Result: {record.last_result_preview or '-'}")
+    lines.append(f"  Error: {record.last_error or '-'}")
+    lines.append("  Steers:")
+    if not steers:
+        lines.append("    -")
+    for steer in steers:
+        lines.append(f"    {steer.id} {steer.status} {steer.message}")
     return "\n".join(lines)
 
 

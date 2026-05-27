@@ -129,6 +129,26 @@ def test_background_store_queues_and_consumes_steer(tmp_path: Path):
     assert store.consume_pending_steers("bg_12345678") == []
 
 
+def test_background_store_lists_recent_steers(tmp_path):
+    from agent_cli.background import BackgroundTaskStore
+
+    store = BackgroundTaskStore(tmp_path / "cli.sqlite")
+    store.create_task(
+        task_id="bg_1",
+        session_id="s1",
+        title="Task",
+        prompt_preview="Prompt",
+        owner_id="owner",
+    )
+    first = store.add_steer("bg_1", "first")
+    second = store.add_steer("bg_1", "second")
+
+    steers = store.get_steers("bg_1", limit=1)
+
+    assert [item.id for item in steers] == [second.id]
+    assert steers[0].message == "second"
+
+
 from agent_cli.session_store import SessionStore
 
 

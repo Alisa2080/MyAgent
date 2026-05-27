@@ -64,6 +64,12 @@ COMMAND_REGISTRY: tuple[CommandDef, ...] = (
         args_hint="<prompt>",
     ),
     CommandDef("tasks", "List background tasks.", "Background", aliases=("agents",)),
+    CommandDef(
+        "tail",
+        "Show recent background task result, error, and steer messages.",
+        "Background",
+        args_hint="<task_id>",
+    ),
     CommandDef("queue", "Show active background work.", "Background"),
     CommandDef(
         "steer",

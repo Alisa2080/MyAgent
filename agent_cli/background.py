@@ -200,6 +200,12 @@ class BackgroundTaskRegistry:
             raise ValueError(f"cannot steer background task in {record.status} state")
         return self.store.add_steer(task_id, message)
 
+    def get_task(self, task_id: str) -> BackgroundTaskRecord | None:
+        return self.store.get_task(task_id)
+
+    def get_steers(self, task_id: str, *, limit: int = 20) -> list[BackgroundSteerRecord]:
+        return self.store.get_steers(task_id, limit=limit)
+
     def join(self, task_id: str, *, timeout: float | None = None) -> None:
         with self._lock:
             runtime = self._runtime.get(task_id)
@@ -1045,3 +1051,17 @@ class BackgroundTaskStore:
                 (task_id, now, task_id),
             )
         return [self._steer_from_row(row) for row in rows]
+
+    def get_steers(self, task_id: str, *, limit: int = 20) -> list[BackgroundSteerRecord]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT id, task_id, message, status, created_at, consumed_at
+                FROM cli_background_steers
+                WHERE task_id = ?
+                ORDER BY id DESC
+                LIMIT ?
+                """,
+                (task_id, limit),
+            ).fetchall()
+        return [self._steer_from_row(row) for row in reversed(rows)]

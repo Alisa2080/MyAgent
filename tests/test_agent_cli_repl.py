@@ -1157,3 +1157,48 @@ def test_display_markdown_strip_formats_live_assistant_output():
     )
 
     assert cli.submit_message("hi") == "hello world"
+
+
+def test_tasks_with_task_id_renders_detail_and_resume_hint():
+    registry = FakeBackgroundRegistry()
+    record = registry.start("do work")
+    record.status = "completed"
+    record.last_result_preview = "done"
+    cli = AgentCLI(
+        session_store=FakeStore(),
+        checkpointer=None,
+        agent_factory=lambda checkpointer: "agent",
+        runner=lambda agent, input_data, config: {},
+        workdir="/repo",
+        model_name=None,
+        background_registry=registry,
+    )
+
+    output = cli.handle_command(f"/tasks {record.task_id}")
+
+    assert record.task_id in output
+    assert "completed" in output
+    assert f"/resume {record.session_id}" in output
+
+
+def test_tail_renders_result_error_and_steers():
+    registry = FakeBackgroundRegistry()
+    record = registry.start("do work")
+    record.last_result_preview = "latest result"
+    record.last_error = "latest error"
+    registry.steer(record.task_id, "extra instruction")
+    cli = AgentCLI(
+        session_store=FakeStore(),
+        checkpointer=None,
+        agent_factory=lambda checkpointer: "agent",
+        runner=lambda agent, input_data, config: {},
+        workdir="/repo",
+        model_name=None,
+        background_registry=registry,
+    )
+
+    output = cli.handle_command(f"/tail {record.task_id}")
+
+    assert "latest result" in output
+    assert "latest error" in output
+    assert "extra instruction" in output
