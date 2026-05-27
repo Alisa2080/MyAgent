@@ -22,21 +22,23 @@ def test_web_search_error_returns_tool_message(monkeypatch):
 
     monkeypatch.setattr(web, "_get_client", lambda: (_ for _ in ()).throw(RuntimeError("missing key")))
 
-    result = web.web_search.func("langchain", limit=3)
+    result = web.web_search.func("langchain", limit=3, runtime=_runtime("call-web-error"))
 
     _assert_tool_result(result, "web_search", False)
     assert result.artifact["error"]["code"] == "tool_error"
     assert "missing key" in result.content
+    assert result.tool_call_id == "call-web-error"
 
 
 def test_skills_list_returns_tool_message():
     from agent_tools.public.skills import skills_list
 
-    result = skills_list.func()
+    result = skills_list.func(runtime=_runtime("call-skills"))
 
     _assert_tool_result(result, "skills_list", True)
     assert "skills" in result.artifact["data"]
     assert "categories" in result.artifact["data"]
+    assert result.tool_call_id == "call-skills"
 
 
 def test_task_empty_summary_returns_tool_message(monkeypatch):
@@ -48,10 +50,33 @@ def test_task_empty_summary_returns_tool_message(monkeypatch):
 
     monkeypatch.setattr(delegation, "build_task_subagent", lambda: FakeAgent())
 
-    result = delegation.task.func("inspect repo", "empty")
+    result = delegation.task.func("inspect repo", "empty", runtime=_runtime("call-task-empty"))
 
     _assert_tool_result(result, "task", True)
     assert result.artifact["data"]["description"] == "empty"
+    assert result.tool_call_id == "call-task-empty"
+
+
+def test_public_tool_entrypoints_register_runtime_for_injection():
+    import agent_core.delegation as delegation
+    import agent_tools.public.memory as memory
+    import agent_tools.public.skill_manage_impl as skill_manage_impl
+    import agent_tools.public.skills as skills
+    import agent_tools.public.web as web
+
+    tools = [
+        delegation.task,
+        web.web_search,
+        web.web_fetch,
+        skills.skills_list,
+        skills.skill_view,
+        memory.memory_manage,
+        skill_manage_impl.skill_manage,
+    ]
+
+    for tool in tools:
+        assert "runtime" in tool._injected_args_keys, tool.name
+        assert "runtime" not in tool.args, tool.name
 
 
 def test_web_search_preserves_runtime_tool_call_id(monkeypatch):

@@ -42,7 +42,8 @@ def _safe_get(obj: Any, field: str, default: Any = "") -> Any:
 def web_search(
     query: str,
     limit: int = 5,
-    runtime: ToolRuntime | None = None,
+    *,
+    runtime: ToolRuntime,
 ) -> ToolMessage:
     """Search the web with TinyFish. Returns JSON: status, message, data."""
     try:
@@ -73,7 +74,8 @@ def web_search(
 def web_fetch(
     urls: list[str],
     max_chars_per_url: int = 4000,
-    runtime: ToolRuntime | None = None,
+    *,
+    runtime: ToolRuntime,
 ) -> ToolMessage:
     """Fetch page contents with TinyFish. Returns JSON: status, message, data."""
     try:

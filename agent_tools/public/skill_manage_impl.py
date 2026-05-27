@@ -96,17 +96,18 @@ def resolve_support_file(skill_dir: Path, file_path: str) -> Path | str:
 
 @tool("skill_manage", args_schema=SkillManageInput)
 def skill_manage(
-      action: str,
-      name: str,
-      content: str = "",
-      category: str = "",
-      file_path: str = "",
-      file_content: str = "",
-      old_string: str = "",
-      new_string: str = "",
-      replace_all: bool = False,
-      runtime: ToolRuntime | None = None,
-  ) -> ToolMessage:
+    action: str,
+    name: str,
+    content: str = "",
+    category: str = "",
+    file_path: str = "",
+    file_content: str = "",
+    old_string: str = "",
+    new_string: str = "",
+    replace_all: bool = False,
+    *,
+    runtime: ToolRuntime,
+) -> ToolMessage:
     """Manage reusable skills. Actions: create, patch, edit, delete, write_file, remove_file."""
     def tool_failure(tool: str, message: str, **kwargs) -> ToolMessage:
         return _tool_failure(tool, message, runtime=runtime, **kwargs)

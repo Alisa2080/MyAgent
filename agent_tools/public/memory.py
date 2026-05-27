@@ -51,7 +51,8 @@ def memory_manage(
     target: str,
     content: str = "",
     old_text: str = "",
-    runtime: ToolRuntime | None = None,
+    *,
+    runtime: ToolRuntime,
 ) -> ToolMessage:
     """Save, replace, or remove durable memory. target must be 'memory' or 'user'."""
     try:

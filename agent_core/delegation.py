@@ -62,7 +62,8 @@ def build_task_subagent():
 def task(
     prompt: str,
     description: str = "subtask",
-    runtime: ToolRuntime | None = None,
+    *,
+    runtime: ToolRuntime,
 ) -> ToolMessage:
     """Spawn a fresh-context read-only subagent for analysis, exploration, or review."""
     logger.info("task: starting delegated subagent task=%s", description)

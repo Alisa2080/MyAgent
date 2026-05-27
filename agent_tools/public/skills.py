@@ -192,7 +192,8 @@ def _find_skill(name: str) -> dict[str, Any] | None:
 @tool("skills_list", args_schema=SkillsListInput)
 def skills_list(
     category: str = "",
-    runtime: ToolRuntime | None = None,
+    *,
+    runtime: ToolRuntime,
 ) -> ToolMessage:
     """List available skills by name, description, and category. Use skill_view to load full instructions."""
     skills = []
@@ -229,7 +230,8 @@ def skills_list(
 def skill_view(
     name: str,
     file_path: str = "",
-    runtime: ToolRuntime | None = None,
+    *,
+    runtime: ToolRuntime,
 ) -> ToolMessage:
     """Load a skill's SKILL.md content, or a supporting file under references/templates/scripts/assets."""
     meta = _find_skill(name)
