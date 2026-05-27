@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 import sys
 import time
 from collections.abc import Callable
@@ -8,28 +7,18 @@ from typing import Any
 
 from langgraph.types import Command
 
-from agent_cli.commands import COMMAND_LOOKUP, render_help, resolve_command
-from agent_cli.doctor import render_doctor_output, run_health_checks
+from agent_cli.commands import COMMAND_LOOKUP, resolve_command
 from agent_cli.approval import collect_approval_decisions
 from agent_cli.command_handlers import build_command_handlers
 from agent_cli.interrupts import (
-    extract_interrupt_requests,
     extract_interrupt_review_requests,
     has_interrupt,
 )
-from agent_cli.rendering import format_sessions, latest_ai_text
-from agent_cli.session import (
-    Session,
-    render_session_status,
-    update_session_title,
-    render_history,
-    export_to_markdown,
-)
+from agent_cli.rendering import latest_ai_text
+from agent_cli.session import Session
 from agent_cli.session_store import SessionStore
 from agent_cli.text_input import (
-    format_osc52,
     prepare_user_message,
-    render_usage_summary,
     sanitize_terminal_input,
 )
 
@@ -134,7 +123,11 @@ class AgentCLI:
             model=self.model_name,
             title=title,
         )
-        self.session_id = record.session_id
+        self._set_session(record.session_id)
+        return self.session_id
+
+    def _set_session(self, session_id: str) -> None:
+        self.session_id = session_id
         self.session = Session(
             session_store=self.session_store,
             session_id=self.session_id,
@@ -144,9 +137,10 @@ class AgentCLI:
             profile=self.profile,
             display_theme=self.display_theme,
             cli_home=self.cli_home,
-            db_path=str(self.session_store.db_path) if hasattr(self.session_store, "db_path") else None,
+            db_path=str(self.session_store.db_path)
+            if hasattr(self.session_store, "db_path")
+            else None,
         )
-        return self.session_id
 
     def submit_message(self, text: str) -> str:
         processed = prepare_user_message(
@@ -252,236 +246,10 @@ class AgentCLI:
             return f"Unhandled command: /{command.name}"
         return handler(self, arg, command)
 
-    def _legacy_handle_command(self, command, arg: str) -> str | None:
-        if command.name == "background":
-            return self._handle_background(arg)
-        if command.name == "tasks":
-            return self._handle_tasks(active_only=False)
-        if command.name == "queue":
-            return self._handle_tasks(active_only=True)
-        if command.name == "steer":
-            return self._handle_steer(arg)
-        if command.name == "stop":
-            return self._handle_stop(arg)
-        if command.name == "approve":
-            return self._handle_approve(arg)
-        if command.name == "help":
-            return render_help()
-        if command.name == "doctor":
-            results = run_health_checks(workdir=self.workdir)
-            return render_doctor_output(results)
-        if command.name == "new":
-            record = self.session_store.create_session(
-                workdir=self.workdir,
-                model=self.model_name,
-                title=self.default_title,
-            )
-            self.session_id = record.session_id
-            self.session = Session(
-                session_store=self.session_store,
-                session_id=self.session_id,
-                model_name=self.model_name,
-                session_store_for_checkpoints=self.checkpointer,
-                workdir=self.workdir,
-                profile=self.profile,
-                display_theme=self.display_theme,
-                cli_home=self.cli_home,
-                db_path=str(self.session_store.db_path) if hasattr(self.session_store, "db_path") else None,
-            )
-            return f"Started session: {record.session_id}"
-        if command.name == "sessions":
-            return format_sessions(self.session_store.list_sessions())
-        if command.name == "resume":
-            if not arg:
-                return "Usage: /resume <session_id>"
-            record = self.session_store.get_session(arg)
-            if record is None:
-                return f"Unknown session: {arg}"
-            self.session_store.touch_session(record.session_id)
-            self.session_id = record.session_id
-            self.session = Session(
-                session_store=self.session_store,
-                session_id=self.session_id,
-                model_name=self.model_name,
-                session_store_for_checkpoints=self.checkpointer,
-                workdir=self.workdir,
-                profile=self.profile,
-                display_theme=self.display_theme,
-                cli_home=self.cli_home,
-                db_path=str(self.session_store.db_path) if hasattr(self.session_store, "db_path") else None,
-            )
-            return f"Resumed session: {record.session_id}"
-        if command.name == "status":
-            if self.session is None:
-                self.ensure_session()
-            return render_session_status(self.session)
-        if command.name == "title":
-            if self.session is None:
-                self.ensure_session()
-            return update_session_title(self.session, arg)
-        if command.name == "history":
-            if self.session is None:
-                self.ensure_session()
-            limit = None
-            if arg:
-                try:
-                    limit = int(arg)
-                except ValueError:
-                    return "Usage: /history [N]"
-            return render_history(self.session, limit=limit)
-        if command.name == "export":
-            if self.session is None:
-                self.ensure_session()
-            if not arg:
-                return "Usage: /export <path.md>\n"
-            return export_to_markdown(self.session, arg)
-        if command.name == "clear":
-            os.system("cls" if os.name == "nt" else "clear")
-            return None
-        if command.name == "skills":
-            return self._render_skills()
-        if command.name == "skill":
-            return self._render_skill(arg)
-        if command.name == "copy":
-            return self._handle_copy(arg)
-        if command.name == "retry":
-            return self._handle_retry()
-        if command.name == "usage":
-            return self._handle_usage(arg)
-        if command.name == "exit":
-            raise EOFError
-        return f"Unhandled command: /{command.name}"
-
     def _require_background_registry(self):
         if self.background_registry is None:
             raise RuntimeError("background tasks are not configured")
         return self.background_registry
-
-    def _handle_background(self, arg: str) -> str:
-        if not arg.strip():
-            return "Usage: /background <prompt>"
-        record = self._require_background_registry().start(arg)
-        return f"Started background task {record.task_id} · session {record.session_id}"
-
-    def _handle_tasks(self, *, active_only: bool = False) -> str:
-        records = self._require_background_registry().list_tasks(active_only=active_only)
-        if not records:
-            return "No background tasks."
-        lines = ["Background Tasks:"]
-        for record in records:
-            detail = (
-                record.last_error
-                or record.last_result_preview
-                or getattr(record, "prompt_preview", None)
-                or ""
-            )
-            lines.append(
-                f"  {record.task_id}  {record.status:<16} {record.title} "
-                f"session={record.session_id} steer={record.pending_steer_count} {detail}".rstrip()
-            )
-        return "\n".join(lines)
-
-    def _handle_steer(self, arg: str) -> str:
-        parts = arg.split(maxsplit=1)
-        if len(parts) != 2:
-            return "Usage: /steer <task_id> <message>"
-        steer = self._require_background_registry().steer(parts[0], parts[1])
-        return f"Queued steer {steer.id} for {steer.task_id}"
-
-    def _handle_stop(self, arg: str) -> str:
-        task_id = arg.strip()
-        if not task_id:
-            return "Usage: /stop <task_id>"
-        record = self._require_background_registry().stop(task_id)
-        if record.status in {"completing", "completed", "failed", "stopped"}:
-            return f"Background task {record.task_id} is already {record.status}"
-        return f"Stop requested for {record.task_id}"
-
-    def _handle_approve(self, arg: str) -> str:
-        task_id = arg.strip()
-        if not task_id:
-            return "Usage: /approve <task_id>"
-        registry = self._require_background_registry()
-        requests = registry.approval_requests(task_id)
-        resume_value = collect_approval_decisions(requests)
-        registry.approve(task_id, resume_value)
-        return f"Approved background task {task_id}"
-
-    def _render_skills(self) -> str:
-        if self.skill_discovery_provider is not None:
-            discovery = self.skill_discovery_provider()
-        else:
-            from agent_cli.skill_commands import load_skill_discovery
-
-            discovery = load_skill_discovery(built_in_names=set(COMMAND_LOOKUP))
-        if not discovery.entries:
-            return "No skills found."
-        lines = []
-        for entry in discovery.entries:
-            item = entry.skill
-            line = f"{item['name']} - {item.get('description') or ''}".rstrip()
-            if entry.command:
-                line = f"{line} (/{entry.command})"
-            elif entry.note:
-                line = f"{line} ({entry.note})"
-            lines.append(line)
-        return "\n".join(lines)
-
-    def _render_skill(self, name: str) -> str:
-        if not name:
-            return "Usage: /skill <name>"
-        from agent_tools.public.skills import _find_skill
-
-        meta = _find_skill(name)
-        if not meta:
-            return f"Skill not found: {name}"
-        desc = meta.get("description") or ""
-        return f"{meta['name']}\n{desc}".strip()
-
-    def _handle_copy(self, arg: str) -> str:
-        index = 1
-        if arg:
-            try:
-                index = int(arg)
-            except ValueError:
-                return "Usage: /copy [N]"
-        if index < 1:
-            return "Usage: /copy [N]"
-        if index > len(self.assistant_replies):
-            return "No assistant reply available to copy."
-        text = self.assistant_replies[-index]
-        sys.stdout.write(format_osc52(text))
-        sys.stdout.flush()
-        return f"Copied assistant reply {index}."
-
-    def _handle_retry(self) -> str:
-        if not self.last_user_message:
-            return "No user message available to retry."
-        return self.submit_message(self.last_user_message)
-
-    def _handle_usage(self, arg: str) -> str:
-        if arg:
-            return "Usage: /usage"
-        if self.session is None:
-            self.ensure_session()
-        transcript = []
-        if self.session is not None:
-            try:
-                transcript = self.session.transcript()
-            except Exception:
-                transcript = []
-        transcript_text = "\n".join(message.content for message in transcript)
-        return render_usage_summary(
-            session_id=self.session_id or "",
-            model_name=self.model_name,
-            message_count=len(transcript),
-            turn_count=sum(1 for message in transcript if message.role == "user"),
-            transcript_text=transcript_text,
-            checkpointer_available=self.checkpointer is not None,
-            last_call_elapsed_seconds=self.last_call_elapsed_seconds,
-            assistant_reply_count=len(self.assistant_replies),
-            usage_metadata=self.last_usage_metadata,
-        )
 
     def _drain_background_notifications(self) -> None:
         if self.background_registry is None:

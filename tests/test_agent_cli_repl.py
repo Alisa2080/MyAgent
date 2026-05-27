@@ -120,6 +120,23 @@ class FakeBackgroundRegistry:
         self.notifications = []
         return items
 
+    def get_task(self, task_id):
+        return self.records.get(task_id)
+
+    def get_steers(self, task_id, limit=20):
+        return [
+            SimpleNamespace(
+                id=index + 1,
+                task_id=task_id,
+                message=message,
+                status="pending",
+                created_at="now",
+                consumed_at=None,
+            )
+            for index, (stored_task_id, message) in enumerate(self.steers)
+            if stored_task_id == task_id
+        ][-limit:]
+
 
 def test_submit_message_invokes_runner_with_thread_id(monkeypatch):
     calls = []
@@ -289,7 +306,7 @@ def test_handle_steer_stop_and_approve(monkeypatch):
     registry = FakeBackgroundRegistry()
     registry.start("fix tests")
     monkeypatch.setattr(
-        "agent_cli.repl.collect_approval_decisions",
+        "agent_cli.command_handlers.background.collect_approval_decisions",
         lambda requests: {"decisions": [{"type": "approve"}]},
     )
     cli = AgentCLI(
@@ -1086,3 +1103,7 @@ def test_all_builtin_commands_have_registered_handlers():
         if command.effective_handler_key not in handlers
     ]
     assert missing == []
+
+
+def test_agent_cli_no_long_legacy_command_dispatch():
+    assert not hasattr(AgentCLI, "_legacy_handle_command")
