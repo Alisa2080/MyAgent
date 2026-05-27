@@ -465,3 +465,47 @@ def test_main_doctor_returns_1_when_health_check_fails(monkeypatch, tmp_path, ca
         assert code == 1
     finally:
         doctor_module.run_health_checks = original_run
+
+
+def test_parser_accepts_public_options_after_doctor_subcommand():
+    from agent_cli.main import build_parser
+
+    args = build_parser().parse_args(
+        ["doctor", "--workdir", "/tmp/repo", "--profile", "dev", "--model", "m"]
+    )
+
+    assert args.command == "doctor"
+    assert args.workdir == "/tmp/repo"
+    assert args.profile == "dev"
+    assert args.model == "m"
+
+
+def test_parser_accepts_public_options_after_sessions_subcommand():
+    from agent_cli.main import build_parser
+
+    args = build_parser().parse_args(["sessions", "--profile", "dev"])
+
+    assert args.command == "sessions"
+    assert args.profile == "dev"
+
+
+def test_parser_accepts_model_after_ask_subcommand_and_preserves_question():
+    from agent_cli.main import build_parser
+
+    args = build_parser().parse_args(["ask", "--model", "m", "hello", "world"])
+
+    assert args.command == "ask"
+    assert args.model == "m"
+    assert args.question == ["hello", "world"]
+
+
+def test_main_invalid_profile_after_subcommand_returns_code_2(monkeypatch, capsys):
+    monkeypatch.delenv("AGENT_CLI_HOME", raising=False)
+
+    import agent_cli.main as main_module
+
+    code = main_module.main(["sessions", "--profile", "../bad"])
+
+    captured = capsys.readouterr()
+    assert code == 2
+    assert "Invalid profile" in captured.err

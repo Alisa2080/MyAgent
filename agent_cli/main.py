@@ -28,23 +28,59 @@ from agent_cli.skill_commands import load_skill_commands, load_skill_discovery
 from agent_core.terminal_lifecycle import interrupt_terminal_wait_for_thread_id
 
 
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="agent_cli")
+def build_public_options_parser(*, add_help: bool = False) -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(add_help=add_help)
     parser.add_argument("--workdir", default=None, help="Workspace directory for the agent.")
     parser.add_argument("--model", default=None, help="Model display metadata for session list.")
     parser.add_argument("--profile", "-p", default=None, help="Use a named CLI profile.")
+    return parser
+
+
+def _pre_parse_public_options(argv: list[str] | None) -> dict[str, str | None]:
+    """Pre-parse public options to preserve them after subparser parsing.
+
+    argparse has a quirk where subparsers with parents overwrite parent parser
+    values. This workaround preserves values set before the subcommand.
+    """
+    pre_parser = argparse.ArgumentParser(add_help=False)
+    pre_parser.add_argument("--workdir", default=None)
+    pre_parser.add_argument("--model", default=None)
+    pre_parser.add_argument("--profile", "-p", default=None)
+    args, _ = pre_parser.parse_known_args(argv or [])
+    return {"workdir": args.workdir, "model": args.model, "profile": args.profile}
+
+
+def build_parser() -> argparse.ArgumentParser:
+    public_options = build_public_options_parser()
+    parser = argparse.ArgumentParser(prog="agent_cli", parents=[public_options])
 
     subparsers = parser.add_subparsers(dest="command")
 
-    chat = subparsers.add_parser("chat", help="Start interactive chat.")
+    chat = subparsers.add_parser(
+        "chat",
+        help="Start interactive chat.",
+        parents=[public_options],
+    )
     chat.add_argument("--resume", default=None, help="Resume an existing session id.")
 
-    ask = subparsers.add_parser("ask", help="Ask one question and exit.")
-    ask.add_argument("question", nargs="+")
+    ask = subparsers.add_parser(
+        "ask",
+        help="Ask one question and exit.",
+        parents=[public_options],
+    )
     ask.add_argument("--resume", default=None, help="Resume an existing session id.")
+    ask.add_argument("question", nargs="+")
 
-    subparsers.add_parser("sessions", help="List recent sessions.")
-    subparsers.add_parser("doctor", help="Run CLI health checks.")
+    subparsers.add_parser(
+        "sessions",
+        help="List recent sessions.",
+        parents=[public_options],
+    )
+    subparsers.add_parser(
+        "doctor",
+        help="Run CLI health checks.",
+        parents=[public_options],
+    )
     return parser
 
 
@@ -110,6 +146,15 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     command = args.command or "chat"
+
+    # Workaround for argparse parent bug: restore values from pre-parse
+    pre_parsed = _pre_parse_public_options(argv)
+    if pre_parsed["workdir"] is not None:
+        args.workdir = pre_parsed["workdir"]
+    if pre_parsed["model"] is not None:
+        args.model = pre_parsed["model"]
+    if pre_parsed["profile"] is not None:
+        args.profile = pre_parsed["profile"]
 
     db_path = ensure_db_parent()
     cli_home = db_path.parent
