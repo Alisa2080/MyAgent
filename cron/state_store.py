@@ -611,3 +611,8 @@ class StateStore:
                     (now_actual, row["job_id"]),
                 )
         return len(rows)
+
+    def runs_for_job(self, job_id: str) -> list[dict[str, Any]]:
+        with self._connect() as conn:
+            rows = conn.execute("SELECT * FROM runs WHERE job_id = ? ORDER BY created_at", (job_id,)).fetchall()
+        return [dict(row) for row in rows]
