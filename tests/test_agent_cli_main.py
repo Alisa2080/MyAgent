@@ -702,3 +702,77 @@ def test_main_cron_tick_returns_service_exit_code(monkeypatch, tmp_path, capsys)
 
     assert code == 1
     assert "failed=1" in capsys.readouterr().out
+
+
+def test_main_cron_doctor(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("AGENT_CLI_HOME", str(tmp_path))
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    import agent_cli.main as main_module
+    from agent_cli.cron_commands import CronCommandResult
+
+    monkeypatch.setattr(
+        main_module.cron_commands,
+        "cron_doctor",
+        lambda: CronCommandResult("doctor ok", exit_code=0),
+    )
+
+    code = main_module.main(["cron", "doctor"])
+
+    assert code == 0
+    assert "doctor ok" in capsys.readouterr().out
+
+
+def test_main_cron_doctor_fail(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("AGENT_CLI_HOME", str(tmp_path))
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    import agent_cli.main as main_module
+    from agent_cli.cron_commands import CronCommandResult
+
+    monkeypatch.setattr(
+        main_module.cron_commands,
+        "cron_doctor",
+        lambda: CronCommandResult("FAIL: something bad", exit_code=1),
+    )
+
+    code = main_module.main(["cron", "doctor"])
+
+    assert code == 1
+    assert "FAIL" in capsys.readouterr().out
+
+
+def test_main_cron_test_delivery(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("AGENT_CLI_HOME", str(tmp_path))
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    import agent_cli.main as main_module
+    from agent_cli.cron_commands import CronCommandResult
+
+    monkeypatch.setattr(
+        main_module.cron_commands,
+        "test_delivery",
+        lambda **kwargs: CronCommandResult(f"target={kwargs['target']}", exit_code=0),
+    )
+
+    code = main_module.main(["cron", "test-delivery", "--target", "local"])
+
+    assert code == 0
+    assert "target=local" in capsys.readouterr().out
+
+
+def test_main_cron_test_delivery_requires_target(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("AGENT_CLI_HOME", str(tmp_path))
+
+    import agent_cli.main as main_module
+
+    try:
+        main_module.main(["cron", "test-delivery"])
+    except SystemExit as exc:
+        code = exc.code
+    else:
+        code = 0
+
+    captured = capsys.readouterr()
+    assert code == 2
+    assert "--target" in captured.err

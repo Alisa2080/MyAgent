@@ -155,6 +155,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     cron_subparsers.add_parser("status", parents=[public_options])
     cron_subparsers.add_parser("tick", parents=[public_options])
+    cron_subparsers.add_parser("doctor", parents=[public_options])
+
+    cron_test_delivery = cron_subparsers.add_parser("test-delivery", parents=[public_options])
+    cron_test_delivery.add_argument("--target", required=True)
+    cron_test_delivery.add_argument("--session-id", dest="session_id")
 
     return parser
 
@@ -293,6 +298,13 @@ def _run_cron_command(args: argparse.Namespace):
         return cron_commands.cron_status()
     if subcommand == "tick":
         return cron_commands.run_tick()
+    if subcommand == "doctor":
+        return cron_commands.cron_doctor()
+    if subcommand == "test-delivery":
+        return cron_commands.test_delivery(
+            target=args.target,
+            session_id=getattr(args, "session_id", None),
+        )
     return cron_commands.CronCommandResult(f"Unknown cron command: {subcommand}", exit_code=2)
 
 

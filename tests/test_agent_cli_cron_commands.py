@@ -237,3 +237,15 @@ def test_cron_doctor_reports_delivery_db(monkeypatch, tmp_path):
 
     assert "delivery db" in result.text.lower()
     assert result.exit_code in {0, 1}
+
+
+def test_test_delivery_local(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    from agent_cli import cron_commands
+
+    result = cron_commands.test_delivery(target="local")
+
+    assert result.exit_code == 0
+    assert "test-delivery" in result.text
+    assert "delivered" in result.text or "pending" in result.text

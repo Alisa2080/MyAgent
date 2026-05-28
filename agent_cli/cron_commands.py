@@ -265,3 +265,46 @@ def existing_job_skills(job_id: str) -> list[str]:
     if skill and skill not in skills:
         skills.append(skill)
     return skills
+
+
+def test_delivery(
+    *, target: str, session_id: str | None = None
+) -> CronCommandResult:
+    from cron.delivery import JobRunResult, enqueue_result, process_due
+    from cron.delivery_store import DeliveryStore
+    from cron.jobs import now
+
+    job: dict[str, Any] = {
+        "id": "test-delivery",
+        "name": "test-delivery",
+        "deliver": target,
+    }
+    if target == "origin":
+        if not session_id:
+            return CronCommandResult(
+                "origin test-delivery requires --session-id", exit_code=2
+            )
+        job["origin"] = {"thread_id": session_id}
+
+    result = enqueue_result(
+        job,
+        JobRunResult(
+            success=True,
+            output_doc="# Test Delivery\n\nThis is a cron delivery test.",
+            final_response="This is a cron delivery test.",
+        ),
+        output_path="",
+        run_at=now(),
+    )
+    process_due(limit=20)
+    if result is None:
+        return CronCommandResult("No delivery event created.", exit_code=2)
+    stored = DeliveryStore().get(result["id"])
+    text = (
+        f"test-delivery event={stored['id']} "
+        f"target={stored['target']} status={stored['status']} "
+        f"error={stored['last_error'] or '-'}"
+    )
+    if stored["status"] in {"delivered", "pending"}:
+        return CronCommandResult(text, exit_code=0)
+    return CronCommandResult(text, exit_code=1)

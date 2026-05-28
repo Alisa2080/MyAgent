@@ -19,6 +19,8 @@ def _usage() -> str:
             "  /cron pause|resume|run|remove <job_id>",
             "  /cron status",
             "  /cron tick",
+            "  /cron doctor",
+            "  /cron test-delivery --target local|origin [--session-id SESSION]",
         ]
     )
 
@@ -37,12 +39,14 @@ def _parse_flags(tokens: list[str]) -> tuple[dict, list[str], str | None]:
         "schedule": None,
         "script": None,
         "workdir": None,
+        "target": None,
+        "session_id": None,
     }
     positionals: list[str] = []
     i = 0
     while i < len(tokens):
         token = tokens[i]
-        if token in {"--name", "--deliver", "--prompt", "--schedule", "--script", "--workdir"}:
+        if token in {"--name", "--deliver", "--prompt", "--schedule", "--script", "--workdir", "--target", "--session-id"}:
             if i + 1 >= len(tokens):
                 return flags, positionals, f"{token} requires a value"
             flags[token[2:].replace("-", "_")] = tokens[i + 1]
@@ -161,4 +165,15 @@ def handle_cron(ctx, arg, command):
         return cron_commands.cron_status().text
     if subcommand == "tick":
         return cron_commands.run_tick().text
+    if subcommand == "doctor":
+        return cron_commands.cron_doctor().text
+    if subcommand == "test-delivery":
+        target = flags["target"] or "local"
+        session_id = flags["session_id"]
+        if target == "origin" and not session_id:
+            session_id = ctx.session_id
+        return cron_commands.test_delivery(
+            target=target,
+            session_id=session_id,
+        ).text
     return f"Unknown /cron command: {subcommand}\n{_usage()}"
