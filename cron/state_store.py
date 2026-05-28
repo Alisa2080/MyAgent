@@ -424,3 +424,57 @@ class StateStore:
                 (str(identity_ref), max(0, int(limit))),
             ).fetchall()
         return [dict(row) for row in rows]
+
+    def claim_due_delivery_events(self, *, limit: int = 20, adapter_keys: set[str] | None = None) -> list[dict[str, Any]]:
+        now_text = utc_now().isoformat()
+        params: list[Any] = [now_text]
+        key_filter = ""
+        if adapter_keys is not None:
+            if not adapter_keys:
+                return []
+            placeholders = ", ".join("?" for _ in adapter_keys)
+            key_filter = f" AND adapter_key IN ({placeholders})"
+            params.extend(sorted(adapter_keys))
+        params.append(max(0, int(limit)))
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            rows = conn.execute(
+                f"""
+                SELECT * FROM delivery_events
+                WHERE status IN ('pending', 'failed')
+                  AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
+                  {key_filter}
+                ORDER BY created_at
+                LIMIT ?
+                """,
+                params,
+            ).fetchall()
+            claimed = []
+            for row in rows:
+                cursor = conn.execute(
+                    """
+                    UPDATE delivery_events
+                    SET status = 'delivering',
+                        attempt_count = attempt_count + 1,
+                        last_attempt_at = ?,
+                        updated_at = ?
+                    WHERE id = ? AND status IN ('pending', 'failed')
+                    """,
+                    (now_text, now_text, row["id"]),
+                )
+                if cursor.rowcount:
+                    claimed.append(dict(conn.execute("SELECT * FROM delivery_events WHERE id = ?", (row["id"],)).fetchone()))
+        return claimed
+
+    def mark_delivery_failed(self, event_id: str, error: str) -> dict[str, Any]:
+        event = self.get_delivery_event(event_id)
+        if int(event["attempt_count"]) >= self.max_delivery_attempts:
+            return self.update_delivery_event(event_id, status="dead", last_error=error, next_attempt_at=None)
+        index = max(0, min(int(event["attempt_count"]) - 1, len(RETRY_DELAYS) - 1))
+        next_attempt = utc_now() + timedelta(seconds=RETRY_DELAYS[index])
+        return self.update_delivery_event(
+            event_id,
+            status="failed",
+            last_error=error,
+            next_attempt_at=next_attempt.isoformat(),
+        )

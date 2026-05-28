@@ -41,11 +41,11 @@ class DeliveryRegistry:
         return DeliveryValidation(True, targets)
 
 
-def default_delivery_registry() -> DeliveryRegistry:
+def default_delivery_registry(*, webhook_sender=None) -> DeliveryRegistry:
     from cron.delivery_adapters import LocalDeliveryAdapter, OriginDeliveryAdapter, WebhookDeliveryAdapter
 
     registry = DeliveryRegistry()
     registry.register(LocalDeliveryAdapter())
     registry.register(OriginDeliveryAdapter())
-    registry.register(WebhookDeliveryAdapter())
+    registry.register(WebhookDeliveryAdapter(sender=webhook_sender))
     return registry

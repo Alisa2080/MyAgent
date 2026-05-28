@@ -237,33 +237,11 @@ def process_due(
     store: DeliveryStore | None = None,
     webhook_sender: Callable[[str, dict[str, Any], int], tuple[int, str]] | None = None,
 ) -> dict[str, int]:
-    store = store or DeliveryStore()
-    webhook_sender = webhook_sender or default_webhook_sender
-    summary = {"claimed": 0, "delivered": 0, "failed": 0, "dead": 0}
+    from cron.delivery_dispatcher import DeliveryDispatcher
+    from cron.delivery_registry import default_delivery_registry
+    from cron.state_store import StateStore
 
-    for event in store.claim_due(limit=limit, target_types={"local", "webhook", "unsupported"}):
-        summary["claimed"] += 1
-        if event["target_type"] == "local":
-            store.mark_delivered(event["id"])
-            summary["delivered"] += 1
-            continue
-        if event["target_type"] != "webhook":
-            store.mark_dead(event["id"], f"unsupported delivery target: {event['target']}")
-            summary["dead"] += 1
-            continue
-        try:
-            status, body = webhook_sender(str(event["target_id"]), _event_payload(event), 10)
-        except Exception as exc:
-            store.mark_failed(event["id"], str(exc))
-            summary["failed"] += 1
-            continue
-        if 200 <= status < 300:
-            store.mark_delivered(event["id"])
-            summary["delivered"] += 1
-        elif status in {408, 429} or status >= 500:
-            store.mark_failed(event["id"], f"HTTP {status}: {body}")
-            summary["failed"] += 1
-        else:
-            store.mark_dead(event["id"], f"HTTP {status}: {body}")
-            summary["dead"] += 1
-    return summary
+    registry = default_delivery_registry(webhook_sender=webhook_sender)
+    state_store = StateStore() if store is None else None
+    dispatcher = DeliveryDispatcher(store=state_store, registry=registry)
+    return dispatcher.dispatch_due(limit=limit)
