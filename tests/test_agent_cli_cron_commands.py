@@ -3,7 +3,8 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 
-def test_create_defaults_to_origin_when_session_id_present(monkeypatch):
+def test_create_defaults_to_origin_when_session_id_present(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
     import agent_cli.cron_commands as cron_commands
 
     calls = []
@@ -38,7 +39,8 @@ def test_create_defaults_to_origin_when_session_id_present(monkeypatch):
     assert calls[0][2]["deliver"] == "origin"
 
 
-def test_top_level_create_defaults_to_local(monkeypatch):
+def test_top_level_create_defaults_to_local(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
     import agent_cli.cron_commands as cron_commands
 
     calls = []
@@ -124,12 +126,15 @@ def test_top_level_update_origin_delivery_is_rejected():
 
 
 def test_status_renders_scheduler_and_paths(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
     import agent_cli.cron_commands as cron_commands
+    from unittest.mock import MagicMock
 
     monkeypatch.setattr(cron_commands, "is_cron_scheduler_running", lambda: True)
     monkeypatch.setattr(cron_commands, "display_cron_home", lambda: str(tmp_path))
     monkeypatch.setattr(cron_commands, "get_jobs_file", lambda: tmp_path / "jobs.json")
     monkeypatch.setattr(cron_commands, "list_jobs", lambda include_disabled=True: [{"id": "a"}])
+    monkeypatch.setattr(cron_commands, "_delivery_stats_lines", lambda: ["Delivery queue: pending=0 failed=0 dead=0 delivered=0"])
 
     result = cron_commands.cron_status()
 
@@ -189,3 +194,46 @@ def test_run_action_uses_ran_label(monkeypatch):
 
     assert result.exit_code == 0
     assert result.text == "Ran cron job job-1."
+
+
+def test_cron_status_includes_delivery_queue(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    from agent_cli import cron_commands
+    from cron.delivery_store import DeliveryStore
+
+    store = DeliveryStore()
+    store.enqueue(
+        job_id="job-1",
+        job_name="Daily",
+        run_at=None,
+        target="webhook:https://example.invalid/hook",
+        target_type="webhook",
+        target_id="https://example.invalid/hook",
+        final_response="done",
+        output_path=None,
+        payload={"type": "cron_result"},
+    )
+
+    monkeypatch.setattr(cron_commands, "is_cron_scheduler_running", lambda: False)
+    monkeypatch.setattr(cron_commands, "list_jobs", lambda include_disabled=True: [])
+
+    result = cron_commands.cron_status()
+
+    assert result.exit_code == 0
+    assert "Delivery queue:" in result.text
+    assert "pending=1" in result.text
+
+
+def test_cron_doctor_reports_delivery_db(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    from agent_cli import cron_commands
+
+    monkeypatch.setattr(cron_commands, "is_cron_scheduler_running", lambda: False)
+    monkeypatch.setattr(cron_commands, "list_jobs", lambda include_disabled=False: [])
+
+    result = cron_commands.cron_doctor()
+
+    assert "delivery db" in result.text.lower()
+    assert result.exit_code in {0, 1}

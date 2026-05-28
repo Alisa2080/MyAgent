@@ -4,9 +4,18 @@ from dataclasses import dataclass
 from typing import Any
 
 from agent_core.cron_lifecycle import is_cron_scheduler_running, tick as cron_tick
-from agent_tools.public.cronjob import run_cronjob_action
 from cron.jobs import get_job, list_jobs
 from cron.paths import display_cron_home, get_jobs_file, get_output_dir, get_scripts_dir
+
+run_cronjob_action = None
+
+
+def _get_run_cronjob_action():
+    global run_cronjob_action
+    if run_cronjob_action is None:
+        from agent_tools.public.cronjob import run_cronjob_action as _fn
+        run_cronjob_action = _fn
+    return run_cronjob_action
 
 
 @dataclass(frozen=True)
@@ -32,7 +41,7 @@ def _format_job_line(job: dict[str, Any]) -> str:
 
 
 def list_cron_jobs(*, include_disabled: bool = False) -> CronCommandResult:
-    result = run_cronjob_action("list", include_disabled=include_disabled)
+    result = _get_run_cronjob_action()("list", include_disabled=include_disabled)
     if not result.get("success"):
         return _format_error(result)
     jobs = result.get("jobs") or []
@@ -65,7 +74,7 @@ def create_cron_job(
             exit_code=2,
         )
     origin_thread_id = session_id if deliver == "origin" else None
-    result = run_cronjob_action(
+    result = _get_run_cronjob_action()(
         "create",
         origin_thread_id=origin_thread_id,
         schedule=schedule,
@@ -98,7 +107,7 @@ def update_cron_job(*, job_id: str, **kwargs: Any) -> CronCommandResult:
         )
     if deliver == "origin":
         kwargs["origin"] = {"thread_id": session_id}
-    result = run_cronjob_action(
+    result = _get_run_cronjob_action()(
         "update",
         origin_thread_id=session_id if deliver == "origin" else None,
         job_id=job_id,
@@ -114,7 +123,7 @@ def simple_job_action(action: str, *, job_id: str, reason: str | None = None) ->
     kwargs: dict[str, Any] = {"job_id": job_id}
     if reason is not None:
         kwargs["reason"] = reason
-    result = run_cronjob_action(action, **kwargs)
+    result = _get_run_cronjob_action()(action, **kwargs)
     if not result.get("success"):
         return _format_error(result)
     if action == "remove":
@@ -144,7 +153,92 @@ def cron_status() -> CronCommandResult:
         f"Scripts dir: {get_scripts_dir()}",
         f"Jobs: {len(jobs)}",
     ]
+    lines.extend(_delivery_stats_lines())
     return CronCommandResult("\n".join(lines))
+
+
+def _delivery_stats_lines() -> list[str]:
+    from cron.delivery_store import DeliveryStore
+
+    store = DeliveryStore()
+    stats = store.stats()
+    lines = [
+        "Delivery queue: "
+        f"pending={stats.get('pending', 0)} "
+        f"failed={stats.get('failed', 0)} "
+        f"dead={stats.get('dead', 0)} "
+        f"delivered={stats.get('delivered', 0)}"
+    ]
+    errors = store.recent_errors(limit=1)
+    if errors:
+        error = errors[0]
+        lines.append(
+            "Last delivery error: "
+            f"job={error.get('job_id') or '-'} "
+            f"target={error.get('target') or '-'} "
+            f"status={error.get('status') or '-'} "
+            f"error={error.get('last_error') or '-'}"
+        )
+    return lines
+
+
+def _check_line(status: str, message: str) -> str:
+    return f"[{status}] {message}"
+
+
+def cron_doctor() -> CronCommandResult:
+    from cron.delivery_store import DeliveryStore
+
+    lines: list[str] = []
+    warnings = 0
+    failures = 0
+
+    def add(status: str, message: str) -> None:
+        nonlocal warnings, failures
+        normalized = status.lower()
+        if normalized == "warn":
+            warnings += 1
+        elif normalized == "fail":
+            failures += 1
+        lines.append(_check_line(normalized, message))
+
+    try:
+        cron_home = display_cron_home()
+        add("ok", f"cron home: {cron_home}")
+        get_jobs_file().parent.mkdir(parents=True, exist_ok=True)
+        get_output_dir().mkdir(parents=True, exist_ok=True)
+        get_scripts_dir().mkdir(parents=True, exist_ok=True)
+        add("ok", f"jobs file path: {get_jobs_file()}")
+        add("ok", f"output dir writable: {get_output_dir()}")
+        add("ok", f"scripts dir writable: {get_scripts_dir()}")
+    except Exception as exc:
+        add("fail", f"cron paths are not writable: {exc}")
+
+    try:
+        store = DeliveryStore()
+        stats = store.stats()
+        add("ok", f"delivery db readable/writable: {store.path}")
+        if stats.get("dead", 0):
+            add("fail", f"dead delivery events: {stats['dead']}")
+        if stats.get("failed", 0):
+            add("warn", f"failed delivery events pending retry: {stats['failed']}")
+        stale = store.stale_delivering(max_age_seconds=600)
+        if stale:
+            add("warn", f"stale delivering events: {len(stale)}")
+    except Exception as exc:
+        add("fail", f"delivery db error: {exc}")
+
+    if is_cron_scheduler_running():
+        add("ok", "scheduler is running")
+    else:
+        add("warn", "scheduler is stopped; jobs will only run via manual cron tick")
+
+    for job in list_jobs(include_disabled=False):
+        if not job.get("next_run_at"):
+            add("warn", f"active job {job.get('id')} has no next_run_at")
+
+    exit_code = 2 if failures else (1 if warnings else 0)
+    return CronCommandResult("\n".join(lines), exit_code=exit_code)
 
 
 def run_tick() -> CronCommandResult:

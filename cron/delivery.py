@@ -62,7 +62,9 @@ def enqueue_result(
     *,
     store: DeliveryStore | None = None,
 ) -> dict[str, Any] | None:
-    if result.success and str(result.final_response or "").lstrip().startswith(SILENT_MARKER):
+    if not result.success:
+        return None
+    if str(result.final_response or "").lstrip().startswith(SILENT_MARKER):
         return None
 
     store = store or DeliveryStore()
