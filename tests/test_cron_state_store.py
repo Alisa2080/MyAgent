@@ -129,3 +129,69 @@ def test_jobs_facade_create_update_pause_resume_remove(monkeypatch, tmp_path):
 
     assert remove_job(job["id"]) is True
     assert get_job(job["id"]) is None
+
+
+from datetime import datetime, timezone
+
+
+def test_claim_due_job_creates_run_without_advancing_next_run(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    from cron.jobs import create_job
+    from cron.state_store import StateStore
+
+    job = create_job(prompt="write report", schedule="30m", name="daily", deliver="local")
+    store = StateStore()
+    due_at = job["next_run_at"]
+
+    claimed = store.claim_due_jobs(now_text="2099-01-01T00:00:00+00:00", limit=10)
+
+    assert len(claimed) == 1
+    assert claimed[0]["job"]["id"] == job["id"]
+    assert claimed[0]["run"]["status"] == "claimed"
+    assert store.get_job(job["id"])["state"] == "running"
+    assert store.get_job(job["id"])["next_run_at"] == due_at
+
+
+def test_complete_run_advances_recurring_job(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    from cron.jobs import create_job
+    from cron.state_store import StateStore
+
+    job = create_job(prompt="write report", schedule="every 30m", name="daily", deliver="local")
+    store = StateStore()
+    claimed = store.claim_due_jobs(now_text="2099-01-01T00:00:00+00:00", limit=1)[0]
+
+    completed = store.complete_run(
+        claimed["run"]["id"],
+        success=True,
+        output_path="/tmp/out.md",
+        final_response="done",
+        error=None,
+        next_run_at="2099-01-01T00:30:00+00:00",
+        completed=False,
+    )
+
+    assert completed["run"]["status"] == "succeeded"
+    stored_job = store.get_job(job["id"])
+    assert stored_job["state"] == "scheduled"
+    assert stored_job["next_run_at"] == "2099-01-01T00:30:00+00:00"
+    assert stored_job["lease_run_id"] is None
+
+
+def test_recover_expired_leases_marks_run_abandoned(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    from cron.jobs import create_job
+    from cron.state_store import StateStore
+
+    job = create_job(prompt="write report", schedule="30m", name="daily", deliver="local")
+    store = StateStore(lease_seconds=1)
+    claimed = store.claim_due_jobs(now_text="2099-01-01T00:00:00+00:00", limit=1)[0]
+
+    recovered = store.recover_expired_leases(now_text="2100-01-01T00:00:00+00:00")
+
+    assert recovered == 1
+    assert store.get_run(claimed["run"]["id"])["status"] == "abandoned"
+    assert store.get_job(job["id"])["state"] == "scheduled"

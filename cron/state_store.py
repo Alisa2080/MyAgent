@@ -478,3 +478,136 @@ class StateStore:
             last_error=error,
             next_attempt_at=next_attempt.isoformat(),
         )
+
+    def _row_to_run(self, row: sqlite3.Row) -> dict[str, Any]:
+        return dict(row)
+
+    def get_run(self, run_id: str) -> dict[str, Any]:
+        with self._connect() as conn:
+            row = conn.execute("SELECT * FROM runs WHERE id = ?", (run_id,)).fetchone()
+        if row is None:
+            raise KeyError(run_id)
+        return self._row_to_run(row)
+
+    def claim_due_jobs(self, *, now_text: str, limit: int = 20) -> list[dict[str, Any]]:
+        lease_expires = (datetime.fromisoformat(now_text.replace("Z", "+00:00")) + timedelta(seconds=self.lease_seconds)).isoformat()
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            rows = conn.execute(
+                """
+                SELECT * FROM jobs
+                WHERE enabled = 1
+                  AND state = 'scheduled'
+                  AND next_run_at IS NOT NULL
+                  AND next_run_at <= ?
+                ORDER BY next_run_at, created_at
+                LIMIT ?
+                """,
+                (now_text, max(0, int(limit))),
+            ).fetchall()
+            claimed = []
+            for row in rows:
+                job = self._row_to_job(row)
+                run_id = uuid.uuid4().hex
+                now_actual = utc_now().isoformat()
+                previous_attempts = conn.execute(
+                    "SELECT COUNT(*) AS count FROM runs WHERE job_id = ?",
+                    (job["id"],),
+                ).fetchone()["count"]
+                conn.execute(
+                    """
+                    INSERT INTO runs (
+                        id, job_id, scheduled_for, claimed_at, lease_expires_at,
+                        started_at, finished_at, attempt, status, exit_reason,
+                        output_path, final_response, error, delivery_status,
+                        created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, NULL, NULL, ?, 'claimed', NULL, NULL, NULL, NULL, NULL, ?, ?)
+                    """,
+                    (run_id, job["id"], job["next_run_at"], now_actual, lease_expires, int(previous_attempts) + 1, now_actual, now_actual),
+                )
+                conn.execute(
+                    """
+                    UPDATE jobs
+                    SET state = 'running',
+                        lease_run_id = ?,
+                        lease_expires_at = ?,
+                        updated_at = ?
+                    WHERE id = ? AND state = 'scheduled'
+                    """,
+                    (run_id, lease_expires, now_actual, job["id"]),
+                )
+                run = dict(conn.execute("SELECT * FROM runs WHERE id = ?", (run_id,)).fetchone())
+                claimed.append({"job": self.get_job(job["id"]) or job, "run": run})
+        return claimed
+
+    def mark_run_started(self, run_id: str) -> dict[str, Any]:
+        now_text = utc_now().isoformat()
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE runs SET status = 'running', started_at = ?, updated_at = ? WHERE id = ?",
+                (now_text, now_text, run_id),
+            )
+        return self.get_run(run_id)
+
+    def complete_run(
+        self,
+        run_id: str,
+        *,
+        success: bool,
+        output_path: str | None,
+        final_response: str | None,
+        error: str | None,
+        next_run_at: str | None,
+        completed: bool,
+    ) -> dict[str, Any]:
+        run = self.get_run(run_id)
+        now_text = utc_now().isoformat()
+        run_status = "succeeded" if success else "failed"
+        job_state = "completed" if completed else "scheduled"
+        with self._connect() as conn:
+            conn.execute(
+                """
+                UPDATE runs
+                SET status = ?, finished_at = ?, output_path = ?, final_response = ?,
+                    error = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (run_status, now_text, output_path, final_response, error, now_text, run_id),
+            )
+            conn.execute(
+                """
+                UPDATE jobs
+                SET state = ?, enabled = ?, next_run_at = ?, lease_run_id = NULL,
+                    lease_expires_at = NULL, last_run_at = ?, last_status = ?,
+                    last_error = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (job_state, 0 if completed else 1, next_run_at, now_text, "ok" if success else "error", None if success else error, now_text, run["job_id"]),
+            )
+        return {"run": self.get_run(run_id), "job": self.get_job(run["job_id"])}
+
+    def recover_expired_leases(self, *, now_text: str) -> int:
+        now_actual = utc_now().isoformat()
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT runs.id AS run_id, runs.job_id AS job_id
+                FROM runs
+                JOIN jobs ON jobs.lease_run_id = runs.id
+                WHERE jobs.state = 'running'
+                  AND jobs.lease_expires_at IS NOT NULL
+                  AND jobs.lease_expires_at <= ?
+                  AND runs.status IN ('claimed', 'running')
+                """,
+                (now_text,),
+            ).fetchall()
+            for row in rows:
+                conn.execute(
+                    "UPDATE runs SET status = 'abandoned', finished_at = ?, exit_reason = 'lease_expired', updated_at = ? WHERE id = ?",
+                    (now_actual, now_actual, row["run_id"]),
+                )
+                conn.execute(
+                    "UPDATE jobs SET state = 'scheduled', lease_run_id = NULL, lease_expires_at = NULL, updated_at = ? WHERE id = ?",
+                    (now_actual, row["job_id"]),
+                )
+        return len(rows)
