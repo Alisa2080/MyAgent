@@ -118,98 +118,92 @@ def enqueue_result(
     run_at: datetime | str,
     *,
     store: DeliveryStore | None = None,
-) -> dict[str, Any] | None:
+) -> dict[str, Any] | list[dict[str, Any]] | None:
     if result.success and str(result.final_response or "").lstrip().startswith(SILENT_MARKER):
         return None
 
     store = store or DeliveryStore()
     run_at_text = run_at.isoformat() if isinstance(run_at, datetime) else str(run_at)
-    target = parse_target(job)
     payload = _payload(job, result, output_path, run_at_text)
 
-    if target.target_type == "local":
-        return store.enqueue(
-            job_id=str(job.get("id") or ""),
-            job_name=job.get("name"),
-            run_at=run_at_text,
-            target=target.raw,
-            target_type="local",
-            target_id=None,
-            final_response=result.final_response,
-            output_path=output_path,
-            payload=payload,
-            status="delivered",
-        )
+    from cron.delivery_targets import DeliveryIdentity, DeliveryTargetError, parse_delivery_targets
 
-    if target.target_type == "origin" and not target.target_id:
-        return store.enqueue(
-            job_id=str(job.get("id") or ""),
-            job_name=job.get("name"),
-            run_at=run_at_text,
-            target=target.raw,
-            target_type="origin",
-            target_id=None,
-            final_response=result.final_response,
-            output_path=output_path,
-            payload=payload,
-            status="dead",
-            last_error="origin delivery requires origin.thread_id",
-        )
+    origin = DeliveryIdentity.from_job_origin(job.get("origin"))
+    try:
+        targets = parse_delivery_targets(job.get("deliver"), origin=origin)
+    except DeliveryTargetError as exc:
+        targets = []
+        error_text = str(exc)
+    else:
+        error_text = None
 
-    if target.target_type == "webhook":
-        webhook_error = validate_webhook_url(target.target_id)
-        if not webhook_error:
-            return store.enqueue(
+    events = []
+    if error_text:
+        events.append(
+            store.enqueue(
+                job_id=str(job.get("id") or ""),
+                job_name=job.get("name"),
+                run_at=run_at_text,
+                target=str(job.get("deliver") or "origin"),
+                target_type="origin",
+                target_id=None,
+                address=origin.session_id if origin else None,
+                thread_id=origin.thread_id if origin else None,
+                origin=origin.to_json() if origin else None,
+                final_response=result.final_response,
+                output_path=output_path,
+                payload=payload,
+                status="dead",
+                last_error=error_text,
+            )
+        )
+    for target in targets:
+        target_error = None
+        if target.target_type == "webhook" and not target.address:
+            target_error = validate_webhook_url(None)
+        elif target.target_type == "webhook":
+            target_error = validate_webhook_url(target.address)
+        if target_error:
+            events.append(
+                store.enqueue(
+                    job_id=str(job.get("id") or ""),
+                    job_name=job.get("name"),
+                    run_at=run_at_text,
+                    target=target.raw,
+                    target_type=target.target_type,
+                    target_id=target.address,
+                    address=target.address,
+                    thread_id=target.thread_id,
+                    origin=target.metadata.get("origin"),
+                    final_response=result.final_response,
+                    output_path=output_path,
+                    payload=payload,
+                    status="dead",
+                    last_error=target_error,
+                )
+            )
+            continue
+        status = "delivered" if target.target_type == "local" else "pending"
+        events.append(
+            store.enqueue(
                 job_id=str(job.get("id") or ""),
                 job_name=job.get("name"),
                 run_at=run_at_text,
                 target=target.raw,
                 target_type=target.target_type,
-                target_id=target.target_id,
+                target_id=target.address,
+                address=target.address,
+                thread_id=target.thread_id,
+                origin=target.metadata.get("origin"),
                 final_response=result.final_response,
                 output_path=output_path,
                 payload=payload,
+                status=status,
             )
-        return store.enqueue(
-            job_id=str(job.get("id") or ""),
-            job_name=job.get("name"),
-            run_at=run_at_text,
-            target=target.raw,
-            target_type="webhook",
-            target_id=None,
-            final_response=result.final_response,
-            output_path=output_path,
-            payload=payload,
-            status="dead",
-            last_error=webhook_error,
         )
-
-    if target.target_type == "unsupported":
-        return store.enqueue(
-            job_id=str(job.get("id") or ""),
-            job_name=job.get("name"),
-            run_at=run_at_text,
-            target=target.raw,
-            target_type="unsupported",
-            target_id=None,
-            final_response=result.final_response,
-            output_path=output_path,
-            payload=payload,
-            status="dead",
-            last_error=f"unsupported delivery target: {target.raw}",
-        )
-
-    return store.enqueue(
-        job_id=str(job.get("id") or ""),
-        job_name=job.get("name"),
-        run_at=run_at_text,
-        target=target.raw,
-        target_type=target.target_type,
-        target_id=target.target_id,
-        final_response=result.final_response,
-        output_path=output_path,
-        payload=payload,
-    )
+    if not events:
+        return None
+    return events[0] if len(events) == 1 else events
 
 
 def default_webhook_sender(url: str, payload: dict[str, Any], timeout: int = 10) -> tuple[int, str]:

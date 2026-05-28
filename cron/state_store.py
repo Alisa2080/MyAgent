@@ -335,3 +335,92 @@ class StateStore:
         for row in rows:
             stats[str(row["status"])] = int(row["count"])
         return stats
+
+    def enqueue_delivery_event(
+        self,
+        *,
+        job_id: str | None,
+        run_id: str | None,
+        job_name: str | None,
+        run_at: str | None,
+        target: str,
+        target_type: str,
+        adapter_key: str,
+        address: str | None,
+        thread_id: str | None,
+        origin: dict[str, Any] | None,
+        final_response: str | None,
+        output_path: str | None,
+        payload: dict[str, Any],
+        status: str = "pending",
+        last_error: str | None = None,
+    ) -> dict[str, Any]:
+        if status not in DELIVERY_STATUSES:
+            raise ValueError(f"invalid delivery status: {status}")
+        event_id = uuid.uuid4().hex
+        now_text = utc_now().isoformat()
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO delivery_events (
+                    id, job_id, run_id, job_name, run_at, target, target_type,
+                    adapter_key, address, thread_id, origin_json, status,
+                    attempt_count, next_attempt_at, last_attempt_at, last_error,
+                    output_path, final_response, payload_json, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, NULL, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    event_id,
+                    job_id,
+                    run_id,
+                    job_name,
+                    run_at,
+                    target,
+                    target_type,
+                    adapter_key,
+                    address,
+                    thread_id,
+                    _json_dumps(origin) if origin is not None else None,
+                    status,
+                    now_text if status in {"pending", "failed"} else None,
+                    last_error,
+                    output_path,
+                    final_response,
+                    _json_dumps(payload),
+                    now_text,
+                    now_text,
+                ),
+            )
+        return self.get_delivery_event(event_id)
+
+    def get_delivery_event(self, event_id: str) -> dict[str, Any]:
+        with self._connect() as conn:
+            row = conn.execute("SELECT * FROM delivery_events WHERE id = ?", (event_id,)).fetchone()
+        if row is None:
+            raise KeyError(event_id)
+        return dict(row)
+
+    def update_delivery_event(self, event_id: str, **updates: Any) -> dict[str, Any]:
+        if "status" in updates and updates["status"] not in DELIVERY_STATUSES:
+            raise ValueError(f"invalid delivery status: {updates['status']}")
+        updates.setdefault("updated_at", utc_now().isoformat())
+        assignments = ", ".join(f"{key} = ?" for key in updates)
+        values = list(updates.values()) + [event_id]
+        with self._connect() as conn:
+            conn.execute(f"UPDATE delivery_events SET {assignments} WHERE id = ?", values)
+        return self.get_delivery_event(event_id)
+
+    def pending_origin_events(self, identity_ref: str, *, limit: int = 10) -> list[dict[str, Any]]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM delivery_events
+                WHERE target_type = 'origin'
+                  AND address = ?
+                  AND status IN ('pending', 'failed')
+                ORDER BY created_at
+                LIMIT ?
+                """,
+                (str(identity_ref), max(0, int(limit))),
+            ).fetchall()
+        return [dict(row) for row in rows]

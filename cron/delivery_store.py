@@ -40,11 +40,16 @@ class DeliveryStore:
                 CREATE TABLE IF NOT EXISTS delivery_events (
                     id TEXT PRIMARY KEY,
                     job_id TEXT,
+                    run_id TEXT,
                     job_name TEXT,
                     run_at TEXT,
                     target TEXT NOT NULL,
                     target_type TEXT NOT NULL,
+                    adapter_key TEXT,
                     target_id TEXT,
+                    address TEXT,
+                    thread_id TEXT,
+                    origin_json TEXT,
                     status TEXT NOT NULL,
                     attempt_count INTEGER NOT NULL DEFAULT 0,
                     next_attempt_at TEXT,
@@ -59,7 +64,7 @@ class DeliveryStore:
                 """
             )
             conn.execute("CREATE INDEX IF NOT EXISTS idx_delivery_due ON delivery_events(status, next_attempt_at)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_delivery_origin ON delivery_events(target_type, target_id, status, created_at)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_delivery_origin ON delivery_events(target_type, address, status, created_at)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_delivery_job ON delivery_events(job_id, created_at)")
         secure_file(self.path)
 
@@ -71,11 +76,16 @@ class DeliveryStore:
         self,
         *,
         job_id: str | None,
+        run_id: str | None = None,
         job_name: str | None,
         run_at: str | None,
         target: str,
         target_type: str,
-        target_id: str | None,
+        adapter_key: str | None = None,
+        address: str | None = None,
+        thread_id: str | None = None,
+        origin: dict[str, Any] | None = None,
+        target_id: str | None = None,
         final_response: str | None,
         output_path: str | None,
         payload: dict[str, Any],
@@ -90,14 +100,17 @@ class DeliveryStore:
             conn.execute(
                 """
                 INSERT INTO delivery_events (
-                    id, job_id, job_name, run_at, target, target_type, target_id,
+                    id, job_id, run_id, job_name, run_at, target, target_type,
+                    adapter_key, target_id, address, thread_id, origin_json,
                     status, attempt_count, next_attempt_at, last_attempt_at,
                     last_error, output_path, final_response, payload_json,
                     created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, NULL, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, NULL, ?, ?, ?, ?, ?, ?)
                 """,
                 (
-                    event_id, job_id, job_name, run_at, target, target_type, target_id,
+                    event_id, job_id, run_id, job_name, run_at, target, target_type,
+                    adapter_key or target_type, target_id, address, thread_id,
+                    json.dumps(origin) if origin else None,
                     status, now if status in {"pending", "failed"} else None,
                     last_error, output_path, final_response,
                     json.dumps(payload, ensure_ascii=False), now, now,

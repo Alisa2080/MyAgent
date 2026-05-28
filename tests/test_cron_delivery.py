@@ -18,6 +18,7 @@ def test_enqueue_local_result_marks_delivered(monkeypatch, tmp_path):
     assert event is not None
     stored = DeliveryStore().get(event["id"])
     assert stored["target_type"] == "local"
+    assert stored["adapter_key"] == "local"
     assert stored["status"] == "delivered"
 
 
@@ -205,3 +206,31 @@ def test_process_due_does_not_claim_origin_events(monkeypatch, tmp_path):
     assert summary["claimed"] == 0
     assert stored["status"] == "pending"
     assert stored["attempt_count"] == 0
+
+
+def test_enqueue_result_creates_event_per_delivery_target(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    from cron.delivery import JobRunResult, enqueue_result
+    from cron.delivery_store import DeliveryStore
+
+    events = enqueue_result(
+        {
+            "id": "job-1",
+            "name": "Daily",
+            "deliver": "origin,webhook:https://example.invalid/hook,local",
+            "origin": {"source_type": "cli", "session_id": "session-1", "thread_id": "thread-1"},
+        },
+        JobRunResult(success=True, output_doc="# out", final_response="done"),
+        "/tmp/out.md",
+        "2026-05-28T10:00:00+00:00",
+    )
+
+    assert isinstance(events, list)
+    assert len(events) == 3
+    stored = [DeliveryStore().get(event["id"]) for event in events]
+    assert [(event["target_type"], event["adapter_key"], event["address"]) for event in stored] == [
+        ("origin", "origin", "session-1"),
+        ("webhook", "webhook", "https://example.invalid/hook"),
+        ("local", "local", None),
+    ]
