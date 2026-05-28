@@ -47,6 +47,7 @@ def test_ensure_cron_dirs_creates_secure_dirs(monkeypatch, tmp_path):
     assert (tmp_path / "cron").is_dir()
     assert (tmp_path / "cron" / "output").is_dir()
     assert (tmp_path / "scripts").is_dir()
+    assert (tmp_path / "cron" / "runner-tmp").is_dir()
 
 
 def test_atomic_write_json_sets_owner_only_permissions(monkeypatch, tmp_path):
@@ -61,3 +62,12 @@ def test_atomic_write_json_sets_owner_only_permissions(monkeypatch, tmp_path):
     assert '"jobs": []' in target.read_text()
     if hasattr(target, "stat"):
         assert oct(target.stat().st_mode & 0o777) == "0o600"
+
+
+def test_get_runner_tmp_dir(monkeypatch, tmp_path):
+    paths = load_paths_module()
+
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    assert paths.get_runner_tmp_dir() == tmp_path / "cron" / "runner-tmp"
+    assert paths.RUNNER_TMP_DIR_NAME == "runner-tmp"

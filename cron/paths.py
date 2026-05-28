@@ -40,6 +40,13 @@ def get_scripts_dir() -> Path:
     return get_cron_home() / "scripts"
 
 
+RUNNER_TMP_DIR_NAME = "runner-tmp"
+
+
+def get_runner_tmp_dir() -> Path:
+    return get_cron_dir() / RUNNER_TMP_DIR_NAME
+
+
 def secure_dir(path: Path) -> None:
     try:
         os.chmod(path, 0o700)
@@ -56,7 +63,7 @@ def secure_file(path: Path) -> None:
 
 
 def ensure_cron_dirs() -> None:
-    for path in (get_cron_dir(), get_output_dir(), get_scripts_dir()):
+    for path in (get_cron_dir(), get_output_dir(), get_scripts_dir(), get_runner_tmp_dir()):
         path.mkdir(parents=True, exist_ok=True)
         secure_dir(path)
 

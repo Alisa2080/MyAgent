@@ -36,7 +36,7 @@ _fallback_lock = threading.Lock()
 
 
 def _default_job_runner() -> JobRunner:
-    from cron.runner import run_job
+    from cron.runner_client import run_job
 
     return run_job
 

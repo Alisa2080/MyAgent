@@ -171,6 +171,25 @@ def test_status_renders_scheduler_and_paths(monkeypatch, tmp_path):
     assert "Jobs: 1" in result.text
 
 
+def test_status_includes_subprocess_timeout_when_subprocess_mode(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+    monkeypatch.setenv("AGENT_CRON_RUNNER_MODE", "subprocess")
+    monkeypatch.setenv("AGENT_CRON_RUNNER_SUBPROCESS_TIMEOUT", "45")
+    import agent_cli.cron_commands as cron_commands
+
+    monkeypatch.setattr(cron_commands, "is_cron_scheduler_running", lambda: True)
+    monkeypatch.setattr(cron_commands, "display_cron_home", lambda: str(tmp_path))
+    monkeypatch.setattr(cron_commands, "get_jobs_file", lambda: tmp_path / "jobs.json")
+    monkeypatch.setattr(cron_commands, "list_jobs", lambda include_disabled=True: [])
+    monkeypatch.setattr(cron_commands, "_delivery_stats_lines", lambda: [])
+
+    result = cron_commands.cron_status()
+
+    assert result.exit_code == 0
+    assert "Runner mode: ok (subprocess)" in result.text
+    assert "Subprocess timeout: 45s" in result.text
+
+
 def test_tick_returns_failure_exit_when_job_fails(monkeypatch):
     import agent_cli.cron_commands as cron_commands
 
@@ -265,6 +284,47 @@ def test_cron_doctor_reports_delivery_db(monkeypatch, tmp_path):
 
     assert "delivery db" in result.text.lower()
     assert result.exit_code in {0, 1}
+
+
+def test_cron_doctor_checks_subprocess_runner(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+    monkeypatch.setenv("AGENT_CRON_RUNNER_MODE", "subprocess")
+    monkeypatch.setenv("AGENT_CRON_RUNNER_SUBPROCESS_TIMEOUT", "45")
+
+    from agent_cli import cron_commands
+
+    monkeypatch.setattr(cron_commands, "is_cron_scheduler_running", lambda: False)
+    monkeypatch.setattr(cron_commands, "list_jobs", lambda include_disabled=False: [])
+
+    result = cron_commands.cron_doctor()
+
+    assert "runner mode: subprocess" in result.text
+    assert "subprocess timeout: 45s" in result.text
+    assert "runner_worker entrypoint: resolvable" in result.text
+    assert "name 'sys' is not defined" not in result.text
+
+
+def test_cron_doctor_reports_worker_help_failure(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+    monkeypatch.setenv("AGENT_CRON_RUNNER_MODE", "subprocess")
+
+    from agent_cli import cron_commands
+    import subprocess
+
+    class FailedHelp:
+        returncode = 2
+        stderr = b"worker help failed"
+        stdout = b""
+
+    monkeypatch.setattr(cron_commands, "is_cron_scheduler_running", lambda: False)
+    monkeypatch.setattr(cron_commands, "list_jobs", lambda include_disabled=False: [])
+    monkeypatch.setattr(subprocess, "run", lambda *args, **kwargs: FailedHelp())
+
+    result = cron_commands.cron_doctor()
+
+    assert result.exit_code == 2
+    assert "runner_worker entrypoint failed" in result.text
+    assert "worker help failed" in result.text
 
 
 def test_cron_doctor_reports_invalid_jobs_json_without_raising(monkeypatch, tmp_path):

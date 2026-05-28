@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import json
+import sys
 from typing import Any
 
 from agent_core.cron_lifecycle import is_cron_scheduler_running, tick as cron_tick
@@ -145,15 +146,28 @@ def simple_job_action(action: str, *, job_id: str, reason: str | None = None) ->
 
 
 def cron_status() -> CronCommandResult:
+    from cron.runner_client import runner_mode_diagnostic
+
     jobs = list_jobs(include_disabled=True)
+    mode, mode_ok = runner_mode_diagnostic()
+    mode_label = f"{'ok' if mode_ok else 'UNSUPPORTED'} ({mode})"
     lines = [
         f"Scheduler: {'running' if is_cron_scheduler_running() else 'stopped'}",
         f"Cron home: {display_cron_home()}",
+        f"Runner mode: {mode_label}",
         f"Jobs file: {get_jobs_file()}",
         f"Output dir: {get_output_dir()}",
         f"Scripts dir: {get_scripts_dir()}",
         f"Jobs: {len(jobs)}",
     ]
+    if mode == "subprocess":
+        from cron.runner_subprocess import subprocess_timeout_diagnostic
+
+        timeout_val, timeout_ok = subprocess_timeout_diagnostic()
+        if timeout_ok:
+            lines.append(f"Subprocess timeout: {timeout_val}s")
+        else:
+            lines.append("Subprocess timeout: invalid")
     lines.extend(_delivery_stats_lines())
     return CronCommandResult("\n".join(lines))
 
@@ -190,6 +204,9 @@ def _check_line(status: str, message: str) -> str:
 def cron_doctor() -> CronCommandResult:
     from cron.delivery import parse_target, validate_webhook_url
     from cron.delivery_store import DeliveryStore
+    from cron.paths import get_runner_tmp_dir
+    from cron.runner_client import runner_mode_diagnostic
+    from cron.runner_subprocess import subprocess_timeout_diagnostic
 
     lines: list[str] = []
     warnings = 0
@@ -203,6 +220,49 @@ def cron_doctor() -> CronCommandResult:
         elif normalized == "fail":
             failures += 1
         lines.append(_check_line(normalized, message))
+
+    # Runner mode
+    mode, mode_ok = runner_mode_diagnostic()
+    if mode_ok:
+        add("ok", f"runner mode: {mode}")
+    else:
+        add("fail", f"runner mode: {mode!r} (unsupported)")
+    if mode == "subprocess":
+        timeout_val, timeout_ok = subprocess_timeout_diagnostic()
+        if timeout_ok:
+            add("ok", f"subprocess timeout: {timeout_val}s")
+        else:
+            add("fail", f"subprocess timeout: invalid (set AGENT_CRON_RUNNER_SUBPROCESS_TIMEOUT to a positive integer)")
+        # Worker entrypoint resolvable
+        import subprocess as _subprocess
+        try:
+            result = _subprocess.run(
+                [sys.executable, "-m", "cron.runner_worker", "--help"],
+                capture_output=True,
+                timeout=5,
+            )
+            if result.returncode == 0:
+                add("ok", "runner_worker entrypoint: resolvable")
+            else:
+                details = (result.stderr or result.stdout or b"").decode(
+                    "utf-8", errors="replace"
+                ).strip()
+                suffix = f": {details}" if details else ""
+                add("fail", f"runner_worker entrypoint failed with code {result.returncode}{suffix}")
+        except _subprocess.TimeoutExpired:
+            add("warn", "runner_worker entrypoint: timed out during check")
+        except Exception as exc:
+            add("fail", f"runner_worker entrypoint: {exc}")
+        # Temp directory writable
+        try:
+            runner_tmp = get_runner_tmp_dir()
+            runner_tmp.mkdir(parents=True, exist_ok=True)
+            probe = runner_tmp / ".doctor-write-test"
+            probe.write_text("ok", encoding="utf-8")
+            probe.unlink()
+            add("ok", f"runner tmp dir writable: {runner_tmp}")
+        except Exception as exc:
+            add("fail", f"runner tmp dir not writable: {exc}")
 
     try:
         cron_home = display_cron_home()
