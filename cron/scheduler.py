@@ -4,6 +4,7 @@ import concurrent.futures
 import errno
 import logging
 import os
+import sys
 import threading
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -26,11 +27,12 @@ from cron.jobs import (
     now,
     save_job_output,
 )
-from cron.notifications import queue_cron_notification, should_notify
 from cron.paths import ensure_cron_dirs, get_cron_dir
-from cron.runner import JobRunResult, run_job
 
 logger = logging.getLogger(__name__)
+
+run_job = None
+JobRunResult = None
 
 _fallback_lock = threading.Lock()
 
@@ -122,38 +124,11 @@ def _max_parallel(default: int) -> int:
     return default
 
 
-def _deliver_result(
-    job: dict[str, Any],
-    result: JobRunResult,
-    output_path: str,
-    run_at: datetime,
-) -> str | None:
-    delivery_target = job.get("deliver", "local")
-    if delivery_target in {None, "", "local"}:
+def _delivery_error_from_event(event: dict[str, Any] | None) -> str | None:
+    if not event:
         return None
-    if delivery_target != "origin":
-        return f"Unsupported delivery target: {delivery_target}"
-    if not result.success or not should_notify(result.final_response):
-        return None
-
-    origin = job.get("origin") or {}
-    thread_id = origin.get("thread_id")
-    if not thread_id:
-        return None
-
-    queue_cron_notification(
-        str(thread_id),
-        {
-            "type": "cron_result",
-            "job_id": job.get("id"),
-            "job_name": job.get("name"),
-            "status": "ok",
-            "final_response": result.final_response,
-            "output_path": output_path,
-            "error": None,
-            "run_at": run_at.isoformat(),
-        },
-    )
+    if event.get("status") == "dead":
+        return str(event.get("last_error") or "delivery target is not deliverable")
     return None
 
 
@@ -161,9 +136,18 @@ def _process_job(job: dict[str, Any], run_at: datetime) -> JobTickResult:
     job_id = str(job["id"])
     try:
         advanced = advance_next_run(job_id, run_at)
-        result = run_job(advanced)
+        this_mod = sys.modules[__name__]
+        _run_job = getattr(this_mod, "run_job", None)
+        if _run_job is None:
+            from cron import runner as _runner_mod
+            _run_job = getattr(_runner_mod, "run_job", None)
+        result = _run_job(advanced)
         output_path = save_job_output(job_id, result.output_doc, run_at=run_at)
-        delivery_error = _deliver_result(advanced, result, output_path, run_at)
+        from cron.delivery import enqueue_result, process_due
+
+        delivery_event = enqueue_result(advanced, result, output_path, run_at)
+        process_due(limit=20)
+        delivery_error = _delivery_error_from_event(delivery_event)
         mark_job_run(
             job_id,
             success=result.success,
