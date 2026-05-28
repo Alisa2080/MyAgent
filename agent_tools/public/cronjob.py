@@ -210,6 +210,16 @@ def _normalize_repeat(repeat: Any) -> Any:
         return repeat
 
 
+def _origin_identity_from_thread(thread_id: str | None) -> dict[str, str] | None:
+    if not thread_id:
+        return None
+    return {
+        "source_type": "cli",
+        "session_id": str(thread_id),
+        "thread_id": str(thread_id),
+    }
+
+
 def _cronjob_impl(
     action: str,
     runtime: ToolRuntime | None = None,
@@ -251,7 +261,7 @@ def _cronjob_impl(
                     "code": "missing_origin_thread",
                     "error": "deliver='origin' requires an active thread id.",
                 }
-            origin = {"thread_id": thread_id} if thread_id and deliver in {None, "origin"} else None
+            origin = _origin_identity_from_thread(thread_id) if thread_id and deliver in {None, "origin"} else None
             job = create_job(
                 prompt=prompt,
                 schedule=schedule,

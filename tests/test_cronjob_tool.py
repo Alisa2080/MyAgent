@@ -83,7 +83,11 @@ def test_cronjob_create_captures_runtime_thread(monkeypatch):
     )
 
     assert result["success"] is True
-    assert created["origin"] == {"thread_id": "thread-1"}
+    assert created["origin"] == {
+        "source_type": "cli",
+        "session_id": "thread-1",
+        "thread_id": "thread-1",
+    }
     assert created["deliver"] is None
 
 
@@ -250,6 +254,26 @@ def test_cronjob_create_rejects_origin_without_thread(monkeypatch):
     assert result["success"] is False
     assert result["code"] == "missing_origin_thread"
     assert create_called is False
+
+
+def test_cronjob_explicit_origin_without_thread_fails_closed(monkeypatch):
+    cronjob_tool = _cronjob_tool()
+
+    def fake_create_job(**kwargs):
+        return _job()
+
+    monkeypatch.setattr(cronjob_tool, "create_job", fake_create_job)
+
+    result = cronjob_tool._cronjob_impl(
+        action="create",
+        prompt="write report",
+        schedule="30m",
+        deliver="origin",
+        runtime=None,
+    )
+
+    assert result["success"] is False
+    assert result["code"] == "missing_origin_thread"
 
 
 def test_cronjob_list_formats_jobs(monkeypatch):
@@ -620,7 +644,11 @@ def test_run_cronjob_action_accepts_explicit_origin_thread(monkeypatch):
     )
 
     assert result["success"] is True
-    assert captured["origin"] == {"thread_id": "session-1"}
+    assert captured["origin"] == {
+        "source_type": "cli",
+        "session_id": "session-1",
+        "thread_id": "session-1",
+    }
 
 
 def test_cronjob_tool_uses_shared_action_helper(monkeypatch):
