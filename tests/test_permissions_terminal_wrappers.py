@@ -111,7 +111,7 @@ def test_reviewed_network_command_with_approval_passes_network_once(monkeypatch)
         record_approval,
     )
     from agent_core.permissions.tool_policy import canonical_tool_args
-    from agent_core.session_context import hermes_task_id_from_thread_id
+    from agent_core.session_context import runtime_task_id_from_thread_id
 
     terminal_tools = _terminal_module()
     clear_approvals()
@@ -126,7 +126,7 @@ def test_reviewed_network_command_with_approval_passes_network_once(monkeypatch)
         ApprovalRecord(
             approval_id="approval-network",
             decision_id="decision-network",
-            task_id=hermes_task_id_from_thread_id(thread_id),
+            task_id=runtime_task_id_from_thread_id(thread_id),
             tool_call_id=tool_call_id,
             tool_name="terminal",
             args_digest=make_args_digest(approval_args),
@@ -158,7 +158,7 @@ def test_terminal_uses_middleware_grant_without_consuming_approval(monkeypatch):
     from agent_core.permissions.approvals import make_args_digest
     from agent_core.permissions.tool_grants import ToolPolicyGrant, record_tool_policy_grant
     from agent_core.policy_tool_middleware import terminal_policy_args
-    from agent_core.session_context import hermes_task_id_from_thread_id
+    from agent_core.session_context import runtime_task_id_from_thread_id
 
     terminal_tools = _terminal_module()
     clear_approvals()
@@ -169,7 +169,7 @@ def test_terminal_uses_middleware_grant_without_consuming_approval(monkeypatch):
 
     record_tool_policy_grant(
         ToolPolicyGrant(
-            task_id=hermes_task_id_from_thread_id(thread_id),
+            task_id=runtime_task_id_from_thread_id(thread_id),
             tool_call_id=tool_call_id,
             tool_name="terminal",
             args_digest=make_args_digest(policy_args),
@@ -203,7 +203,7 @@ def test_reviewed_dangerous_command_with_approval_bypasses_legacy_guard(monkeypa
         record_approval,
     )
     from agent_core.permissions.tool_policy import canonical_tool_args
-    from agent_core.session_context import hermes_task_id_from_thread_id
+    from agent_core.session_context import runtime_task_id_from_thread_id
 
     terminal_tools = _terminal_module()
     clear_approvals()
@@ -218,7 +218,7 @@ def test_reviewed_dangerous_command_with_approval_bypasses_legacy_guard(monkeypa
         ApprovalRecord(
             approval_id="approval-dangerous",
             decision_id="decision-dangerous",
-            task_id=hermes_task_id_from_thread_id(thread_id),
+            task_id=runtime_task_id_from_thread_id(thread_id),
             tool_call_id=tool_call_id,
             tool_name="terminal",
             args_digest=make_args_digest(approval_args),
@@ -268,7 +268,7 @@ def test_hardline_command_is_denied(monkeypatch):
 
 
 def test_run_terminal_accepts_and_forwards_allow_network_once(monkeypatch):
-    import agent_tools.hermes_terminal_toolkit.terminal as terminal_wrapper
+    import agent_tools.terminal_toolkit.terminal as terminal_wrapper
 
     calls = []
 

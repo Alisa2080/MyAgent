@@ -5,7 +5,7 @@ import shlex
 
 from agent_core.permissions import file_policy
 from agent_core.permissions.models import PolicyDecision
-from agent_tools.hermes_terminal_toolkit.approval import check_all_command_guards
+from agent_tools.terminal_toolkit.approval import check_all_command_guards
 
 
 _READ_ONLY_COMMANDS = {

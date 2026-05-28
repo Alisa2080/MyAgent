@@ -11,7 +11,7 @@ from agent_core.permissions.approvals import ApprovalRecord, make_args_digest, r
 from agent_core.permissions.audit import audit_policy_event
 from agent_core.permissions.profiles import resolve_runtime_profile
 from agent_core.policy_tool_middleware import POLICY_ARG_BUILDERS
-from agent_core.session_context import hermes_task_id_from_runtime
+from agent_core.session_context import runtime_task_id_from_runtime
 
 
 class FlexibleHumanInTheLoopMiddleware(HumanInTheLoopMiddleware):
@@ -104,7 +104,7 @@ class FlexibleHumanInTheLoopMiddleware(HumanInTheLoopMiddleware):
 
     @classmethod
     def _policy_decision_for_tool_call(cls, tool_call: ToolCall, runtime: Runtime[Any]) -> Any:
-        task_id = hermes_task_id_from_runtime(runtime)
+        task_id = runtime_task_id_from_runtime(runtime)
         return tool_policy.evaluate_tool_call(
             tool_name=tool_call["name"],
             args=cls._policy_args_for_tool_call(tool_call),
@@ -176,7 +176,7 @@ class FlexibleHumanInTheLoopMiddleware(HumanInTheLoopMiddleware):
         interrupt_indices: list[int] = []
         interrupt_configs: dict[int, Any] = {}
         policy_decisions: dict[int, Any] = {}
-        task_id = hermes_task_id_from_runtime(runtime)
+        task_id = runtime_task_id_from_runtime(runtime)
 
         for idx, tool_call in enumerate(last_ai_msg.tool_calls):
             if tool_call["name"] in self.policy_tools:

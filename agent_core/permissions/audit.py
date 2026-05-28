@@ -4,7 +4,7 @@ import logging
 from typing import Any
 
 from agent_core.permissions.models import PolicyDecision
-from agent_tools.hermes_terminal_toolkit.redact import redact_sensitive_text
+from agent_tools.terminal_toolkit.redact import redact_sensitive_text
 
 
 logger = logging.getLogger(__name__)

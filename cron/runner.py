@@ -64,7 +64,7 @@ def _redact_untrusted_text(text: str | None) -> str:
     if text is None:
         return ""
     try:
-        from agent_tools.hermes_terminal_toolkit.redact import redact_sensitive_text
+        from agent_tools.terminal_toolkit.redact import redact_sensitive_text
     except Exception:
         return str(text)
     try:
@@ -115,7 +115,7 @@ def _resolve_script_path(script: str) -> Path:
 
 def _script_timeout() -> int:
     try:
-        return max(1, int(os.getenv("HERMES_CRON_SCRIPT_TIMEOUT", "120")))
+        return max(1, int(os.getenv("AGENT_CRON_SCRIPT_TIMEOUT", "120")))
     except ValueError:
         return 120
 
@@ -278,7 +278,7 @@ def _build_cron_agent(job: dict[str, Any]):
 
 def _cron_timeout() -> int | None:
     try:
-        value = int(os.getenv("HERMES_CRON_TIMEOUT", "600"))
+        value = int(os.getenv("AGENT_CRON_TIMEOUT", "600"))
     except ValueError:
         value = 600
     return value if value > 0 else None

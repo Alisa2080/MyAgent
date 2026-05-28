@@ -4,7 +4,7 @@ from types import SimpleNamespace
 def test_default_background_quota(monkeypatch):
     from agent_core import terminal_process_policy as policy
 
-    monkeypatch.delenv("HERMES_MAX_BACKGROUND_PROCESSES_PER_TASK", raising=False)
+    monkeypatch.delenv("TERMINAL_MAX_BACKGROUND_PROCESSES_PER_TASK", raising=False)
 
     assert policy.max_background_processes_per_task() == 3
 
@@ -12,7 +12,7 @@ def test_default_background_quota(monkeypatch):
 def test_background_quota_can_be_configured(monkeypatch):
     from agent_core import terminal_process_policy as policy
 
-    monkeypatch.setenv("HERMES_MAX_BACKGROUND_PROCESSES_PER_TASK", "5")
+    monkeypatch.setenv("TERMINAL_MAX_BACKGROUND_PROCESSES_PER_TASK", "5")
 
     assert policy.max_background_processes_per_task() == 5
 
@@ -21,7 +21,7 @@ def test_invalid_background_quota_falls_back_to_default(monkeypatch):
     from agent_core import terminal_process_policy as policy
 
     for value in ("", "abc", "0", "-2"):
-        monkeypatch.setenv("HERMES_MAX_BACKGROUND_PROCESSES_PER_TASK", value)
+        monkeypatch.setenv("TERMINAL_MAX_BACKGROUND_PROCESSES_PER_TASK", value)
         assert policy.max_background_processes_per_task() == 3
 
 
@@ -53,7 +53,7 @@ def test_background_quota_available_reports_current_and_limit(monkeypatch):
         _running = {f"proc-{idx}": session for idx, session in enumerate(sessions)}
         _lock = None
 
-    monkeypatch.setenv("HERMES_MAX_BACKGROUND_PROCESSES_PER_TASK", "2")
+    monkeypatch.setenv("TERMINAL_MAX_BACKGROUND_PROCESSES_PER_TASK", "2")
 
     assert policy.background_quota_available("task-a", registry=FakeRegistry()) == (False, 2, 2)
 

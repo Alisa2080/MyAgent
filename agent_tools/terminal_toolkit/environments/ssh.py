@@ -29,7 +29,7 @@ class SSHEnvironment(BaseEnvironment):
         self.user = user
         self.port = port
         self.key_path = key_path
-        self.control_dir = Path(tempfile.gettempdir()) / "hermes-terminal-toolkit-ssh"
+        self.control_dir = Path(tempfile.gettempdir()) / "terminal-toolkit-ssh"
         self.control_dir.mkdir(parents=True, exist_ok=True)
         socket_id = hashlib.sha256(f"{user}@{host}:{port}".encode()).hexdigest()[:16]
         self.control_socket = self.control_dir / f"{socket_id}.sock"

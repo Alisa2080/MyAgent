@@ -22,7 +22,7 @@ from agent_tools.file_toolkit.file_operations import (
 from agent_tools.file_toolkit import file_state
 from agent_tools.file_toolkit.patch_parser import parse_v4a_patch
 from agent_tools.file_toolkit.redact import redact_sensitive_text
-from agent_tools.hermes_terminal_toolkit.terminal_tool import (
+from agent_tools.terminal_toolkit.terminal_tool import (
     get_active_env,
     get_or_create_active_env,
 )
@@ -123,7 +123,7 @@ def _sample_mtime_for_task(resolved_path: str, task_id: str = "default") -> floa
     """Sample mtime from the correct filesystem for this task.
 
     Local environments use host os.path.getmtime. Docker, Singularity, and SSH
-    use the active Hermes backend shell. A None result is an explicit
+    use the active terminal toolkit backend shell. A None result is an explicit
     degradation: dedup and external-drift checks are skipped, but file_state
     still records reads/writes for sibling-writer coordination.
     """
@@ -332,7 +332,7 @@ def _is_internal_file_status_text(content: str) -> bool:
 
 
 def _get_file_ops(task_id: str = "default") -> ShellFileOperations:
-    """Get or create ShellFileOperations backed by this task's Hermes env."""
+    """Get or create ShellFileOperations backed by this task's terminal toolkit env."""
     effective_task_id = task_id or "default"
     with _file_ops_lock:
         cached = _file_ops_cache.get(effective_task_id)

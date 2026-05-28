@@ -1,0 +1,6 @@
+{
+  "pid": 6020,
+  "version": "0.9.6",
+  "socketPath": "/home/miku/projects/langchain/.codegraph/daemon.sock",
+  "startedAt": 1779936208305
+}

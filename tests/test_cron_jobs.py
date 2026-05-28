@@ -57,7 +57,7 @@ def test_import_cron_jobs_works_normally():
 def jobs_module(monkeypatch, tmp_path):
     import cron.jobs as jobs
 
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
     monkeypatch.setattr(
         jobs,
         "now",

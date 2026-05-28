@@ -51,7 +51,7 @@ def _fake_config(env_type="local"):
 
 
 def test_get_env_config_uses_profile_default_for_hosted(monkeypatch):
-    from agent_tools.hermes_terminal_toolkit import terminal_tool
+    from agent_tools.terminal_toolkit import terminal_tool
 
     monkeypatch.delenv("TERMINAL_ENV", raising=False)
     monkeypatch.delenv("TERMINAL_CONTAINER_NETWORK", raising=False)
@@ -64,7 +64,7 @@ def test_get_env_config_uses_profile_default_for_hosted(monkeypatch):
 
 
 def test_get_env_config_hosted_ignores_container_network_override(monkeypatch):
-    from agent_tools.hermes_terminal_toolkit import terminal_tool
+    from agent_tools.terminal_toolkit import terminal_tool
 
     monkeypatch.delenv("TERMINAL_ENV", raising=False)
     monkeypatch.setenv("AGENT_RUNTIME_PROFILE", "hosted")
@@ -77,7 +77,7 @@ def test_get_env_config_hosted_ignores_container_network_override(monkeypatch):
 
 
 def test_get_env_config_respects_explicit_terminal_env(monkeypatch):
-    from agent_tools.hermes_terminal_toolkit import terminal_tool
+    from agent_tools.terminal_toolkit import terminal_tool
 
     monkeypatch.setenv("AGENT_RUNTIME_PROFILE", "prod")
     monkeypatch.setenv("TERMINAL_ENV", "local")
@@ -86,7 +86,7 @@ def test_get_env_config_respects_explicit_terminal_env(monkeypatch):
 
 
 def test_get_env_config_dev_keeps_network_default(monkeypatch):
-    from agent_tools.hermes_terminal_toolkit import terminal_tool
+    from agent_tools.terminal_toolkit import terminal_tool
 
     monkeypatch.delenv("TERMINAL_ENV", raising=False)
     monkeypatch.delenv("TERMINAL_CONTAINER_NETWORK", raising=False)
@@ -99,7 +99,7 @@ def test_get_env_config_dev_keeps_network_default(monkeypatch):
 
 
 def test_get_or_create_active_env_creates_and_reuses(monkeypatch):
-    from agent_tools.hermes_terminal_toolkit import terminal_tool
+    from agent_tools.terminal_toolkit import terminal_tool
 
     _reset_terminal_env_state(monkeypatch, terminal_tool)
     created = []
@@ -125,7 +125,7 @@ def test_get_or_create_active_env_creates_and_reuses(monkeypatch):
 
 
 def test_get_or_create_active_env_uses_timeout_for_new_environment(monkeypatch):
-    from agent_tools.hermes_terminal_toolkit import terminal_tool
+    from agent_tools.terminal_toolkit import terminal_tool
 
     _reset_terminal_env_state(monkeypatch, terminal_tool)
     created = []
@@ -144,7 +144,7 @@ def test_get_or_create_active_env_uses_timeout_for_new_environment(monkeypatch):
 
 
 def test_get_or_create_active_env_preserves_explicit_zero_timeout(monkeypatch):
-    from agent_tools.hermes_terminal_toolkit import terminal_tool
+    from agent_tools.terminal_toolkit import terminal_tool
 
     _reset_terminal_env_state(monkeypatch, terminal_tool)
     created = []
@@ -163,7 +163,7 @@ def test_get_or_create_active_env_preserves_explicit_zero_timeout(monkeypatch):
 
 
 def test_get_or_create_active_env_cleans_redundant_env_outside_env_lock(monkeypatch):
-    from agent_tools.hermes_terminal_toolkit import terminal_tool
+    from agent_tools.terminal_toolkit import terminal_tool
 
     class TrackingLock:
         def __init__(self):
@@ -208,7 +208,7 @@ def test_get_or_create_active_env_cleans_redundant_env_outside_env_lock(monkeypa
 
 
 def test_get_or_create_active_env_builds_docker_config(monkeypatch):
-    from agent_tools.hermes_terminal_toolkit import terminal_tool
+    from agent_tools.terminal_toolkit import terminal_tool
 
     _reset_terminal_env_state(monkeypatch, terminal_tool)
     created = []
@@ -239,7 +239,7 @@ def test_get_or_create_active_env_builds_docker_config(monkeypatch):
 
 
 def test_cleanup_vm_clears_file_ops_cache_when_env_exists(monkeypatch):
-    from agent_tools.hermes_terminal_toolkit import terminal_tool
+    from agent_tools.terminal_toolkit import terminal_tool
 
     _reset_terminal_env_state(monkeypatch, terminal_tool)
     env = FakeEnv()
@@ -265,7 +265,7 @@ def test_cleanup_vm_clears_file_ops_cache_when_env_exists(monkeypatch):
 
 
 def test_cleanup_vm_clears_file_ops_cache_without_env(monkeypatch):
-    from agent_tools.hermes_terminal_toolkit import terminal_tool
+    from agent_tools.terminal_toolkit import terminal_tool
 
     _reset_terminal_env_state(monkeypatch, terminal_tool)
     cleared = []
@@ -283,7 +283,7 @@ def test_cleanup_vm_clears_file_ops_cache_without_env(monkeypatch):
 
 
 def test_cleanup_inactive_envs_clears_file_ops_cache_for_reaped_env(monkeypatch):
-    from agent_tools.hermes_terminal_toolkit import terminal_tool
+    from agent_tools.terminal_toolkit import terminal_tool
 
     _reset_terminal_env_state(monkeypatch, terminal_tool)
     stale_env = FakeEnv()
@@ -321,7 +321,7 @@ def test_cleanup_inactive_envs_clears_file_ops_cache_for_reaped_env(monkeypatch)
 
 
 def test_terminal_tool_uses_get_or_create_active_env(monkeypatch):
-    from agent_tools.hermes_terminal_toolkit import terminal_tool
+    from agent_tools.terminal_toolkit import terminal_tool
 
     fake_env = FakeEnv(cwd="/workspace")
     helper_calls = []
@@ -358,7 +358,7 @@ def test_terminal_tool_uses_get_or_create_active_env(monkeypatch):
 
 
 def test_terminal_tool_acquires_env_before_approval_guard(monkeypatch):
-    from agent_tools.hermes_terminal_toolkit import terminal_tool
+    from agent_tools.terminal_toolkit import terminal_tool
 
     call_order = []
 
@@ -393,7 +393,7 @@ def test_terminal_tool_acquires_env_before_approval_guard(monkeypatch):
 
 
 def test_create_environment_tags_local_env_metadata(monkeypatch):
-    from agent_tools.hermes_terminal_toolkit import terminal_tool
+    from agent_tools.terminal_toolkit import terminal_tool
 
     class FakeLocalEnv(FakeEnv):
         def __init__(self, cwd, timeout):
@@ -413,13 +413,13 @@ def test_create_environment_tags_local_env_metadata(monkeypatch):
         timeout=33,
     )
 
-    assert env._hermes_env_type == "local"
-    assert env._hermes_configured_cwd == "/repo"
-    assert env._hermes_host_cwd is None
+    assert env._backend_env_type == "local"
+    assert env._backend_configured_cwd == "/repo"
+    assert env._backend_host_cwd is None
 
 
 def test_create_environment_tags_docker_env_metadata(monkeypatch):
-    from agent_tools.hermes_terminal_toolkit import terminal_tool
+    from agent_tools.terminal_toolkit import terminal_tool
 
     class FakeDockerEnv(FakeEnv):
         def __init__(self, **kwargs):
@@ -442,6 +442,6 @@ def test_create_environment_tags_docker_env_metadata(monkeypatch):
         host_cwd="/home/miku/projects/langchain",
     )
 
-    assert env._hermes_env_type == "docker"
-    assert env._hermes_configured_cwd == "/workspace"
-    assert env._hermes_host_cwd == "/home/miku/projects/langchain"
+    assert env._backend_env_type == "docker"
+    assert env._backend_configured_cwd == "/workspace"
+    assert env._backend_host_cwd == "/home/miku/projects/langchain"

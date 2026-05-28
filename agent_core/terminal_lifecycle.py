@@ -6,9 +6,9 @@ from contextlib import contextmanager
 from typing import Any
 
 from agent_core.session_context import RuntimeContext
-from agent_tools.hermes_terminal_toolkit.interrupt import set_interrupt
-from agent_tools.hermes_terminal_toolkit.process_registry import process_registry
-from agent_tools.hermes_terminal_toolkit.terminal_tool import cleanup_vm, is_persistent_env
+from agent_tools.terminal_toolkit.interrupt import set_interrupt
+from agent_tools.terminal_toolkit.process_registry import process_registry
+from agent_tools.terminal_toolkit.terminal_tool import cleanup_vm, is_persistent_env
 
 logger = logging.getLogger(__name__)
 _recovery_attempted = False
@@ -18,7 +18,7 @@ _active_execution_lock = threading.RLock()
 
 
 def recover_terminal_processes() -> int:
-    """Recover host-backed Hermes background processes from checkpoint metadata once per process.
+    """Recover host-backed terminal toolkit background processes from checkpoint metadata once per process.
 
     Recovery is marked attempted before the registry call so failures do not retry in
     the same process. Concurrent callers wait for the first recovery attempt to finish
@@ -27,11 +27,11 @@ def recover_terminal_processes() -> int:
     global _recovery_attempted
     with _recovery_lock:
         if _recovery_attempted:
-            logger.info("Hermes terminal process recovery already attempted; skipping.")
+            logger.info("terminal toolkit process recovery already attempted; skipping.")
             return 0
         _recovery_attempted = True
         recovered = process_registry.recover_from_checkpoint()
-    logger.info("Recovered %s Hermes terminal process(es) from checkpoint.", recovered)
+    logger.info("Recovered %s terminal toolkit process(es) from checkpoint.", recovered)
     return recovered
 
 
@@ -60,16 +60,16 @@ def cleanup_terminal_session_for_runtime(runtime: Any | None) -> dict:
 
 
 def cleanup_task_resources_for_task_id(task_id: str, *, reason: str = "turn_finished") -> dict:
-    """Clean per-turn terminal resources for a Hermes task id.
+    """Clean per-turn terminal resources for a runtime task id.
 
     Persistent environments intentionally survive normal turn boundaries and are
-    left for the Hermes idle reaper. Non-persistent environments are torn down at
+    left for the terminal toolkit idle reaper. Non-persistent environments are torn down at
     turn end to avoid leaking sandbox resources.
     """
     try:
         persistent = is_persistent_env(task_id)
     except Exception as exc:
-        logger.exception("Failed to determine whether Hermes environment is persistent for task %s.", task_id)
+        logger.exception("Failed to determine whether terminal toolkit environment is persistent for task %s.", task_id)
         return {
             "task_id": task_id,
             "cleaned": False,
@@ -88,7 +88,7 @@ def cleanup_task_resources_for_task_id(task_id: str, *, reason: str = "turn_fini
     try:
         cleanup_vm(task_id)
     except Exception as exc:
-        logger.exception("Failed to clean Hermes environment for task %s.", task_id)
+        logger.exception("Failed to clean terminal toolkit environment for task %s.", task_id)
         result = {
             "task_id": task_id,
             "cleaned": False,

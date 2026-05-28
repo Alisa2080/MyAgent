@@ -1,5 +1,5 @@
 def test_langchain_terminal_adapter_uses_policy_wrapper(monkeypatch):
-    from agent_tools.hermes_terminal_toolkit import langchain_tools
+    from agent_tools.terminal_toolkit import langchain_tools
 
     calls = []
 
@@ -22,7 +22,7 @@ def test_langchain_terminal_adapter_uses_policy_wrapper(monkeypatch):
 
 
 def test_langchain_process_adapter_uses_policy_wrapper(monkeypatch):
-    from agent_tools.hermes_terminal_toolkit import langchain_tools
+    from agent_tools.terminal_toolkit import langchain_tools
 
     calls = []
 

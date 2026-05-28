@@ -1,4 +1,4 @@
-"""Shared terminal command helpers extracted from Hermes terminal_tool."""
+"""Shared terminal command helpers extracted from terminal toolkit_tool."""
 
 from __future__ import annotations
 
@@ -111,7 +111,7 @@ def _prompt_for_sudo_password(timeout_seconds: int = 45) -> str:
             result["done"] = True
 
     try:
-        os.environ["HERMES_SPINNER_PAUSE"] = "1"
+        os.environ["TERMINAL_SPINNER_PAUSE"] = "1"
         time.sleep(0.2)
         print()
         print("  Password (hidden): ", end="", flush=True)
@@ -126,7 +126,7 @@ def _prompt_for_sudo_password(timeout_seconds: int = 45) -> str:
         print()
         return ""
     finally:
-        os.environ.pop("HERMES_SPINNER_PAUSE", None)
+        os.environ.pop("TERMINAL_SPINNER_PAUSE", None)
 
 
 def _read_shell_token(command: str, start: int) -> tuple[str, int]:
@@ -336,7 +336,7 @@ def transform_sudo_command(command: str | None) -> tuple[str | None, str | None]
         return command, None
     has_configured_password = bool(os.getenv("SUDO_PASSWORD"))
     sudo_password = os.getenv("SUDO_PASSWORD", "") if has_configured_password else _get_cached_sudo_password()
-    if not has_configured_password and not sudo_password and os.getenv("HERMES_INTERACTIVE"):
+    if not has_configured_password and not sudo_password and os.getenv("TERMINAL_INTERACTIVE"):
         sudo_password = _prompt_for_sudo_password(timeout_seconds=45)
         if sudo_password:
             _set_cached_sudo_password(sudo_password)

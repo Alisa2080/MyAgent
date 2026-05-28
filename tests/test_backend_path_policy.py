@@ -6,11 +6,11 @@ import pytest
 class FakeEnv:
     def __init__(self, cwd, env_type, configured_cwd=None):
         self.cwd = cwd
-        self._hermes_env_type = env_type
-        self._hermes_configured_cwd = (
+        self._backend_env_type = env_type
+        self._backend_configured_cwd = (
             configured_cwd if configured_cwd is not None else cwd
         )
-        self._hermes_host_cwd = None
+        self._backend_host_cwd = None
 
 
 class DockerEnvironment:
@@ -94,7 +94,7 @@ def test_safe_write_roots_for_class_name_ssh_fallback_keeps_remote_home_cwd():
 
 def test_policy_uses_active_ssh_cwd_without_host_expanding_tilde(monkeypatch):
     from agent_tools.file_toolkit import backend_paths
-    from agent_tools.hermes_terminal_toolkit import terminal_tool
+    from agent_tools.terminal_toolkit import terminal_tool
 
     active = FakeEnv("/home/remote/project", "ssh")
     monkeypatch.setattr(terminal_tool, "get_active_env", lambda task_id: active)
@@ -124,7 +124,7 @@ def test_policy_uses_active_ssh_cwd_without_host_expanding_tilde(monkeypatch):
 
 def test_policy_allows_docker_workspace_even_when_cwd_is_root(monkeypatch):
     from agent_tools.file_toolkit import backend_paths
-    from agent_tools.hermes_terminal_toolkit import terminal_tool
+    from agent_tools.terminal_toolkit import terminal_tool
 
     active = FakeEnv("/root", "docker")
     monkeypatch.setattr(terminal_tool, "get_active_env", lambda task_id: active)
@@ -146,7 +146,7 @@ def test_policy_allows_docker_workspace_even_when_cwd_is_root(monkeypatch):
 
 def test_policy_rejects_host_expanded_home_as_ssh_configured_root(monkeypatch):
     from agent_tools.file_toolkit import backend_paths
-    from agent_tools.hermes_terminal_toolkit import terminal_tool
+    from agent_tools.terminal_toolkit import terminal_tool
 
     active = FakeEnv("/home/remote/project", "ssh", configured_cwd="~")
     monkeypatch.setattr(terminal_tool, "get_active_env", lambda task_id: active)
@@ -164,11 +164,11 @@ def test_policy_rejects_host_expanded_home_as_ssh_configured_root(monkeypatch):
 
 def test_policy_rejects_host_home_descendant_as_ssh_configured_root(monkeypatch):
     from agent_tools.file_toolkit import backend_paths
-    from agent_tools.hermes_terminal_toolkit import terminal_tool
+    from agent_tools.terminal_toolkit import terminal_tool
 
     host_repo = str(Path.home() / "repo")
     active = FakeEnv("/remote/project", "ssh", configured_cwd="~")
-    active._hermes_configured_cwd = None
+    active._backend_configured_cwd = None
     monkeypatch.setattr(terminal_tool, "get_active_env", lambda task_id: active)
     monkeypatch.setattr(
         terminal_tool,
@@ -191,11 +191,11 @@ def test_policy_rejects_host_home_descendant_as_ssh_configured_root(monkeypatch)
 
 def test_policy_keeps_docker_configured_cwd_under_host_home(monkeypatch):
     from agent_tools.file_toolkit import backend_paths
-    from agent_tools.hermes_terminal_toolkit import terminal_tool
+    from agent_tools.terminal_toolkit import terminal_tool
 
     host_repo = str(Path.home() / "repo")
     active = FakeEnv("/root/project", "docker", configured_cwd="/root/project")
-    active._hermes_configured_cwd = None
+    active._backend_configured_cwd = None
     monkeypatch.setattr(terminal_tool, "get_active_env", lambda task_id: active)
     monkeypatch.setattr(
         terminal_tool,
@@ -212,7 +212,7 @@ def test_policy_keeps_docker_configured_cwd_under_host_home(monkeypatch):
 
 def test_policy_excludes_stale_docker_configured_cwd_matching_host_home(monkeypatch):
     from agent_tools.file_toolkit import backend_paths
-    from agent_tools.hermes_terminal_toolkit import terminal_tool
+    from agent_tools.terminal_toolkit import terminal_tool
 
     active = FakeEnv("/root", "docker", configured_cwd=None)
     monkeypatch.setattr(terminal_tool, "get_active_env", lambda task_id: active)
@@ -234,7 +234,7 @@ def test_safe_write_roots_excludes_distinct_host_cwd_for_non_local_backend():
     from agent_tools.file_toolkit import backend_paths
 
     env = FakeEnv("/root/project", "docker", configured_cwd="/app")
-    env._hermes_host_cwd = "/host/project"
+    env._backend_host_cwd = "/host/project"
 
     roots = backend_paths.safe_write_roots_for_env(env)
 
@@ -248,7 +248,7 @@ def test_safe_write_roots_excludes_distinct_host_cwd_for_non_local_backend():
 def test_allowed_workspace_roots_exclude_host_workspace_for_docker_task(monkeypatch):
     from agent_core.workspace import WORKDIR
     from agent_tools.file_toolkit import backend_paths
-    from agent_tools.hermes_terminal_toolkit import terminal_tool
+    from agent_tools.terminal_toolkit import terminal_tool
 
     active = FakeEnv("/root/project", "docker", configured_cwd="/app")
     monkeypatch.setattr(terminal_tool, "get_active_env", lambda task_id: active)
@@ -269,7 +269,7 @@ def test_allowed_workspace_roots_exclude_host_workspace_for_docker_task(monkeypa
 @pytest.mark.parametrize("path", ["~", "~/outside.txt", "~user/file"])
 def test_policy_rejects_non_local_tilde_paths_without_backend_home(monkeypatch, path):
     from agent_tools.file_toolkit import backend_paths
-    from agent_tools.hermes_terminal_toolkit import terminal_tool
+    from agent_tools.terminal_toolkit import terminal_tool
 
     active = FakeEnv("/home/remote/project", "ssh")
     monkeypatch.setattr(terminal_tool, "get_active_env", lambda task_id: active)
@@ -285,7 +285,7 @@ def test_policy_rejects_non_local_tilde_paths_without_backend_home(monkeypatch, 
 
 def test_policy_prefers_active_configured_cwd_over_stale_global_config(monkeypatch):
     from agent_tools.file_toolkit import backend_paths
-    from agent_tools.hermes_terminal_toolkit import terminal_tool
+    from agent_tools.terminal_toolkit import terminal_tool
 
     active = FakeEnv("/root/project", "docker", configured_cwd="/active/configured")
     monkeypatch.setattr(terminal_tool, "get_active_env", lambda task_id: active)
@@ -305,7 +305,7 @@ def test_policy_prefers_local_active_configured_cwd_over_stale_global_config(
     monkeypatch,
 ):
     from agent_tools.file_toolkit import backend_paths
-    from agent_tools.hermes_terminal_toolkit import terminal_tool
+    from agent_tools.terminal_toolkit import terminal_tool
 
     active = FakeEnv("/runtime-local", "local", configured_cwd="/active-local")
     monkeypatch.setattr(terminal_tool, "get_active_env", lambda task_id: active)
@@ -327,10 +327,10 @@ def test_policy_prefers_local_active_configured_cwd_over_stale_global_config(
 
 def test_policy_prefers_active_host_cwd_over_stale_global_config(monkeypatch):
     from agent_tools.file_toolkit import backend_paths
-    from agent_tools.hermes_terminal_toolkit import terminal_tool
+    from agent_tools.terminal_toolkit import terminal_tool
 
     active = FakeEnv("/runtime-local", "local", configured_cwd="/active-local")
-    active._hermes_host_cwd = "/active-host"
+    active._backend_host_cwd = "/active-host"
     monkeypatch.setattr(terminal_tool, "get_active_env", lambda task_id: active)
     monkeypatch.setattr(
         terminal_tool,
@@ -354,7 +354,7 @@ def test_policy_prefers_active_host_cwd_over_stale_global_config(monkeypatch):
 
 def test_policy_uses_singularity_active_cwd_without_stale_config_root(monkeypatch):
     from agent_tools.file_toolkit import backend_paths
-    from agent_tools.hermes_terminal_toolkit import terminal_tool
+    from agent_tools.terminal_toolkit import terminal_tool
 
     active = FakeEnv("/analysis/project", "singularity")
     monkeypatch.setattr(terminal_tool, "get_active_env", lambda task_id: active)
@@ -378,10 +378,10 @@ def test_policy_uses_singularity_active_cwd_without_stale_config_root(monkeypatc
 def test_allowed_workspace_roots_exclude_non_local_active_host_cwd(monkeypatch):
     from agent_core.workspace import WORKDIR
     from agent_tools.file_toolkit import backend_paths
-    from agent_tools.hermes_terminal_toolkit import terminal_tool
+    from agent_tools.terminal_toolkit import terminal_tool
 
     active = FakeEnv("/root/project", "docker", configured_cwd="/app")
-    active._hermes_host_cwd = "/host/project"
+    active._backend_host_cwd = "/host/project"
     monkeypatch.setattr(terminal_tool, "get_active_env", lambda task_id: active)
     monkeypatch.setattr(
         terminal_tool,

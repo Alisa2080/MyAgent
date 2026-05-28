@@ -13,8 +13,8 @@ from ..paths import get_subprocess_home
 _IS_WINDOWS = platform.system() == "Windows"
 
 
-# Hermes-internal env vars that should NOT leak into terminal subprocesses.
-_HERMES_PROVIDER_ENV_FORCE_PREFIX = "_HERMES_FORCE_"
+# toolkit-internal env vars that should NOT leak into terminal subprocesses.
+_AGENT_PROVIDER_ENV_FORCE_PREFIX = "_AGENT_FORCE_"
 
 
 def _build_provider_env_blocklist() -> frozenset:
@@ -85,31 +85,31 @@ def _build_provider_env_blocklist() -> frozenset:
     return frozenset(blocked)
 
 
-_HERMES_PROVIDER_ENV_BLOCKLIST = _build_provider_env_blocklist()
+_AGENT_PROVIDER_ENV_BLOCKLIST = _build_provider_env_blocklist()
 
 
 def _get_passthrough_env_names() -> set[str]:
-    raw = os.getenv("HERMES_TERMINAL_TOOLKIT_ENV_PASSTHROUGH", "")
+    raw = os.getenv("TERMINAL_TOOLKIT_ENV_PASSTHROUGH", "")
     return {item.strip() for item in raw.split(",") if item.strip()}
 
 
 def _sanitize_subprocess_env(base_env: dict | None, extra_env: dict | None = None) -> dict:
-    """Filter Hermes-managed secrets from a subprocess environment."""
+    """Filter toolkit-managed secrets from a subprocess environment."""
     passthrough = _get_passthrough_env_names()
 
     sanitized: dict[str, str] = {}
 
     for key, value in (base_env or {}).items():
-        if key.startswith(_HERMES_PROVIDER_ENV_FORCE_PREFIX):
+        if key.startswith(_AGENT_PROVIDER_ENV_FORCE_PREFIX):
             continue
-        if key not in _HERMES_PROVIDER_ENV_BLOCKLIST or key in passthrough:
+        if key not in _AGENT_PROVIDER_ENV_BLOCKLIST or key in passthrough:
             sanitized[key] = value
 
     for key, value in (extra_env or {}).items():
-        if key.startswith(_HERMES_PROVIDER_ENV_FORCE_PREFIX):
-            real_key = key[len(_HERMES_PROVIDER_ENV_FORCE_PREFIX):]
+        if key.startswith(_AGENT_PROVIDER_ENV_FORCE_PREFIX):
+            real_key = key[len(_AGENT_PROVIDER_ENV_FORCE_PREFIX):]
             sanitized[real_key] = value
-        elif key not in _HERMES_PROVIDER_ENV_BLOCKLIST or key in passthrough:
+        elif key not in _AGENT_PROVIDER_ENV_BLOCKLIST or key in passthrough:
             sanitized[key] = value
 
     _profile_home = get_subprocess_home()
@@ -130,7 +130,7 @@ def _find_bash() -> str:
             or "/bin/sh"
         )
 
-    custom = os.environ.get("HERMES_GIT_BASH_PATH")
+    custom = os.environ.get("TERMINAL_GIT_BASH_PATH")
     if custom and os.path.isfile(custom):
         return custom
 
@@ -147,9 +147,9 @@ def _find_bash() -> str:
             return candidate
 
     raise RuntimeError(
-        "Git Bash not found. Hermes Agent requires Git for Windows on Windows.\n"
+        "Git Bash not found. Agent CLI requires Git for Windows on Windows.\n"
         "Install it from: https://git-scm.com/download/win\n"
-        "Or set HERMES_GIT_BASH_PATH to your bash.exe location."
+        "Or set TERMINAL_GIT_BASH_PATH to your bash.exe location."
     )
 
 
@@ -171,10 +171,10 @@ def _make_run_env(env: dict) -> dict:
     merged = dict(os.environ | env)
     run_env = {}
     for k, v in merged.items():
-        if k.startswith(_HERMES_PROVIDER_ENV_FORCE_PREFIX):
-            real_key = k[len(_HERMES_PROVIDER_ENV_FORCE_PREFIX):]
+        if k.startswith(_AGENT_PROVIDER_ENV_FORCE_PREFIX):
+            real_key = k[len(_AGENT_PROVIDER_ENV_FORCE_PREFIX):]
             run_env[real_key] = v
-        elif k not in _HERMES_PROVIDER_ENV_BLOCKLIST or k in passthrough:
+        elif k not in _AGENT_PROVIDER_ENV_BLOCKLIST or k in passthrough:
             run_env[k] = v
     existing_path = run_env.get("PATH", "")
     if "/usr/bin" not in existing_path.split(":"):
@@ -201,7 +201,7 @@ def _resolve_shell_init_files() -> list[str]:
     Expands ``~`` and ``${VAR}`` references and drops anything that doesn't
     exist on disk, so a missing ``~/.bashrc`` never breaks the snapshot.
     The ``auto_source_bashrc`` path runs only when the user hasn't supplied
-    an explicit list — once they have, Hermes trusts them.
+    an explicit list — once they have, terminal toolkit trusts them.
     """
     explicit, auto_bashrc = _read_terminal_shell_init_config()
 

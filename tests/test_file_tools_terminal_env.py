@@ -37,7 +37,7 @@ def clear_file_ops_cache():
     clear_tool_policy_grants()
 
 
-def test_get_file_ops_wraps_hermes_active_env(monkeypatch):
+def test_get_file_ops_wraps_terminal_active_env(monkeypatch):
     fake_env = FakeEnv()
     calls = []
 
@@ -136,10 +136,10 @@ def test_get_live_tracking_cwd_ignores_stale_cached_wrapper_without_active_env(
     assert active_calls == ["task-a"]
 
 
-def test_resolve_path_uses_active_hermes_env_cwd_without_cached_wrapper(
+def test_resolve_path_uses_active_terminal_env_cwd_without_cached_wrapper(
     tmp_path, monkeypatch
 ):
-    from agent_tools.hermes_terminal_toolkit import terminal_tool
+    from agent_tools.terminal_toolkit import terminal_tool
 
     fake_env = FakeEnv()
     fake_env.cwd = str(tmp_path)
@@ -172,12 +172,12 @@ def test_resolve_path_uses_active_hermes_env_cwd_without_cached_wrapper(
 
 
 def test_resolve_path_for_task_uses_backend_policy_for_ssh_active_cwd(monkeypatch):
-    from agent_tools.hermes_terminal_toolkit import terminal_tool
+    from agent_tools.terminal_toolkit import terminal_tool
 
     class SSHEnv:
         cwd = "/home/remote/project"
-        _hermes_env_type = "ssh"
-        _hermes_configured_cwd = "~"
+        _backend_env_type = "ssh"
+        _backend_configured_cwd = "~"
 
     monkeypatch.setattr(
         terminal_tool,
@@ -238,7 +238,7 @@ def test_shell_file_operations_approved_write_roots_temporarily_extend_safety_ga
 
     class LocalEnvironment:
         cwd = str(safe_root)
-        _hermes_env_type = "local"
+        _backend_env_type = "local"
 
         def execute(self, command, **kwargs):
             return {"output": "", "returncode": 0}
@@ -266,7 +266,7 @@ def test_shell_file_operations_approved_write_roots_are_context_local(
 
     class LocalEnvironment:
         cwd = str(safe_root)
-        _hermes_env_type = "local"
+        _backend_env_type = "local"
 
         def execute(self, command, **kwargs):
             return {"output": "", "returncode": 0}
@@ -318,7 +318,7 @@ def test_write_file_uses_middleware_grant_for_review_path(monkeypatch):
     from agent_core.permissions.approvals import make_args_digest
     from agent_core.permissions.tool_grants import ToolPolicyGrant, record_tool_policy_grant
     from agent_core.policy_tool_middleware import write_file_policy_args
-    from agent_core.session_context import hermes_task_id_from_thread_id
+    from agent_core.session_context import runtime_task_id_from_thread_id
     from agent_tools.public import files
 
     calls = []
@@ -332,7 +332,7 @@ def test_write_file_uses_middleware_grant_for_review_path(monkeypatch):
 
     record_tool_policy_grant(
         ToolPolicyGrant(
-            task_id=hermes_task_id_from_thread_id(thread_id),
+            task_id=runtime_task_id_from_thread_id(thread_id),
             tool_call_id=tool_call_id,
             tool_name="write_file",
             args_digest=make_args_digest(policy_args),
@@ -379,7 +379,7 @@ def test_write_file_consumes_middleware_grant_for_allow_path(monkeypatch):
         record_tool_policy_grant,
     )
     from agent_core.policy_tool_middleware import write_file_policy_args
-    from agent_core.session_context import hermes_task_id_from_thread_id
+    from agent_core.session_context import runtime_task_id_from_thread_id
     from agent_tools.public import files
 
     thread_id = "write-allow-grant-thread"
@@ -388,7 +388,7 @@ def test_write_file_consumes_middleware_grant_for_allow_path(monkeypatch):
         execution_info=SimpleNamespace(thread_id=thread_id),
         tool_call_id=tool_call_id,
     )
-    task_id = hermes_task_id_from_thread_id(thread_id)
+    task_id = runtime_task_id_from_thread_id(thread_id)
     policy_args = write_file_policy_args({"path": "/workspace/out.txt", "content": "ok"})
 
     record_tool_policy_grant(
@@ -435,7 +435,7 @@ def test_patch_uses_middleware_grant_for_review_path(monkeypatch):
     from agent_core.permissions.approvals import make_args_digest
     from agent_core.permissions.tool_grants import ToolPolicyGrant, record_tool_policy_grant
     from agent_core.policy_tool_middleware import patch_policy_args
-    from agent_core.session_context import hermes_task_id_from_thread_id
+    from agent_core.session_context import runtime_task_id_from_thread_id
     from agent_tools.public import files
 
     calls = []
@@ -458,7 +458,7 @@ def test_patch_uses_middleware_grant_for_review_path(monkeypatch):
 
     record_tool_policy_grant(
         ToolPolicyGrant(
-            task_id=hermes_task_id_from_thread_id(thread_id),
+            task_id=runtime_task_id_from_thread_id(thread_id),
             tool_call_id=tool_call_id,
             tool_name="patch",
             args_digest=make_args_digest(policy_args),
@@ -511,7 +511,7 @@ def test_patch_consumes_middleware_grant_for_allow_path(monkeypatch):
         record_tool_policy_grant,
     )
     from agent_core.policy_tool_middleware import patch_policy_args
-    from agent_core.session_context import hermes_task_id_from_thread_id
+    from agent_core.session_context import runtime_task_id_from_thread_id
     from agent_tools.public import files
 
     thread_id = "patch-allow-grant-thread"
@@ -520,7 +520,7 @@ def test_patch_consumes_middleware_grant_for_allow_path(monkeypatch):
         execution_info=SimpleNamespace(thread_id=thread_id),
         tool_call_id=tool_call_id,
     )
-    task_id = hermes_task_id_from_thread_id(thread_id)
+    task_id = runtime_task_id_from_thread_id(thread_id)
     policy_args = patch_policy_args(
         {
             "mode": "replace",
@@ -582,7 +582,7 @@ def test_patch_review_requires_union_of_risk_tags(monkeypatch):
     from agent_core.permissions.approvals import make_args_digest
     from agent_core.permissions.tool_grants import ToolPolicyGrant, record_tool_policy_grant
     from agent_core.policy_tool_middleware import patch_policy_args
-    from agent_core.session_context import hermes_task_id_from_thread_id
+    from agent_core.session_context import runtime_task_id_from_thread_id
     from agent_tools.public import files
 
     calls = []
@@ -592,7 +592,7 @@ def test_patch_review_requires_union_of_risk_tags(monkeypatch):
         execution_info=SimpleNamespace(thread_id=thread_id),
         tool_call_id=tool_call_id,
     )
-    task_id = hermes_task_id_from_thread_id(thread_id)
+    task_id = runtime_task_id_from_thread_id(thread_id)
     policy_args = patch_policy_args(
         {
             "mode": "patch",
@@ -674,7 +674,7 @@ def test_shell_file_operations_allows_workspace_writes_for_docker_safe_root(
 
     class DockerEnvironment:
         cwd = "/workspace"
-        _hermes_env_type = "docker"
+        _backend_env_type = "docker"
 
         def __init__(self):
             self.commands = []
@@ -706,7 +706,7 @@ def test_shell_file_operations_allows_docker_workspace_absolute_write(
 
     class DockerEnvironment:
         cwd = "/root"
-        _hermes_env_type = "docker"
+        _backend_env_type = "docker"
 
         def __init__(self):
             self.commands = []
@@ -739,7 +739,7 @@ def test_shell_file_operations_allows_effective_docker_cwd_writes(
 
     class DockerEnvironment:
         cwd = "/root"
-        _hermes_env_type = "docker"
+        _backend_env_type = "docker"
 
         def __init__(self):
             self.commands = []
@@ -771,8 +771,8 @@ def test_shell_file_operations_allows_singularity_effective_cwd_writes(
 
     class SingularityEnvironment:
         cwd = "/project"
-        _hermes_env_type = "singularity"
-        _hermes_configured_cwd = "/configured"
+        _backend_env_type = "singularity"
+        _backend_configured_cwd = "/configured"
 
         def __init__(self):
             self.commands = []
@@ -804,8 +804,8 @@ def test_shell_file_operations_keeps_workspace_root_denied_for_singularity(
 
     class SingularityEnvironment:
         cwd = "/project"
-        _hermes_env_type = "singularity"
-        _hermes_configured_cwd = "/configured"
+        _backend_env_type = "singularity"
+        _backend_configured_cwd = "/configured"
 
         def __init__(self):
             self.commands = []
@@ -833,7 +833,7 @@ def test_shell_file_operations_denies_backend_symlink_escape_from_workspace(
 
     class DockerEnvironment:
         cwd = "/workspace"
-        _hermes_env_type = "docker"
+        _backend_env_type = "docker"
 
         def __init__(self):
             self.commands = []
@@ -863,7 +863,7 @@ def test_shell_file_operations_allows_effective_ssh_cwd_writes(
 
     class SSHEnvironment:
         cwd = "/home/remote/project"
-        _hermes_env_type = "ssh"
+        _backend_env_type = "ssh"
 
         def __init__(self):
             self.commands = []
@@ -899,7 +899,7 @@ def test_shell_file_operations_keeps_workspace_root_denied_for_ssh(
 
     class SSHEnvironment:
         cwd = "/home/remote/project"
-        _hermes_env_type = "ssh"
+        _backend_env_type = "ssh"
 
         def __init__(self):
             self.commands = []
@@ -983,7 +983,7 @@ def test_shell_file_operations_denies_host_safe_root_absolute_path_outside_backe
     target = safe_root / "outside-backend.txt"
 
     class BackendEnvironment:
-        _hermes_env_type = env_type
+        _backend_env_type = env_type
         cwd = "/workspace" if env_type == "docker" else "/home/remote/project"
 
         def __init__(self):
@@ -1289,12 +1289,12 @@ def test_sample_mtime_degrades_when_backend_context_lookup_fails_without_host_st
 
 def test_read_file_tool_uses_backend_mtime_for_non_local_dedup(monkeypatch):
     from agent_tools.file_toolkit.result_models import ReadResult
-    from agent_tools.hermes_terminal_toolkit import terminal_tool
+    from agent_tools.terminal_toolkit import terminal_tool
 
     class DockerEnv:
         cwd = "/workspace"
-        _hermes_env_type = "docker"
-        _hermes_configured_cwd = "/workspace"
+        _backend_env_type = "docker"
+        _backend_configured_cwd = "/workspace"
 
     class FakeFileOps:
         def __init__(self):
@@ -1337,12 +1337,12 @@ def test_read_file_tool_uses_backend_mtime_for_non_local_dedup(monkeypatch):
 
 def test_read_file_tool_records_unknown_backend_mtime_explicitly(monkeypatch):
     from agent_tools.file_toolkit.result_models import ReadResult
-    from agent_tools.hermes_terminal_toolkit import terminal_tool
+    from agent_tools.terminal_toolkit import terminal_tool
 
     class SSHEnv:
         cwd = "/home/remote/project"
-        _hermes_env_type = "ssh"
-        _hermes_configured_cwd = "/home/remote/project"
+        _backend_env_type = "ssh"
+        _backend_configured_cwd = "/home/remote/project"
 
     class FakeFileOps:
         def stat_mtime(self, path):
@@ -1380,12 +1380,12 @@ def test_read_file_tool_records_unknown_backend_mtime_explicitly(monkeypatch):
 
 def test_read_file_tool_repeats_full_read_when_backend_mtime_unknown(monkeypatch):
     from agent_tools.file_toolkit.result_models import ReadResult
-    from agent_tools.hermes_terminal_toolkit import terminal_tool
+    from agent_tools.terminal_toolkit import terminal_tool
 
     class SSHEnv:
         cwd = "/home/remote/project"
-        _hermes_env_type = "ssh"
-        _hermes_configured_cwd = "/home/remote/project"
+        _backend_env_type = "ssh"
+        _backend_configured_cwd = "/home/remote/project"
 
     class FakeFileOps:
         def __init__(self):
@@ -1426,12 +1426,12 @@ def test_read_file_tool_repeats_full_read_when_backend_mtime_unknown(monkeypatch
 
 def test_write_file_tool_passes_backend_mtime_to_stale_and_note_write(monkeypatch):
     from agent_tools.file_toolkit.result_models import WriteResult
-    from agent_tools.hermes_terminal_toolkit import terminal_tool
+    from agent_tools.terminal_toolkit import terminal_tool
 
     class DockerEnv:
         cwd = "/workspace"
-        _hermes_env_type = "docker"
-        _hermes_configured_cwd = "/workspace"
+        _backend_env_type = "docker"
+        _backend_configured_cwd = "/workspace"
 
     class FakeFileOps:
         def __init__(self):
@@ -1491,8 +1491,8 @@ def test_write_file_tool_passes_backend_mtime_to_stale_and_note_write(monkeypatc
     assert fake_ops.stats == ["/workspace/notes.txt", "/workspace/notes.txt"]
 
 
-def test_write_file_tool_smokes_real_local_hermes_env(tmp_path, monkeypatch):
-    from agent_tools.hermes_terminal_toolkit import terminal_tool
+def test_write_file_tool_smokes_real_local_terminal_env(tmp_path, monkeypatch):
+    from agent_tools.terminal_toolkit import terminal_tool
     from contextlib import suppress
 
     task_id = "task-real-file"

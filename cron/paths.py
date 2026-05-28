@@ -6,13 +6,13 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from agent_tools.hermes_terminal_toolkit.paths import get_toolkit_home
+from agent_tools.terminal_toolkit.paths import get_toolkit_home
 
 
 def get_cron_home() -> Path:
-    hermes_home = os.getenv("HERMES_HOME")
-    if hermes_home:
-        return Path(os.path.expanduser(hermes_home)).resolve()
+    cron_home = os.getenv("AGENT_CRON_HOME")
+    if cron_home:
+        return Path(os.path.expanduser(cron_home)).resolve()
     return get_toolkit_home().resolve()
 
 

@@ -13,7 +13,7 @@ import pytest
 def test_validate_script_path_rejects_unsafe_paths(monkeypatch, tmp_path):
     import cron.runner as runner
 
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
 
     assert runner.validate_script_path("/tmp/script.py").startswith(
         "Script path must be relative"
@@ -38,7 +38,7 @@ def test_validate_script_path_rejects_unsafe_paths(monkeypatch, tmp_path):
 def test_wake_gate_false_skips_agent(monkeypatch, tmp_path):
     import cron.runner as runner
 
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
     scripts = tmp_path / "scripts"
     scripts.mkdir()
     script = scripts / "check.py"
@@ -61,7 +61,7 @@ def test_wake_gate_false_skips_agent(monkeypatch, tmp_path):
 def test_wake_gate_false_uses_stdout_even_when_stderr_is_present(monkeypatch, tmp_path):
     import cron.runner as runner
 
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
     scripts = tmp_path / "scripts"
     scripts.mkdir()
     script = scripts / "check.py"
@@ -174,7 +174,7 @@ def test_build_job_prompt_quotes_untrusted_context_before_actual_job_prompt(
 def test_script_failure_returns_failure_result(monkeypatch, tmp_path):
     import cron.runner as runner
 
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
     scripts = tmp_path / "scripts"
     scripts.mkdir()
     script = scripts / "fail.py"
@@ -192,7 +192,7 @@ def test_script_failure_returns_failure_result(monkeypatch, tmp_path):
 def test_run_script_uses_script_parent_as_cwd(monkeypatch, tmp_path):
     import cron.runner as runner
 
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
     nested = tmp_path / "scripts" / "nested"
     nested.mkdir(parents=True)
     script = nested / "cwd.py"
@@ -212,21 +212,21 @@ def test_run_script_uses_script_parent_as_cwd(monkeypatch, tmp_path):
 def test_script_timeout_env_default_and_override(monkeypatch):
     import cron.runner as runner
 
-    monkeypatch.delenv("HERMES_CRON_SCRIPT_TIMEOUT", raising=False)
+    monkeypatch.delenv("AGENT_CRON_SCRIPT_TIMEOUT", raising=False)
     assert runner._script_timeout() == 120
 
-    monkeypatch.setenv("HERMES_CRON_SCRIPT_TIMEOUT", "3")
+    monkeypatch.setenv("AGENT_CRON_SCRIPT_TIMEOUT", "3")
     assert runner._script_timeout() == 3
 
-    monkeypatch.setenv("HERMES_CRON_SCRIPT_TIMEOUT", "not-an-int")
+    monkeypatch.setenv("AGENT_CRON_SCRIPT_TIMEOUT", "not-an-int")
     assert runner._script_timeout() == 120
 
 
 def test_script_timeout_failure_path_returns_failure(monkeypatch, tmp_path):
     import cron.runner as runner
 
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
-    monkeypatch.setenv("HERMES_CRON_SCRIPT_TIMEOUT", "1")
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+    monkeypatch.setenv("AGENT_CRON_SCRIPT_TIMEOUT", "1")
     scripts = tmp_path / "scripts"
     scripts.mkdir()
     script = scripts / "slow.py"
@@ -246,7 +246,7 @@ def test_script_timeout_failure_path_returns_failure(monkeypatch, tmp_path):
 def test_run_script_captures_stdout_stderr_with_bounded_output(monkeypatch, tmp_path):
     import cron.runner as runner
 
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
     monkeypatch.setattr(runner, "SCRIPT_OUTPUT_MAX_CHARS", 80)
     scripts = tmp_path / "scripts"
     scripts.mkdir()
@@ -271,7 +271,7 @@ def test_script_output_is_redacted_in_prompt_and_output_doc(monkeypatch, tmp_pat
 
     raw_secret = "OPENAI_API_KEY=sk-secretsecretsecret1234567890"
     seen = {}
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
     scripts = tmp_path / "scripts"
     scripts.mkdir()
     script = scripts / "secret.py"
@@ -440,7 +440,7 @@ def test_invoke_cron_agent_process_passes_recursion_limit_and_default_timeout(
         def is_alive(self):
             return False
 
-    monkeypatch.delenv("HERMES_CRON_TIMEOUT", raising=False)
+    monkeypatch.delenv("AGENT_CRON_TIMEOUT", raising=False)
     monkeypatch.setattr(runner, "_build_cron_agent", lambda job: FakeAgent())
     monkeypatch.setattr(runner, "_create_agent_result_queue", lambda: FakeQueue())
     monkeypatch.setattr(
@@ -483,7 +483,7 @@ def test_invoke_cron_agent_timeout_zero_joins_without_timeout(monkeypatch):
         def is_alive(self):
             return False
 
-    monkeypatch.setenv("HERMES_CRON_TIMEOUT", "0")
+    monkeypatch.setenv("AGENT_CRON_TIMEOUT", "0")
     monkeypatch.setattr(runner, "_create_agent_result_queue", lambda: FakeQueue())
     monkeypatch.setattr(
         runner, "_create_agent_process", lambda job, prompt, result_queue: FakeProcess()
@@ -523,7 +523,7 @@ def test_invoke_cron_agent_timeout_terminates_process_and_propagates(monkeypatch
         def kill(self):
             calls["killed"] = True
 
-    monkeypatch.setenv("HERMES_CRON_TIMEOUT", "1")
+    monkeypatch.setenv("AGENT_CRON_TIMEOUT", "1")
     monkeypatch.setattr(runner, "_create_agent_result_queue", lambda: FakeQueue())
     monkeypatch.setattr(
         runner, "_create_agent_process", lambda job, prompt, result_queue: FakeProcess()
@@ -565,7 +565,7 @@ def test_invoke_cron_agent_timeout_kills_descendant_process_group(
             subprocess.Popen([sys.executable, "-c", code, str(marker_path)])
             time.sleep(30)
 
-    monkeypatch.setenv("HERMES_CRON_TIMEOUT", "1")
+    monkeypatch.setenv("AGENT_CRON_TIMEOUT", "1")
     monkeypatch.setattr(runner, "_build_cron_agent", lambda job: FakeAgent())
 
     start = time.monotonic()
@@ -588,7 +588,7 @@ def test_invoke_cron_agent_large_final_response_does_not_timeout(monkeypatch):
         def invoke(self, payload, config):
             return {"messages": [SimpleNamespace(content=large_response)]}
 
-    monkeypatch.setenv("HERMES_CRON_TIMEOUT", "3")
+    monkeypatch.setenv("AGENT_CRON_TIMEOUT", "3")
     monkeypatch.setattr(runner, "_build_cron_agent", lambda job: FakeAgent())
 
     assert runner._invoke_cron_agent({"id": "job-1"}, "prompt") == large_response

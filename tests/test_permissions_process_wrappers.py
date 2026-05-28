@@ -34,9 +34,9 @@ def clear_approval_state():
 
 
 def _owning_session(thread_id: str):
-    from agent_core.session_context import hermes_task_id_from_thread_id
+    from agent_core.session_context import runtime_task_id_from_thread_id
 
-    return SimpleNamespace(task_id=hermes_task_id_from_thread_id(thread_id))
+    return SimpleNamespace(task_id=runtime_task_id_from_thread_id(thread_id))
 
 
 def test_process_poll_does_not_need_approval(monkeypatch):
@@ -108,7 +108,7 @@ def test_process_submit_with_approval_runs(monkeypatch):
         record_approval,
     )
     from agent_core.permissions.tool_policy import canonical_tool_args
-    from agent_core.session_context import hermes_task_id_from_thread_id
+    from agent_core.session_context import runtime_task_id_from_thread_id
 
     terminal_tools = _terminal_module()
     calls = []
@@ -122,7 +122,7 @@ def test_process_submit_with_approval_runs(monkeypatch):
         ApprovalRecord(
             approval_id="approval-process",
             decision_id="decision-process",
-            task_id=hermes_task_id_from_thread_id(thread_id),
+            task_id=runtime_task_id_from_thread_id(thread_id),
             tool_call_id=tool_call_id,
             tool_name="process",
             args_digest=make_args_digest(approval_args),
@@ -154,7 +154,7 @@ def test_process_uses_middleware_grant_without_consuming_approval(monkeypatch):
     from agent_core.permissions.approvals import make_args_digest
     from agent_core.permissions.tool_grants import ToolPolicyGrant, record_tool_policy_grant
     from agent_core.policy_tool_middleware import process_policy_args
-    from agent_core.session_context import hermes_task_id_from_thread_id
+    from agent_core.session_context import runtime_task_id_from_thread_id
 
     terminal_tools = _terminal_module()
     calls = []
@@ -164,7 +164,7 @@ def test_process_uses_middleware_grant_without_consuming_approval(monkeypatch):
 
     record_tool_policy_grant(
         ToolPolicyGrant(
-            task_id=hermes_task_id_from_thread_id(thread_id),
+            task_id=runtime_task_id_from_thread_id(thread_id),
             tool_call_id=tool_call_id,
             tool_name="process",
             args_digest=make_args_digest(policy_args),

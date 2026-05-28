@@ -2,22 +2,22 @@ from types import SimpleNamespace
 
 from agent_core.session_context import (
     RuntimeContext,
-    hermes_task_id_from_runtime,
-    hermes_task_id_from_thread_id,
+    runtime_task_id_from_runtime,
+    runtime_task_id_from_thread_id,
 )
 
 
-def test_hermes_task_id_is_deterministic_and_prefixed():
-    first = hermes_task_id_from_thread_id("thread-123")
-    second = hermes_task_id_from_thread_id("thread-123")
+def test_terminal_task_id_is_deterministic_and_prefixed():
+    first = runtime_task_id_from_thread_id("thread-123")
+    second = runtime_task_id_from_thread_id("thread-123")
 
     assert first == second
     assert first.startswith("lg_")
     assert len(first) == 27
 
 
-def test_hermes_task_id_does_not_embed_raw_thread_id():
-    task_id = hermes_task_id_from_thread_id("user@example.com/session/abc")
+def test_terminal_task_id_does_not_embed_raw_thread_id():
+    task_id = runtime_task_id_from_thread_id("user@example.com/session/abc")
 
     assert "user@example.com" not in task_id
     assert "/" not in task_id
@@ -25,9 +25,9 @@ def test_hermes_task_id_does_not_embed_raw_thread_id():
 
 
 def test_missing_thread_id_falls_back_to_default():
-    assert hermes_task_id_from_thread_id(None) == "default"
-    assert hermes_task_id_from_thread_id("") == "default"
-    assert hermes_task_id_from_runtime(None) == "default"
+    assert runtime_task_id_from_thread_id(None) == "default"
+    assert runtime_task_id_from_thread_id("") == "default"
+    assert runtime_task_id_from_runtime(None) == "default"
 
 
 def test_runtime_execution_info_thread_id_is_used():
@@ -36,7 +36,7 @@ def test_runtime_execution_info_thread_id_is_used():
         config={"configurable": {"thread_id": "thread-from-config"}},
     )
 
-    assert hermes_task_id_from_runtime(runtime) == hermes_task_id_from_thread_id("thread-from-runtime")
+    assert runtime_task_id_from_runtime(runtime) == runtime_task_id_from_thread_id("thread-from-runtime")
 
 
 def test_runtime_task_id_ignores_raising_tool_call_id_property():
@@ -49,7 +49,7 @@ def test_runtime_task_id_ignores_raising_tool_call_id_property():
 
     runtime = RuntimeWithRaisingToolCallId()
 
-    assert hermes_task_id_from_runtime(runtime) == hermes_task_id_from_thread_id("thread-from-runtime")
+    assert runtime_task_id_from_runtime(runtime) == runtime_task_id_from_thread_id("thread-from-runtime")
     assert RuntimeContext.from_runtime(runtime).tool_call_id is None
 
 
@@ -59,7 +59,7 @@ def test_runtime_config_thread_id_is_fallback_when_execution_info_missing():
         config={"configurable": {"thread_id": "thread-from-config"}},
     )
 
-    assert hermes_task_id_from_runtime(runtime) == hermes_task_id_from_thread_id("thread-from-config")
+    assert runtime_task_id_from_runtime(runtime) == runtime_task_id_from_thread_id("thread-from-config")
 
 
 def test_runtime_context_prefers_execution_info_thread_id():
@@ -72,7 +72,7 @@ def test_runtime_context_prefers_execution_info_thread_id():
     ctx = RuntimeContext.from_runtime(runtime)
 
     assert ctx.thread_id == "thread-from-runtime"
-    assert ctx.task_id == hermes_task_id_from_thread_id("thread-from-runtime")
+    assert ctx.task_id == runtime_task_id_from_thread_id("thread-from-runtime")
     assert ctx.tool_call_id == "call-123"
     assert ctx.thread_source == "execution_info"
     assert ctx.has_thread is True
@@ -89,7 +89,7 @@ def test_runtime_context_falls_back_to_config_thread_id():
     ctx = RuntimeContext.from_runtime(runtime)
 
     assert ctx.thread_id == "thread-from-config"
-    assert ctx.task_id == hermes_task_id_from_thread_id("thread-from-config")
+    assert ctx.task_id == runtime_task_id_from_thread_id("thread-from-config")
     assert ctx.tool_call_id == "call-456"
     assert ctx.thread_source == "config"
     assert ctx.has_thread is True
@@ -100,7 +100,7 @@ def test_runtime_context_from_config_uses_config_thread_id():
     ctx = RuntimeContext.from_config({"configurable": {"thread_id": "thread-from-config"}})
 
     assert ctx.thread_id == "thread-from-config"
-    assert ctx.task_id == hermes_task_id_from_thread_id("thread-from-config")
+    assert ctx.task_id == runtime_task_id_from_thread_id("thread-from-config")
     assert ctx.tool_call_id is None
     assert ctx.thread_source == "config"
     assert ctx.has_thread is True
@@ -166,7 +166,7 @@ def test_runtime_context_from_thread_id():
     ctx = RuntimeContext.from_thread_id("manual-thread")
 
     assert ctx.thread_id == "manual-thread"
-    assert ctx.task_id == hermes_task_id_from_thread_id("manual-thread")
+    assert ctx.task_id == runtime_task_id_from_thread_id("manual-thread")
     assert ctx.tool_call_id is None
     assert ctx.thread_source == "fallback"
     assert ctx.has_thread is True

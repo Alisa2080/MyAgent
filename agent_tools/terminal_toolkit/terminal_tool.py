@@ -1,4 +1,4 @@
-"""Standalone Hermes-style terminal tool implementation."""
+"""Standalone standalone terminal tool implementation."""
 
 from __future__ import annotations
 
@@ -123,7 +123,7 @@ def _check_disk_usage_warning():
         import glob
         from pathlib import Path
 
-        for path in glob.glob(str(scratch_dir / "hermes-*")):
+        for path in glob.glob(str(scratch_dir / "terminal-*")):
             for f in Path(path).rglob("*"):
                 if f.is_file():
                     try:
@@ -336,11 +336,11 @@ def _get_env_config() -> Dict[str, Any]:
 
 
 def _tag_environment(env, *, env_type: str, configured_cwd: str, host_cwd: str | None = None):
-    """Attach Hermes backend metadata used by file-tool path policy."""
+    """Attach terminal toolkit backend metadata used by file-tool path policy."""
     try:
-        setattr(env, "_hermes_env_type", env_type)
-        setattr(env, "_hermes_configured_cwd", configured_cwd)
-        setattr(env, "_hermes_host_cwd", host_cwd)
+        setattr(env, "_backend_env_type", env_type)
+        setattr(env, "_backend_configured_cwd", configured_cwd)
+        setattr(env, "_backend_host_cwd", host_cwd)
     except Exception:
         logger.debug("Failed to tag environment metadata", exc_info=True)
     return env
@@ -515,7 +515,7 @@ def get_or_create_active_env(
     workdir: Optional[str] = None,
     timeout: Optional[int] = None,
 ):
-    """Return the active Hermes environment for *task_id*, creating it if needed.
+    """Return the active terminal toolkit environment for *task_id*, creating it if needed.
 
     This is the single owner of environment config resolution, environment
     creation locks, active-env reuse, and last-activity tracking. ``workdir``
@@ -649,7 +649,7 @@ def cleanup_all_environments():
         scratch_dir = _get_scratch_dir()
         import glob
 
-        for path in glob.glob(str(scratch_dir / "hermes-*")):
+        for path in glob.glob(str(scratch_dir / "terminal-*")):
             try:
                 shutil.rmtree(path, ignore_errors=True)
             except OSError:

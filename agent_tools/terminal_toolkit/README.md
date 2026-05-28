@@ -1,27 +1,18 @@
-# hermes-terminal-toolkit
+# terminal-toolkit
 
-Standalone Hermes-style terminal and process tools with optional LangChain adapters.
+Standalone terminal and process tools with optional LangChain adapters.
 
-This package does **not** depend on Hermes runtime modules. It carries its own:
+This package carries its own:
 
 - `terminal_tool` foreground/background execution flow
 - `process_registry` background process management
 - environment backends for `local`, `docker`, `singularity`, and `ssh`
 - dangerous-command guard, PTY handling, sudo rewriting, ANSI stripping, and output redaction
 
-It does **not** include the Hermes-specific Modal/Daytona/managed-gateway stack.
-
-## Install
-
-```bash
-cd packages/hermes-terminal-toolkit
-pip install -e '.[langchain]'
-```
-
 ## Direct usage
 
 ```python
-from hermes_terminal_toolkit import run_process, run_terminal
+from agent_tools.terminal_toolkit import run_process, run_terminal
 
 result = run_terminal("python -c \"print('hello')\"")
 ```
@@ -29,7 +20,7 @@ result = run_terminal("python -c \"print('hello')\"")
 ## LangChain usage
 
 ```python
-from hermes_terminal_toolkit import build_langchain_tools
+from agent_tools.terminal_toolkit import build_langchain_tools
 
 tools = build_langchain_tools(default_task_id="session-123")
 ```
@@ -63,9 +54,11 @@ cleared through the terminal cleanup paths.
 - `TERMINAL_SINGULARITY_IMAGE`
 - `TERMINAL_DOCKER_VOLUMES`
 - `TERMINAL_DOCKER_FORWARD_ENV`
-- `HERMES_TERMINAL_TOOLKIT_HOME`
-- `HERMES_TERMINAL_TOOLKIT_MAX_BYTES`
-- `HERMES_TERMINAL_TOOLKIT_ENV_PASSTHROUGH`
+- `TERMINAL_TOOLKIT_HOME`
+- `TERMINAL_TOOLKIT_MAX_BYTES`
+- `TERMINAL_TOOLKIT_ENV_PASSTHROUGH`
+- `TERMINAL_TOOLKIT_ISOLATE_HOME`
+- `TERMINAL_TOOLKIT_SUBPROCESS_HOME`
 
 For most LangChain agents, keep `expose_task_id=False` and bind one stable
 `default_task_id` per agent session. That preserves environment reuse and

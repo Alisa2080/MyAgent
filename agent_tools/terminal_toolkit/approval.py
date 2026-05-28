@@ -52,7 +52,7 @@ def _normalize(command: str) -> str:
 
 
 def check_all_command_guards(command: str, env_type: str, approval_callback=None) -> dict:
-    """Return an approval decision dict compatible with Hermes terminal_tool."""
+    """Return an approval decision dict compatible with terminal toolkit_tool."""
     normalized = _normalize(command)
 
     for pattern_re, description in _HARDLINE:

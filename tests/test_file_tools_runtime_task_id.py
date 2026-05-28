@@ -15,11 +15,11 @@ def _artifact(result: ToolMessage) -> dict:
 class FakeEnv:
     def __init__(self, cwd, env_type, configured_cwd=None):
         self.cwd = cwd
-        self._hermes_env_type = env_type
-        self._hermes_configured_cwd = (
+        self._backend_env_type = env_type
+        self._backend_configured_cwd = (
             configured_cwd if configured_cwd is not None else cwd
         )
-        self._hermes_host_cwd = None
+        self._backend_host_cwd = None
 
 
 def _invoke_toolnode(tool, tool_name, args, thread_id):
@@ -92,7 +92,7 @@ def test_file_tool_schemas_do_not_expose_task_id():
 
 def test_read_file_injects_runtime_thread_as_task_id(monkeypatch):
     import agent_tools.public.files as file_tools
-    from agent_core.session_context import hermes_task_id_from_thread_id
+    from agent_core.session_context import runtime_task_id_from_thread_id
 
     calls = []
 
@@ -116,12 +116,12 @@ def test_read_file_injects_runtime_thread_as_task_id(monkeypatch):
     assert calls[0]["path"] == "README.md"
     assert calls[0]["offset"] == 1
     assert calls[0]["limit"] == 20
-    assert calls[0]["task_id"] == hermes_task_id_from_thread_id("file-read-thread")
+    assert calls[0]["task_id"] == runtime_task_id_from_thread_id("file-read-thread")
 
 
 def test_read_file_toolnode_injects_runtime_thread(monkeypatch):
     import agent_tools.public.files as file_tools
-    from agent_core.session_context import hermes_task_id_from_thread_id
+    from agent_core.session_context import runtime_task_id_from_thread_id
     from agent_tools.public.files import read_file
 
     calls = []
@@ -145,7 +145,7 @@ def test_read_file_toolnode_injects_runtime_thread(monkeypatch):
     assert calls[0]["path"] == "README.md"
     assert calls[0]["offset"] == 2
     assert calls[0]["limit"] == 5
-    assert calls[0]["task_id"] == hermes_task_id_from_thread_id("toolnode-read-thread")
+    assert calls[0]["task_id"] == runtime_task_id_from_thread_id("toolnode-read-thread")
 
 
 def test_file_tool_impl_falls_back_to_default_task_id_without_runtime(monkeypatch):
@@ -169,13 +169,13 @@ def test_file_tool_impl_falls_back_to_default_task_id_without_runtime(monkeypatc
 
 def test_read_file_rejects_live_cwd_outside_workspace(monkeypatch, tmp_path):
     import agent_tools.public.files as file_tools
-    from agent_core.session_context import hermes_task_id_from_thread_id
+    from agent_core.session_context import runtime_task_id_from_thread_id
 
     calls = []
     resolve_calls = []
     outside_path = tmp_path / "leak.txt"
     runtime = SimpleNamespace(execution_info=SimpleNamespace(thread_id="outside-read"))
-    expected_task_id = hermes_task_id_from_thread_id("outside-read")
+    expected_task_id = runtime_task_id_from_thread_id("outside-read")
 
     def fake_resolve_path_for_policy(path, task_id):
         resolve_calls.append((path, task_id))
@@ -205,7 +205,7 @@ def test_read_file_rejects_live_cwd_outside_workspace(monkeypatch, tmp_path):
 
 def test_write_file_injects_runtime_thread_as_task_id(monkeypatch):
     import agent_tools.public.files as file_tools
-    from agent_core.session_context import hermes_task_id_from_thread_id
+    from agent_core.session_context import runtime_task_id_from_thread_id
 
     calls = []
 
@@ -225,18 +225,18 @@ def test_write_file_injects_runtime_thread_as_task_id(monkeypatch):
     assert "task_id" not in payload.get("meta", {})
     assert calls[0]["path"] == "notes.txt"
     assert calls[0]["content"] == "hello"
-    assert calls[0]["task_id"] == hermes_task_id_from_thread_id("file-write-thread")
+    assert calls[0]["task_id"] == runtime_task_id_from_thread_id("file-write-thread")
 
 
 def test_write_file_rejects_live_cwd_outside_workspace(monkeypatch, tmp_path):
     import agent_tools.public.files as file_tools
-    from agent_core.session_context import hermes_task_id_from_thread_id
+    from agent_core.session_context import runtime_task_id_from_thread_id
 
     calls = []
     resolve_calls = []
     outside_path = tmp_path / "leak.txt"
     runtime = SimpleNamespace(execution_info=SimpleNamespace(thread_id="outside-write"))
-    expected_task_id = hermes_task_id_from_thread_id("outside-write")
+    expected_task_id = runtime_task_id_from_thread_id("outside-write")
 
     def fake_resolve_path_for_policy(path, task_id):
         resolve_calls.append((path, task_id))
@@ -273,14 +273,14 @@ def test_write_file_denies_local_backend_configured_cwd_outside_workspace(
     monkeypatch, tmp_path
 ):
     import agent_tools.public.files as file_tools
-    from agent_core.session_context import hermes_task_id_from_thread_id
-    from agent_tools.hermes_terminal_toolkit import terminal_tool
+    from agent_core.session_context import runtime_task_id_from_thread_id
+    from agent_tools.terminal_toolkit import terminal_tool
 
     calls = []
     resolve_calls = []
     outside_path = tmp_path / "local-live-cwd" / "leak.txt"
     runtime = SimpleNamespace(execution_info=SimpleNamespace(thread_id="local-outside"))
-    expected_task_id = hermes_task_id_from_thread_id("local-outside")
+    expected_task_id = runtime_task_id_from_thread_id("local-outside")
 
     def fake_resolve_path_for_policy(path, task_id):
         resolve_calls.append((path, task_id))
@@ -322,12 +322,12 @@ def test_write_file_allows_live_cwd_inside_workspace_and_forwards_original_path(
     monkeypatch,
 ):
     import agent_tools.public.files as file_tools
-    from agent_core.session_context import hermes_task_id_from_thread_id
+    from agent_core.session_context import runtime_task_id_from_thread_id
 
     calls = []
     resolve_calls = []
     runtime = SimpleNamespace(execution_info=SimpleNamespace(thread_id="inside-write"))
-    expected_task_id = hermes_task_id_from_thread_id("inside-write")
+    expected_task_id = runtime_task_id_from_thread_id("inside-write")
 
     def fake_resolve_path_for_policy(path, task_id):
         resolve_calls.append((path, task_id))
@@ -365,13 +365,13 @@ def test_write_file_allows_docker_workspace_resolved_path_and_forwards_original_
     monkeypatch,
 ):
     import agent_tools.public.files as file_tools
-    from agent_core.session_context import hermes_task_id_from_thread_id
-    from agent_tools.hermes_terminal_toolkit import terminal_tool
+    from agent_core.session_context import runtime_task_id_from_thread_id
+    from agent_tools.terminal_toolkit import terminal_tool
 
     calls = []
     resolve_calls = []
     runtime = SimpleNamespace(execution_info=SimpleNamespace(thread_id="docker-write"))
-    expected_task_id = hermes_task_id_from_thread_id("docker-write")
+    expected_task_id = runtime_task_id_from_thread_id("docker-write")
 
     monkeypatch.setattr(
         terminal_tool,
@@ -421,12 +421,12 @@ def test_write_file_allows_active_ssh_cwd_path_and_forwards_original_path(
     monkeypatch,
 ):
     import agent_tools.public.files as file_tools
-    from agent_core.session_context import hermes_task_id_from_thread_id
-    from agent_tools.hermes_terminal_toolkit import terminal_tool
+    from agent_core.session_context import runtime_task_id_from_thread_id
+    from agent_tools.terminal_toolkit import terminal_tool
 
     calls = []
     runtime = SimpleNamespace(execution_info=SimpleNamespace(thread_id="ssh-write"))
-    expected_task_id = hermes_task_id_from_thread_id("ssh-write")
+    expected_task_id = runtime_task_id_from_thread_id("ssh-write")
     active = FakeEnv("/home/remote/project", "ssh", configured_cwd="~")
 
     monkeypatch.setattr(terminal_tool, "get_active_env", lambda task_id: active)
@@ -467,7 +467,7 @@ def test_write_file_allows_active_ssh_cwd_path_and_forwards_original_path(
 
 def test_write_file_rejects_ssh_absolute_path_outside_active_cwd(monkeypatch):
     import agent_tools.public.files as file_tools
-    from agent_tools.hermes_terminal_toolkit import terminal_tool
+    from agent_tools.terminal_toolkit import terminal_tool
 
     calls = []
     runtime = SimpleNamespace(execution_info=SimpleNamespace(thread_id="ssh-reject"))
@@ -508,13 +508,13 @@ def test_read_file_allows_docker_workspace_resolved_path_and_forwards_original_p
     monkeypatch,
 ):
     import agent_tools.public.files as file_tools
-    from agent_core.session_context import hermes_task_id_from_thread_id
-    from agent_tools.hermes_terminal_toolkit import terminal_tool
+    from agent_core.session_context import runtime_task_id_from_thread_id
+    from agent_tools.terminal_toolkit import terminal_tool
 
     calls = []
     resolve_calls = []
     runtime = SimpleNamespace(execution_info=SimpleNamespace(thread_id="docker-read"))
-    expected_task_id = hermes_task_id_from_thread_id("docker-read")
+    expected_task_id = runtime_task_id_from_thread_id("docker-read")
 
     monkeypatch.setattr(
         terminal_tool,
@@ -551,12 +551,12 @@ def test_read_file_allows_docker_workspace_resolved_path_and_forwards_original_p
 
 def test_read_file_allows_singularity_active_cwd_path(monkeypatch):
     import agent_tools.public.files as file_tools
-    from agent_core.session_context import hermes_task_id_from_thread_id
-    from agent_tools.hermes_terminal_toolkit import terminal_tool
+    from agent_core.session_context import runtime_task_id_from_thread_id
+    from agent_tools.terminal_toolkit import terminal_tool
 
     calls = []
     runtime = SimpleNamespace(execution_info=SimpleNamespace(thread_id="singularity-read"))
-    expected_task_id = hermes_task_id_from_thread_id("singularity-read")
+    expected_task_id = runtime_task_id_from_thread_id("singularity-read")
     active = FakeEnv("/analysis/project", "singularity")
 
     monkeypatch.setattr(terminal_tool, "get_active_env", lambda task_id: active)
@@ -594,13 +594,13 @@ def test_read_file_allows_singularity_active_cwd_path(monkeypatch):
 
 def test_read_file_rejects_docker_skill_cache_path(monkeypatch):
     import agent_tools.public.files as file_tools
-    from agent_core.session_context import hermes_task_id_from_thread_id
-    from agent_tools.hermes_terminal_toolkit import terminal_tool
+    from agent_core.session_context import runtime_task_id_from_thread_id
+    from agent_tools.terminal_toolkit import terminal_tool
 
     calls = []
     resolve_calls = []
     runtime = SimpleNamespace(execution_info=SimpleNamespace(thread_id="docker-cache-read"))
-    expected_task_id = hermes_task_id_from_thread_id("docker-cache-read")
+    expected_task_id = runtime_task_id_from_thread_id("docker-cache-read")
 
     monkeypatch.setattr(
         terminal_tool,
@@ -643,7 +643,7 @@ def test_read_file_rejects_docker_skill_cache_path(monkeypatch):
 
 def test_list_directory_uses_active_docker_backend_not_host_safe_path(monkeypatch):
     import agent_tools.public.files as file_tools
-    from agent_tools.hermes_terminal_toolkit import terminal_tool
+    from agent_tools.terminal_toolkit import terminal_tool
 
     runtime = SimpleNamespace(execution_info=SimpleNamespace(thread_id="docker-list"))
     active = FakeEnv("/workspace", "docker")
@@ -696,7 +696,7 @@ def test_list_directory_uses_active_docker_backend_not_host_safe_path(monkeypatc
 
 def test_file_info_uses_active_ssh_backend_not_host_path_info(monkeypatch):
     import agent_tools.public.files as file_tools
-    from agent_tools.hermes_terminal_toolkit import terminal_tool
+    from agent_tools.terminal_toolkit import terminal_tool
 
     runtime = SimpleNamespace(execution_info=SimpleNamespace(thread_id="ssh-info"))
     active = FakeEnv("/home/remote/project", "ssh", configured_cwd="~")
@@ -746,7 +746,7 @@ def test_file_info_uses_active_ssh_backend_not_host_path_info(monkeypatch):
 
 def test_list_directory_rejects_ssh_path_outside_active_cwd_without_backend_exec(monkeypatch):
     import agent_tools.public.files as file_tools
-    from agent_tools.hermes_terminal_toolkit import terminal_tool
+    from agent_tools.terminal_toolkit import terminal_tool
 
     runtime = SimpleNamespace(execution_info=SimpleNamespace(thread_id="ssh-list-reject"))
     active = FakeEnv("/home/remote/project", "ssh", configured_cwd="~")
@@ -771,7 +771,7 @@ def test_list_directory_rejects_ssh_path_outside_active_cwd_without_backend_exec
 
 def test_write_file_toolnode_injects_runtime_thread(monkeypatch):
     import agent_tools.public.files as file_tools
-    from agent_core.session_context import hermes_task_id_from_thread_id
+    from agent_core.session_context import runtime_task_id_from_thread_id
     from agent_tools.public.files import write_file
 
     calls = []
@@ -794,12 +794,12 @@ def test_write_file_toolnode_injects_runtime_thread(monkeypatch):
     assert "task_id" not in payload.get("meta", {})
     assert calls[0]["path"] == "notes.txt"
     assert calls[0]["content"] == "hello from toolnode"
-    assert calls[0]["task_id"] == hermes_task_id_from_thread_id("toolnode-write-thread")
+    assert calls[0]["task_id"] == runtime_task_id_from_thread_id("toolnode-write-thread")
 
 
 def test_search_files_injects_runtime_thread_as_task_id(monkeypatch):
     import agent_tools.public.files as file_tools
-    from agent_core.session_context import hermes_task_id_from_thread_id
+    from agent_core.session_context import runtime_task_id_from_thread_id
 
     calls = []
 
@@ -835,12 +835,12 @@ def test_search_files_injects_runtime_thread_as_task_id(monkeypatch):
     assert calls[0]["offset"] == 0
     assert calls[0]["output_mode"] == "content"
     assert calls[0]["context"] == 0
-    assert calls[0]["task_id"] == hermes_task_id_from_thread_id("file-search-thread")
+    assert calls[0]["task_id"] == runtime_task_id_from_thread_id("file-search-thread")
 
 
 def test_search_files_rejects_internal_skill_cache_path(monkeypatch):
     import agent_tools.public.files as file_tools
-    from agent_tools.hermes_terminal_toolkit import terminal_tool
+    from agent_tools.terminal_toolkit import terminal_tool
 
     calls = []
     runtime = SimpleNamespace(execution_info=SimpleNamespace(thread_id="cache-search"))
@@ -883,7 +883,7 @@ def test_search_files_rejects_internal_skill_cache_path(monkeypatch):
 
 def test_search_files_toolnode_injects_runtime_thread(monkeypatch):
     import agent_tools.public.files as file_tools
-    from agent_core.session_context import hermes_task_id_from_thread_id
+    from agent_core.session_context import runtime_task_id_from_thread_id
     from agent_tools.public.files import search_files
 
     calls = []
@@ -921,12 +921,12 @@ def test_search_files_toolnode_injects_runtime_thread(monkeypatch):
     assert calls[0]["offset"] == 1
     assert calls[0]["output_mode"] == "content"
     assert calls[0]["context"] == 2
-    assert calls[0]["task_id"] == hermes_task_id_from_thread_id("toolnode-search-thread")
+    assert calls[0]["task_id"] == runtime_task_id_from_thread_id("toolnode-search-thread")
 
 
 def test_patch_injects_runtime_thread_as_task_id(monkeypatch):
     import agent_tools.public.files as file_tools
-    from agent_core.session_context import hermes_task_id_from_thread_id
+    from agent_core.session_context import runtime_task_id_from_thread_id
 
     calls = []
 
@@ -958,20 +958,20 @@ def test_patch_injects_runtime_thread_as_task_id(monkeypatch):
     assert calls[0]["new_string"] == "new"
     assert calls[0]["replace_all"] is False
     assert calls[0]["patch"] is None
-    assert calls[0]["task_id"] == hermes_task_id_from_thread_id("file-patch-thread")
+    assert calls[0]["task_id"] == runtime_task_id_from_thread_id("file-patch-thread")
 
 
 def test_patch_move_file_rejects_live_cwd_outside_workspace_source(
     monkeypatch, tmp_path
 ):
     import agent_tools.public.files as file_tools
-    from agent_core.session_context import hermes_task_id_from_thread_id
+    from agent_core.session_context import runtime_task_id_from_thread_id
 
     calls = []
     resolve_calls = []
     outside_path = tmp_path / "source.txt"
     runtime = SimpleNamespace(execution_info=SimpleNamespace(thread_id="move-source"))
-    expected_task_id = hermes_task_id_from_thread_id("move-source")
+    expected_task_id = runtime_task_id_from_thread_id("move-source")
     patch_content = "\n".join(
         [
             "*** Begin Patch",
@@ -1020,13 +1020,13 @@ def test_patch_move_file_rejects_live_cwd_outside_workspace_destination(
     monkeypatch, tmp_path
 ):
     import agent_tools.public.files as file_tools
-    from agent_core.session_context import hermes_task_id_from_thread_id
+    from agent_core.session_context import runtime_task_id_from_thread_id
 
     calls = []
     resolve_calls = []
     outside_path = tmp_path / "dest.txt"
     runtime = SimpleNamespace(execution_info=SimpleNamespace(thread_id="move-dest"))
-    expected_task_id = hermes_task_id_from_thread_id("move-dest")
+    expected_task_id = runtime_task_id_from_thread_id("move-dest")
     patch_content = "\n".join(
         [
             "*** Begin Patch",
@@ -1073,7 +1073,7 @@ def test_patch_move_file_rejects_live_cwd_outside_workspace_destination(
 
 def test_patch_toolnode_injects_runtime_thread(monkeypatch):
     import agent_tools.public.files as file_tools
-    from agent_core.session_context import hermes_task_id_from_thread_id
+    from agent_core.session_context import runtime_task_id_from_thread_id
     from agent_tools.public.files import patch
 
     calls = []
@@ -1106,4 +1106,4 @@ def test_patch_toolnode_injects_runtime_thread(monkeypatch):
     assert calls[0]["new_string"] == "new"
     assert calls[0]["replace_all"] is False
     assert calls[0]["patch"] is None
-    assert calls[0]["task_id"] == hermes_task_id_from_thread_id("toolnode-patch-thread")
+    assert calls[0]["task_id"] == runtime_task_id_from_thread_id("toolnode-patch-thread")

@@ -294,7 +294,7 @@ class ShellFileOperations(FileOperations):
         """Return the active backend type when the environment exposes it."""
         env_type = (
             getattr(self.env, "env_type", None)
-            or getattr(self.env, "_hermes_env_type", None)
+            or getattr(self.env, "_backend_env_type", None)
         )
         return str(env_type) if env_type is not None else None
 

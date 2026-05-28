@@ -15,7 +15,7 @@ class BackendPathContext:
 
 
 def get_backend_path_context(task_id: str = "default") -> BackendPathContext:
-    from agent_tools.hermes_terminal_toolkit import terminal_tool
+    from agent_tools.terminal_toolkit import terminal_tool
 
     config = terminal_tool._get_env_config()
     env_type = str(config.get("env_type") or "local")
@@ -23,13 +23,13 @@ def get_backend_path_context(task_id: str = "default") -> BackendPathContext:
     host_cwd = config.get("host_cwd")
 
     active_env = terminal_tool.get_active_env(task_id or "default")
-    env_type = str(getattr(active_env, "_hermes_env_type", env_type) or env_type)
+    env_type = str(getattr(active_env, "_backend_env_type", env_type) or env_type)
     configured_cwd = _select_configured_cwd(
         env_type,
         config_value=configured_cwd,
-        metadata_value=getattr(active_env, "_hermes_configured_cwd", None),
+        metadata_value=getattr(active_env, "_backend_configured_cwd", None),
     )
-    host_cwd = getattr(active_env, "_hermes_host_cwd", None) or host_cwd
+    host_cwd = getattr(active_env, "_backend_host_cwd", None) or host_cwd
 
     if env_type == "local":
         cwd = _resolve_local_cwd(getattr(active_env, "cwd", None))
@@ -62,20 +62,20 @@ def allowed_workspace_roots_for_task(task_id: str = "default") -> list[str]:
 def safe_write_roots_for_env(env, fallback_cwd=None) -> list[str]:
     explicit_env_type = (
         getattr(env, "env_type", None)
-        or getattr(env, "_hermes_env_type", None)
+        or getattr(env, "_backend_env_type", None)
     )
     class_name_env_type = _env_type_from_class_name(env)
     env_type = str(explicit_env_type or class_name_env_type or "local")
     class_name_fallback = explicit_env_type is None and class_name_env_type is not None
     cwd = getattr(env, "cwd", None) or fallback_cwd
     configured_cwd = getattr(env, "configured_cwd", None) or getattr(
-        env, "_hermes_configured_cwd", None
+        env, "_backend_configured_cwd", None
     )
     if configured_cwd is None and class_name_fallback:
         configured_cwd = getattr(getattr(env, "config", None), "cwd", None)
     if configured_cwd is None and class_name_fallback:
         configured_cwd = fallback_cwd
-    host_cwd = getattr(env, "host_cwd", None) or getattr(env, "_hermes_host_cwd", None)
+    host_cwd = getattr(env, "host_cwd", None) or getattr(env, "_backend_host_cwd", None)
 
     if env_type == "local":
         return []

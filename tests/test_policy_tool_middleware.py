@@ -16,7 +16,7 @@ from agent_core.permissions.tool_grants import (
 )
 from agent_core.permissions.tool_policy import canonical_tool_args
 from agent_core.policy_tool_middleware import PolicyToolMiddleware
-from agent_core.session_context import hermes_task_id_from_thread_id
+from agent_core.session_context import runtime_task_id_from_thread_id
 
 
 def _runtime(thread_id="policy-thread", tool_call_id="call-policy"):
@@ -50,7 +50,7 @@ def test_policy_tool_middleware_passes_allow_to_handler():
     assert calls == [request]
     args = canonical_tool_args("terminal", {"command": "pwd"})
     grant = consume_tool_policy_grant(
-        task_id=hermes_task_id_from_thread_id("policy-thread"),
+        task_id=runtime_task_id_from_thread_id("policy-thread"),
         tool_call_id="call-policy",
         tool_name="terminal",
         args=args,
@@ -113,7 +113,7 @@ def test_policy_tool_middleware_consumes_approval_and_records_grant():
         ApprovalRecord(
             approval_id="approval-network",
             decision_id="decision-network",
-            task_id=hermes_task_id_from_thread_id("thread-network"),
+            task_id=runtime_task_id_from_thread_id("thread-network"),
             tool_call_id="call-network",
             tool_name="terminal",
             args_digest=make_args_digest(args),
@@ -135,7 +135,7 @@ def test_policy_tool_middleware_consumes_approval_and_records_grant():
 
     assert result.artifact["ok"] is True
     grant = consume_tool_policy_grant(
-        task_id=hermes_task_id_from_thread_id("thread-network"),
+        task_id=runtime_task_id_from_thread_id("thread-network"),
         tool_call_id="call-network",
         tool_name="terminal",
         args=args,
@@ -147,7 +147,7 @@ def test_policy_tool_middleware_consumes_approval_and_records_grant():
 
 
 def test_tool_policy_grant_args_digest_mismatch_does_not_consume():
-    task_id = hermes_task_id_from_thread_id("thread-digest")
+    task_id = runtime_task_id_from_thread_id("thread-digest")
     grant = ToolPolicyGrant(
         task_id=task_id,
         tool_call_id="call-digest",
@@ -218,7 +218,7 @@ def test_policy_tool_middleware_async_passes_allow_to_handler():
         assert calls == [request]
         args = canonical_tool_args("terminal", {"command": "pwd"})
         grant = consume_tool_policy_grant(
-            task_id=hermes_task_id_from_thread_id("policy-thread"),
+            task_id=runtime_task_id_from_thread_id("policy-thread"),
             tool_call_id="call-async-allow",
             tool_name="terminal",
             args=args,
@@ -266,7 +266,7 @@ def test_policy_tool_middleware_async_consumes_approval_and_records_grant():
             ApprovalRecord(
                 approval_id="approval-async-network",
                 decision_id="decision-async-network",
-                task_id=hermes_task_id_from_thread_id("thread-async-network"),
+                task_id=runtime_task_id_from_thread_id("thread-async-network"),
                 tool_call_id="call-async-network",
                 tool_name="terminal",
                 args_digest=make_args_digest(args),
@@ -288,7 +288,7 @@ def test_policy_tool_middleware_async_consumes_approval_and_records_grant():
 
         assert result.artifact["ok"] is True
         grant = consume_tool_policy_grant(
-            task_id=hermes_task_id_from_thread_id("thread-async-network"),
+            task_id=runtime_task_id_from_thread_id("thread-async-network"),
             tool_call_id="call-async-network",
             tool_name="terminal",
             args=args,

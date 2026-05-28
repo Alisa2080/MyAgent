@@ -14,7 +14,7 @@ def test_tick_advances_before_run_and_marks_result(monkeypatch, tmp_path):
     calls = []
     job = {"id": "job-1", "name": "daily", "workdir": None, "deliver": "local"}
 
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
     monkeypatch.setattr(scheduler, "get_due_jobs", lambda now_dt=None: [job])
     monkeypatch.setattr(
         scheduler,
@@ -70,7 +70,7 @@ def test_tick_queues_origin_notification(monkeypatch, tmp_path):
     }
     queued = []
 
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
     monkeypatch.setattr(scheduler, "get_due_jobs", lambda now_dt=None: [job])
     monkeypatch.setattr(scheduler, "advance_next_run", lambda job_id, run_at: job)
     monkeypatch.setattr(
@@ -126,7 +126,7 @@ def test_legacy_delivery_value_runs_without_origin_notification(monkeypatch, tmp
         "origin": {"thread_id": "thread-1"},
     }
 
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
     monkeypatch.setattr(scheduler, "get_due_jobs", lambda now_dt=None: [job])
     monkeypatch.setattr(scheduler, "advance_next_run", lambda job_id, run_at: job)
     monkeypatch.setattr(
@@ -179,7 +179,7 @@ def test_legacy_delivery_error_is_persisted_with_real_job_storage(monkeypatch, t
 
     delivery_error = "Unsupported delivery target: telegram:123"
 
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
     job = jobs.create_job(
         prompt="daily report",
         schedule="30m",
@@ -230,7 +230,7 @@ def test_silent_response_suppresses_origin_notification(monkeypatch, tmp_path):
     }
     queued = []
 
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
     monkeypatch.setattr(scheduler, "get_due_jobs", lambda now_dt=None: [job])
     monkeypatch.setattr(scheduler, "advance_next_run", lambda job_id, run_at: job)
     monkeypatch.setattr(
@@ -277,7 +277,7 @@ def test_failed_run_saves_marks_failed_and_does_not_notify(monkeypatch, tmp_path
         "origin": {"thread_id": "thread-1"},
     }
 
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
     monkeypatch.setattr(scheduler, "get_due_jobs", lambda now_dt=None: [job])
     monkeypatch.setattr(scheduler, "advance_next_run", lambda job_id, run_at: job)
     monkeypatch.setattr(
@@ -330,7 +330,7 @@ def test_workdir_jobs_run_sequentially(monkeypatch, tmp_path):
         {"id": "b", "name": "b", "workdir": "/tmp/b", "deliver": "local"},
     ]
 
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
     monkeypatch.setattr(scheduler, "get_due_jobs", lambda now_dt=None: jobs)
     monkeypatch.setattr(
         scheduler,
@@ -390,8 +390,8 @@ def test_non_workdir_jobs_use_parallel_executor_and_env_max(monkeypatch, tmp_pat
             executor_calls.append(("submit", job["id"], run_at))
             return FakeFuture(fn(job, run_at))
 
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
-    monkeypatch.setenv("HERMES_CRON_MAX_PARALLEL", "2")
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+    monkeypatch.setenv("AGENT_CRON_MAX_PARALLEL", "2")
     monkeypatch.setattr(scheduler, "get_due_jobs", lambda now_dt=None: jobs)
     monkeypatch.setattr(
         scheduler,
@@ -453,8 +453,8 @@ def test_invalid_env_parallel_uses_due_job_count(monkeypatch, tmp_path):
 
             return Future()
 
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
-    monkeypatch.setenv("HERMES_CRON_MAX_PARALLEL", "not-an-int")
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+    monkeypatch.setenv("AGENT_CRON_MAX_PARALLEL", "not-an-int")
     monkeypatch.setattr(scheduler, "get_due_jobs", lambda now_dt=None: jobs)
     monkeypatch.setattr(
         scheduler,
@@ -490,7 +490,7 @@ def test_invalid_env_parallel_uses_due_job_count(monkeypatch, tmp_path):
 def test_lock_busy_returns_skipped(monkeypatch, tmp_path):
     import cron.scheduler as scheduler
 
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
 
     if scheduler.fcntl is None:
         pytest.skip("fcntl lock behavior is Unix-specific")
@@ -514,7 +514,7 @@ def test_lock_busy_returns_skipped(monkeypatch, tmp_path):
 def test_blocking_io_error_after_lock_acquisition_propagates(monkeypatch, tmp_path):
     import cron.scheduler as scheduler
 
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
     monkeypatch.setattr(
         scheduler,
         "get_due_jobs",
@@ -531,7 +531,7 @@ def test_processing_exception_marks_error_and_returns_failed_result(monkeypatch,
     calls = []
     job = {"id": "job-1", "name": "daily", "workdir": None, "deliver": "local"}
 
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
     monkeypatch.setattr(scheduler, "get_due_jobs", lambda now_dt=None: [job])
     monkeypatch.setattr(
         scheduler,

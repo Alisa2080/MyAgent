@@ -27,7 +27,7 @@ class RuntimeContext:
         if thread_id:
             return cls(
                 thread_id=thread_id,
-                task_id=hermes_task_id_from_thread_id(thread_id),
+                task_id=runtime_task_id_from_thread_id(thread_id),
                 tool_call_id=_tool_call_id_from_runtime(runtime),
                 thread_source="execution_info",
             )
@@ -36,7 +36,7 @@ class RuntimeContext:
         if thread_id:
             return cls(
                 thread_id=thread_id,
-                task_id=hermes_task_id_from_thread_id(thread_id),
+                task_id=runtime_task_id_from_thread_id(thread_id),
                 tool_call_id=_tool_call_id_from_runtime(runtime),
                 thread_source="config",
             )
@@ -54,7 +54,7 @@ class RuntimeContext:
         if thread_id:
             return cls(
                 thread_id=thread_id,
-                task_id=hermes_task_id_from_thread_id(thread_id),
+                task_id=runtime_task_id_from_thread_id(thread_id),
                 tool_call_id=None,
                 thread_source="config",
             )
@@ -71,7 +71,7 @@ class RuntimeContext:
         normalized = str(thread_id) if thread_id else None
         return cls(
             thread_id=normalized,
-            task_id=hermes_task_id_from_thread_id(normalized),
+            task_id=runtime_task_id_from_thread_id(normalized),
             thread_source="fallback",
         )
 
@@ -84,15 +84,15 @@ class RuntimeContext:
         return self.task_id == _FALLBACK_TASK_ID
 
 
-def hermes_task_id_from_thread_id(thread_id: str | None) -> str:
-    """Return a path-safe Hermes task id derived from a LangGraph thread id."""
+def runtime_task_id_from_thread_id(thread_id: str | None) -> str:
+    """Return a path-safe runtime task id derived from a LangGraph thread id."""
     if not thread_id:
         return _FALLBACK_TASK_ID
     digest = sha256(str(thread_id).encode("utf-8")).hexdigest()[:_TASK_ID_HASH_CHARS]
     return f"{_TASK_ID_PREFIX}{digest}"
 
 
-def hermes_task_id_from_runtime(runtime: Any | None) -> str:
+def runtime_task_id_from_runtime(runtime: Any | None) -> str:
     """Extract LangGraph thread identity from ToolRuntime-like objects."""
     return RuntimeContext.from_runtime(runtime).task_id
 

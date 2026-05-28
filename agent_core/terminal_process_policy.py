@@ -5,10 +5,10 @@ import threading
 from contextlib import contextmanager
 from typing import Any
 
-from agent_tools.hermes_terminal_toolkit.process_registry import process_registry
+from agent_tools.terminal_toolkit.process_registry import process_registry
 
 DEFAULT_MAX_BACKGROUND_PROCESSES_PER_TASK = 3
-MAX_BACKGROUND_PROCESSES_ENV = "HERMES_MAX_BACKGROUND_PROCESSES_PER_TASK"
+MAX_BACKGROUND_PROCESSES_ENV = "TERMINAL_MAX_BACKGROUND_PROCESSES_PER_TASK"
 _quota_locks: dict[str, threading.Lock] = {}
 _quota_locks_lock = threading.Lock()
 

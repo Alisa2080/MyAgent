@@ -516,7 +516,7 @@ def test_cronjob_update_repeat_stores_dict_compatible_with_mark_run(
     import cron.jobs as jobs
 
     base = datetime(2026, 5, 22, 9, 0, tzinfo=timezone.utc)
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
     monkeypatch.setattr(jobs, "now", lambda: base)
 
     job = jobs.create_job(prompt="write report", schedule="every 30m")

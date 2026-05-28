@@ -7,7 +7,7 @@ import time
 from typing import Any
 
 from agent_core.session_context import RuntimeContext
-from agent_tools.hermes_terminal_toolkit.process_registry import process_registry
+from agent_tools.terminal_toolkit.process_registry import process_registry
 
 _GLOBAL_TASK_ID = "__global__"
 _UNROUTED_TASK_ID = "__unrouted__"
@@ -135,9 +135,9 @@ def drain_terminal_notifications_for_thread_id(
     max_events: int = 10,
     include_global: bool = True,
 ) -> list[dict[str, Any]]:
-    """Return queued Hermes terminal events for this LangGraph thread.
+    """Return queued terminal toolkit events for this LangGraph thread.
 
-    This drains the global Hermes queue into per-task buffers without dropping
+    This drains the global terminal toolkit queue into per-task buffers without dropping
     events for other sessions.
     """
     if not thread_id:
@@ -233,7 +233,7 @@ def _build_notification_message(
 ) -> str:
     intro = (
         "[IMPORTANT: Background terminal update]\n"
-        "One or more Hermes background processes produced notifications for this conversation.\n"
+        "One or more terminal toolkit background processes produced notifications for this conversation.\n"
     )
     end_marker = "\n\nEnd background terminal update.\n"
     footer = (
@@ -273,7 +273,7 @@ def format_terminal_notification_message(
     max_events: int = DEFAULT_MAX_NOTIFICATION_EVENTS,
     max_message_chars: int = DEFAULT_MAX_MESSAGE_CHARS,
 ) -> str:
-    """Format Hermes background events as one model-visible continuation message."""
+    """Format terminal toolkit background events as one model-visible continuation message."""
     if not events:
         return ""
 

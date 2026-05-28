@@ -1,6 +1,6 @@
 import pytest
 
-from agent_tools.hermes_terminal_toolkit.command_utils import rewrite_compound_background
+from agent_tools.terminal_toolkit.command_utils import rewrite_compound_background
 
 
 @pytest.mark.parametrize(

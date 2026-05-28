@@ -10,7 +10,7 @@ def get_max_bytes() -> int:
     """Return the terminal output cap, controlled by env var when set."""
     import os
 
-    raw = os.getenv("HERMES_TERMINAL_TOOLKIT_MAX_BYTES")
+    raw = os.getenv("TERMINAL_TOOLKIT_MAX_BYTES")
     if not raw:
         return DEFAULT_MAX_BYTES
     try:

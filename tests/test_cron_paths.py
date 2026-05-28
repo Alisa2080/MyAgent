@@ -14,24 +14,24 @@ def load_paths_module():
     return module
 
 
-def test_get_cron_home_prefers_hermes_home(monkeypatch, tmp_path):
+def test_get_cron_home_prefers_agent_cron_home(monkeypatch, tmp_path):
     paths = load_paths_module()
 
-    hermes_home = tmp_path / "hermes-home"
-    monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+    cron_home = tmp_path / "cron-home"
+    monkeypatch.setenv("AGENT_CRON_HOME", str(cron_home))
 
-    assert paths.get_cron_home() == hermes_home
-    assert paths.get_cron_dir() == hermes_home / "cron"
-    assert paths.get_jobs_file() == hermes_home / "cron" / "jobs.json"
-    assert paths.get_output_dir() == hermes_home / "cron" / "output"
-    assert paths.get_scripts_dir() == hermes_home / "scripts"
+    assert paths.get_cron_home() == cron_home
+    assert paths.get_cron_dir() == cron_home / "cron"
+    assert paths.get_jobs_file() == cron_home / "cron" / "jobs.json"
+    assert paths.get_output_dir() == cron_home / "cron" / "output"
+    assert paths.get_scripts_dir() == cron_home / "scripts"
 
 
-def test_get_cron_home_uses_toolkit_parent_when_no_hermes_home(monkeypatch, tmp_path):
+def test_get_cron_home_uses_toolkit_home_when_no_agent_cron_home(monkeypatch, tmp_path):
     paths = load_paths_module()
 
     toolkit_home = tmp_path / "toolkit"
-    monkeypatch.delenv("HERMES_HOME", raising=False)
+    monkeypatch.delenv("AGENT_CRON_HOME", raising=False)
     monkeypatch.setattr(paths, "get_toolkit_home", lambda: toolkit_home)
 
     assert paths.get_cron_home() == toolkit_home
@@ -40,7 +40,7 @@ def test_get_cron_home_uses_toolkit_parent_when_no_hermes_home(monkeypatch, tmp_
 def test_ensure_cron_dirs_creates_secure_dirs(monkeypatch, tmp_path):
     paths = load_paths_module()
 
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
 
     paths.ensure_cron_dirs()
 
@@ -52,7 +52,7 @@ def test_ensure_cron_dirs_creates_secure_dirs(monkeypatch, tmp_path):
 def test_atomic_write_json_sets_owner_only_permissions(monkeypatch, tmp_path):
     paths = load_paths_module()
 
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
     target = paths.get_jobs_file()
 
     paths.atomic_write_json(target, {"jobs": []})

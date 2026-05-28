@@ -128,13 +128,13 @@ def test_invoke_agent_with_terminal_notifications_resumes_from_real_terminal_que
 ):
     import agent_core.agent_runner as runner
     import agent_core.terminal_notifications as notifications
-    from agent_core.session_context import hermes_task_id_from_thread_id
+    from agent_core.session_context import runtime_task_id_from_thread_id
 
     completion_queue = Queue()
     completion_queue.put(
         {
             "type": "completion",
-            "task_id": hermes_task_id_from_thread_id("thread-1"),
+            "task_id": runtime_task_id_from_thread_id("thread-1"),
             "session_id": "proc_1",
             "command": "python job.py",
             "exit_code": 0,

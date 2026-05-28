@@ -38,7 +38,7 @@ First-party helpers live under `agent_tools.shared`:
 ## Internal Toolkits
 
 - `file_toolkit/` is the internal implementation for workspace file operations. It is not a LangChain tool registration boundary.
-- `hermes_terminal_toolkit/` is the imported Hermes terminal toolkit. Project-native LangChain wrappers live in `agent_tools.public.terminal`.
+- `terminal_toolkit/` is the imported terminal toolkit toolkit. Project-native LangChain wrappers live in `agent_tools.public.terminal`.
 
 ## Compatibility Imports
 

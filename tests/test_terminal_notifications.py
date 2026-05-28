@@ -4,10 +4,10 @@ from types import SimpleNamespace
 
 def test_drain_routes_completion_event_by_task_id(monkeypatch):
     import agent_core.terminal_notifications as notifications
-    from agent_core.session_context import hermes_task_id_from_thread_id
+    from agent_core.session_context import runtime_task_id_from_thread_id
 
     queue = Queue()
-    task_id = hermes_task_id_from_thread_id("thread-1")
+    task_id = runtime_task_id_from_thread_id("thread-1")
     queue.put(
         {
             "type": "completion",
@@ -59,10 +59,10 @@ def test_drain_uses_runtime_context_for_thread_task_id(monkeypatch):
 
 def test_drain_routes_completion_event_by_registry_session_when_task_id_missing(monkeypatch):
     import agent_core.terminal_notifications as notifications
-    from agent_core.session_context import hermes_task_id_from_thread_id
+    from agent_core.session_context import runtime_task_id_from_thread_id
 
     queue = Queue()
-    task_id = hermes_task_id_from_thread_id("thread-1")
+    task_id = runtime_task_id_from_thread_id("thread-1")
     queue.put(
         {
             "type": "completion",
@@ -89,11 +89,11 @@ def test_drain_routes_completion_event_by_registry_session_when_task_id_missing(
 
 def test_drain_preserves_other_session_events(monkeypatch):
     import agent_core.terminal_notifications as notifications
-    from agent_core.session_context import hermes_task_id_from_thread_id
+    from agent_core.session_context import runtime_task_id_from_thread_id
 
     queue = Queue()
-    task_1 = hermes_task_id_from_thread_id("thread-1")
-    task_2 = hermes_task_id_from_thread_id("thread-2")
+    task_1 = runtime_task_id_from_thread_id("thread-1")
+    task_2 = runtime_task_id_from_thread_id("thread-2")
     queue.put({"type": "completion", "task_id": task_2, "session_id": "proc_2", "command": "job2"})
     queue.put({"type": "completion", "task_id": task_1, "session_id": "proc_1", "command": "job1"})
 
@@ -109,10 +109,10 @@ def test_drain_preserves_other_session_events(monkeypatch):
 
 def test_drain_skips_consumed_completion_events(monkeypatch):
     import agent_core.terminal_notifications as notifications
-    from agent_core.session_context import hermes_task_id_from_thread_id
+    from agent_core.session_context import runtime_task_id_from_thread_id
 
     queue = Queue()
-    task_id = hermes_task_id_from_thread_id("thread-1")
+    task_id = runtime_task_id_from_thread_id("thread-1")
     queue.put(
         {
             "type": "completion",
@@ -163,10 +163,10 @@ def test_drain_quarantines_unroutable_events_but_returns_explicit_global(monkeyp
 
 def test_pending_queue_is_bounded_to_latest_events(monkeypatch):
     import agent_core.terminal_notifications as notifications
-    from agent_core.session_context import hermes_task_id_from_thread_id
+    from agent_core.session_context import runtime_task_id_from_thread_id
 
     queue = Queue()
-    task_id = hermes_task_id_from_thread_id("thread-1")
+    task_id = runtime_task_id_from_thread_id("thread-1")
     max_pending = 3
     for index in range(max_pending + 2):
         queue.put(
@@ -194,10 +194,10 @@ def test_pending_queue_is_bounded_to_latest_events(monkeypatch):
 
 def test_expired_pending_events_are_pruned(monkeypatch):
     import agent_core.terminal_notifications as notifications
-    from agent_core.session_context import hermes_task_id_from_thread_id
+    from agent_core.session_context import runtime_task_id_from_thread_id
 
     queue = Queue()
-    task_id = hermes_task_id_from_thread_id("thread-1")
+    task_id = runtime_task_id_from_thread_id("thread-1")
     queue.put({"type": "completion", "task_id": task_id, "session_id": "proc_old", "command": "old job"})
 
     monkeypatch.setattr(notifications.process_registry, "completion_queue", queue)

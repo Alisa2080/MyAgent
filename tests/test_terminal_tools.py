@@ -32,7 +32,7 @@ def test_terminal_schema_does_not_expose_task_id():
 
 def test_terminal_injects_runtime_thread_as_task_id(monkeypatch):
     import agent_tools.terminal_tools as terminal_tools
-    from agent_core.session_context import hermes_task_id_from_thread_id
+    from agent_core.session_context import runtime_task_id_from_thread_id
 
     calls = []
 
@@ -62,11 +62,11 @@ def test_terminal_injects_runtime_thread_as_task_id(monkeypatch):
     assert payload["ok"] is True
     assert payload["data"]["output"] == "ok\n"
     assert "task_id" not in payload["meta"]
-    assert calls[0]["task_id"] == hermes_task_id_from_thread_id("terminal-thread-1")
+    assert calls[0]["task_id"] == runtime_task_id_from_thread_id("terminal-thread-1")
     assert calls[0]["force"] is False
 
 
-def test_terminal_preserves_hermes_guard_block_response(monkeypatch):
+def test_terminal_preserves_terminal_guard_block_response(monkeypatch):
     import agent_tools.terminal_tools as terminal_tools
 
     _allow_terminal_policy(monkeypatch, terminal_tools)
@@ -135,7 +135,7 @@ def test_terminal_toolnode_injects_runtime_thread(monkeypatch):
     from langgraph.prebuilt import ToolNode
 
     import agent_tools.terminal_tools as terminal_tools
-    from agent_core.session_context import hermes_task_id_from_thread_id
+    from agent_core.session_context import runtime_task_id_from_thread_id
     from agent_tools.terminal_tools import terminal
 
     calls = []
@@ -176,7 +176,7 @@ def test_terminal_toolnode_injects_runtime_thread(monkeypatch):
     assert tool_message.content
     assert payload["ok"] is True
     assert "task_id" not in payload["meta"]
-    assert calls[0]["task_id"] == hermes_task_id_from_thread_id("toolnode-terminal-thread")
+    assert calls[0]["task_id"] == runtime_task_id_from_thread_id("toolnode-terminal-thread")
 
 
 def test_terminal_foreground_does_not_check_background_quota(monkeypatch):
@@ -281,7 +281,7 @@ def test_process_schema_does_not_expose_task_id():
 
 def test_process_list_is_scoped_to_runtime_task_id(monkeypatch):
     import agent_tools.terminal_tools as terminal_tools
-    from agent_core.session_context import hermes_task_id_from_thread_id
+    from agent_core.session_context import runtime_task_id_from_thread_id
 
     calls = []
 
@@ -305,7 +305,7 @@ def test_process_list_is_scoped_to_runtime_task_id(monkeypatch):
 
     assert payload["ok"] is True
     assert payload["data"]["processes"] == []
-    assert calls[0]["task_id"] == hermes_task_id_from_thread_id("process-thread-1")
+    assert calls[0]["task_id"] == runtime_task_id_from_thread_id("process-thread-1")
 
 
 def test_process_rejects_cross_task_session(monkeypatch):
@@ -338,7 +338,7 @@ def test_process_toolnode_injects_runtime_thread_for_list(monkeypatch):
     from langgraph.prebuilt import ToolNode
 
     import agent_tools.terminal_tools as terminal_tools
-    from agent_core.session_context import hermes_task_id_from_thread_id
+    from agent_core.session_context import runtime_task_id_from_thread_id
     from agent_tools.terminal_tools import process
 
     calls = []
@@ -378,7 +378,7 @@ def test_process_toolnode_injects_runtime_thread_for_list(monkeypatch):
     payload = tool_message.artifact
     assert tool_message.content
     assert payload["ok"] is True
-    assert calls[0]["task_id"] == hermes_task_id_from_thread_id("toolnode-process-thread")
+    assert calls[0]["task_id"] == runtime_task_id_from_thread_id("toolnode-process-thread")
 
 
 def _tool_names(tools):

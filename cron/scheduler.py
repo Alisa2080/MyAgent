@@ -111,7 +111,7 @@ class _TickLock:
 
 
 def _max_parallel(default: int) -> int:
-    raw = os.getenv("HERMES_CRON_MAX_PARALLEL")
+    raw = os.getenv("AGENT_CRON_MAX_PARALLEL")
     if raw:
         try:
             value = int(raw)

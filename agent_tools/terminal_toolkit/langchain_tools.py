@@ -1,4 +1,4 @@
-"""LangChain adapters for the standalone Hermes terminal toolkit."""
+"""LangChain adapters for the standalone terminal toolkit toolkit."""
 
 from __future__ import annotations
 
@@ -13,11 +13,11 @@ except ImportError:  # pragma: no cover - exercised only without LangChain
 
 def _require_langchain():
     if tool is None:
-        raise ImportError("Install langchain to use hermes_terminal_toolkit.langchain_tools")
+        raise ImportError("Install langchain to use terminal_toolkit.langchain_tools")
     try:
         from pydantic import BaseModel, Field
     except ImportError as exc:
-        raise ImportError("Install pydantic to use hermes_terminal_toolkit.langchain_tools") from exc
+        raise ImportError("Install pydantic to use terminal_toolkit.langchain_tools") from exc
     return BaseModel, Field
 
 

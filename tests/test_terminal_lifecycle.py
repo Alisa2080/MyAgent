@@ -1,6 +1,6 @@
 from types import SimpleNamespace
 
-from agent_core.session_context import hermes_task_id_from_thread_id
+from agent_core.session_context import runtime_task_id_from_thread_id
 
 
 def test_recover_terminal_processes_delegates_to_registry(monkeypatch):
@@ -85,7 +85,7 @@ def test_recover_terminal_processes_is_thread_safe(monkeypatch):
 def test_cleanup_terminal_session_for_thread_id_kills_processes_and_cleans_env(monkeypatch):
     import agent_core.terminal_lifecycle as lifecycle
 
-    task_id = hermes_task_id_from_thread_id("cleanup-thread")
+    task_id = runtime_task_id_from_thread_id("cleanup-thread")
     killed = []
     cleaned = []
 
@@ -125,7 +125,7 @@ def test_cleanup_terminal_session_for_thread_id_uses_runtime_context(monkeypatch
 def test_cleanup_terminal_session_for_runtime_uses_runtime_thread(monkeypatch):
     import agent_core.terminal_lifecycle as lifecycle
 
-    task_id = hermes_task_id_from_thread_id("runtime-cleanup-thread")
+    task_id = runtime_task_id_from_thread_id("runtime-cleanup-thread")
     killed = []
     cleaned = []
     runtime = SimpleNamespace(execution_info=SimpleNamespace(thread_id="runtime-cleanup-thread"))
@@ -250,7 +250,7 @@ def test_cleanup_task_resources_for_task_id_skips_when_persistence_check_fails(m
 def test_cleanup_task_resources_for_thread_id_uses_hashed_task_id(monkeypatch):
     import agent_core.terminal_lifecycle as lifecycle
 
-    task_id = hermes_task_id_from_thread_id("thread-cleanup")
+    task_id = runtime_task_id_from_thread_id("thread-cleanup")
     calls = []
 
     monkeypatch.setattr(
@@ -450,7 +450,7 @@ def test_active_execution_lock_allows_signal_handler_reentry():
 
 
 def test_interrupt_lock_allows_signal_handler_reentry():
-    from agent_tools.hermes_terminal_toolkit import interrupt
+    from agent_tools.terminal_toolkit import interrupt
 
     interrupt._lock.acquire()
     reacquired = False

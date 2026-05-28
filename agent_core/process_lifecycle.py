@@ -10,12 +10,12 @@ from types import FrameType
 from typing import Any
 
 from agent_core.terminal_lifecycle import interrupt_all_terminal_waits
-from agent_tools.hermes_terminal_toolkit.process_registry import process_registry
-from agent_tools.hermes_terminal_toolkit.terminal_tool import cleanup_all_environments
+from agent_tools.terminal_toolkit.process_registry import process_registry
+from agent_tools.terminal_toolkit.terminal_tool import cleanup_all_environments
 
 logger = logging.getLogger(__name__)
 
-SIGTERM_GRACE_ENV = "HERMES_SIGTERM_GRACE"
+SIGTERM_GRACE_ENV = "TERMINAL_SIGTERM_GRACE"
 DEFAULT_SIGTERM_GRACE_SECONDS = 1.5
 
 _install_lock = threading.Lock()
@@ -83,13 +83,13 @@ def run_process_shutdown_cleanup(*, reason: str = "process_exit") -> dict[str, A
     try:
         killed_processes = process_registry.kill_all()
     except Exception as exc:
-        logger.exception("Failed to kill Hermes background processes during shutdown.")
+        logger.exception("Failed to kill terminal toolkit background processes during shutdown.")
         errors.append(f"process_registry.kill_all: {exc}")
 
     try:
         cleaned_environments = cleanup_all_environments()
     except Exception as exc:
-        logger.exception("Failed to clean Hermes environments during shutdown.")
+        logger.exception("Failed to clean terminal toolkit environments during shutdown.")
         errors.append(f"cleanup_all_environments: {exc}")
 
     return {

@@ -355,7 +355,7 @@ def test_install_process_signal_handlers_skips_signal_registration_outside_main_
 def test_signal_handler_grace_window_allows_foreground_wait_to_kill_process(monkeypatch):
     import agent_core.process_lifecycle as process_lifecycle
     from agent_core.terminal_lifecycle import terminal_execution_scope
-    from agent_tools.hermes_terminal_toolkit.environments.local import LocalEnvironment
+    from agent_tools.terminal_toolkit.environments.local import LocalEnvironment
 
     env = LocalEnvironment()
     result_holder = {}

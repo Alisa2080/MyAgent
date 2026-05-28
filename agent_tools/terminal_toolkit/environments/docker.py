@@ -18,7 +18,7 @@ from typing import Optional
 
 from .base import BaseEnvironment, _popen_bash
 from .local import (
-    _HERMES_PROVIDER_ENV_BLOCKLIST,
+    _AGENT_PROVIDER_ENV_BLOCKLIST,
     _get_passthrough_env_names,
 )
 
@@ -97,7 +97,7 @@ def find_docker() -> Optional[str]:
     """Locate the docker (or podman) CLI binary.
 
     Resolution order:
-    1. ``HERMES_DOCKER_BINARY`` env var — explicit override (e.g. ``/usr/bin/podman``)
+    1. ``TERMINAL_DOCKER_BINARY`` env var — explicit override (e.g. ``/usr/bin/podman``)
     2. ``docker`` on PATH via ``shutil.which``
     3. ``podman`` on PATH via ``shutil.which``
     4. Well-known macOS Docker Desktop install locations
@@ -109,10 +109,10 @@ def find_docker() -> Optional[str]:
         return _docker_executable
 
     # 1. Explicit override via env var (e.g. for Podman on immutable distros)
-    override = os.getenv("HERMES_DOCKER_BINARY")
+    override = os.getenv("TERMINAL_DOCKER_BINARY")
     if override and os.path.isfile(override) and os.access(override, os.X_OK):
         _docker_executable = override
-        logger.info("Using HERMES_DOCKER_BINARY override: %s", override)
+        logger.info("Using TERMINAL_DOCKER_BINARY override: %s", override)
         return override
 
     # 2. docker on PATH
@@ -143,7 +143,7 @@ def find_docker() -> Optional[str]:
 # We drop all capabilities then add back the minimum needed:
 #   DAC_OVERRIDE - root can write to bind-mounted dirs owned by host user
 #   CHOWN/FOWNER - package managers (pip, npm, apt) need to set file ownership
-#   SETUID/SETGID - the image entrypoint drops from root to the 'hermes'
+#   SETUID/SETGID - the image entrypoint drops from root to the 'agent'
 #       user via `gosu`, which requires these caps. Combined with
 #       `no-new-privileges`, gosu still cannot escalate back to root after
 #       the drop, so the security posture is preserved. Omitted entirely
@@ -308,7 +308,7 @@ class DockerEnvironment(BaseEnvironment):
         self._network_initially_enabled = bool(network)
         self._network_lease_count = 0
         self._network_lock = threading.Lock()
-        self._egress_network = os.getenv("HERMES_DOCKER_NETWORK", "bridge")
+        self._egress_network = os.getenv("TERMINAL_DOCKER_NETWORK", "bridge")
         logger.info(f"DockerEnvironment volumes: {volumes}")
         # Ensure volumes is a list (config.yaml could be malformed)
         if volumes is not None and not isinstance(volumes, list):
@@ -336,7 +336,7 @@ class DockerEnvironment(BaseEnvironment):
             resource_args.append("--network=none")
 
         # Persistent workspace via bind mounts from a configurable host directory
-        # (TERMINAL_SANDBOX_DIR, default ~/.hermes/sandboxes/). Non-persistent
+        # (TERMINAL_SANDBOX_DIR, default ~/.agent/sandboxes/). Non-persistent
         # mode uses tmpfs (ephemeral, fast, gone on cleanup).
         from .base import get_sandbox_dir
 
@@ -441,7 +441,7 @@ class DockerEnvironment(BaseEnvironment):
         self._docker_exe = find_docker() or "docker"
 
         # Start the container directly via `docker run -d`.
-        container_name = f"hermes-{uuid.uuid4().hex[:8]}"
+        container_name = f"terminal-{uuid.uuid4().hex[:8]}"
         run_cmd = [
             self._docker_exe, "run", "-d",
             "--init",           # tini/catatonit as PID 1 — reaps zombie children
@@ -481,9 +481,9 @@ class DockerEnvironment(BaseEnvironment):
         explicit_forward_keys = set(self._forward_env)
         passthrough_keys = _get_passthrough_env_names()
         # Explicit docker_forward_env entries are an intentional opt-in and must
-        # win over the generic Hermes secret blocklist. Only implicit passthrough
+        # win over the generic terminal toolkit secret blocklist. Only implicit passthrough
         # keys are filtered.
-        forward_keys = explicit_forward_keys | (passthrough_keys - _HERMES_PROVIDER_ENV_BLOCKLIST)
+        forward_keys = explicit_forward_keys | (passthrough_keys - _AGENT_PROVIDER_ENV_BLOCKLIST)
         for key in sorted(forward_keys):
             value = os.getenv(key)
             if value is not None:

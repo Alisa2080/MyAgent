@@ -22,7 +22,7 @@ class FakeDockerEnv:
 
 
 def test_terminal_tool_wraps_foreground_command_in_network_context(monkeypatch):
-    from agent_tools.hermes_terminal_toolkit import terminal_tool
+    from agent_tools.terminal_toolkit import terminal_tool
 
     env = FakeDockerEnv()
     monkeypatch.setattr(
@@ -50,7 +50,7 @@ def test_terminal_tool_wraps_foreground_command_in_network_context(monkeypatch):
 
 
 def test_terminal_tool_cleans_vm_when_network_disconnect_fails(monkeypatch):
-    from agent_tools.hermes_terminal_toolkit import terminal_tool
+    from agent_tools.terminal_toolkit import terminal_tool
 
     class BrokenEnv(FakeDockerEnv):
         @contextlib.contextmanager
@@ -88,7 +88,7 @@ def test_terminal_tool_cleans_vm_when_network_disconnect_fails(monkeypatch):
 
 
 def test_terminal_tool_allows_local_network_approval_without_network_context(monkeypatch):
-    from agent_tools.hermes_terminal_toolkit import terminal_tool
+    from agent_tools.terminal_toolkit import terminal_tool
 
     class FakeLocalEnv:
         cwd = "/workspace"
@@ -127,7 +127,7 @@ def test_terminal_tool_allows_local_network_approval_without_network_context(mon
 
 
 def test_process_registry_releases_background_network_lease(monkeypatch):
-    from agent_tools.hermes_terminal_toolkit.process_registry import ProcessRegistry
+    from agent_tools.terminal_toolkit.process_registry import ProcessRegistry
 
     released = []
     registry = ProcessRegistry()
@@ -146,7 +146,7 @@ def test_process_registry_releases_background_network_lease(monkeypatch):
 
 
 def test_process_registry_network_release_is_single_use():
-    from agent_tools.hermes_terminal_toolkit.process_registry import ProcessRegistry
+    from agent_tools.terminal_toolkit.process_registry import ProcessRegistry
 
     released = []
     registry = ProcessRegistry()
@@ -167,7 +167,7 @@ def test_process_registry_network_release_is_single_use():
 
 
 def test_process_registry_network_release_failure_cleans_environment():
-    from agent_tools.hermes_terminal_toolkit.process_registry import ProcessRegistry
+    from agent_tools.terminal_toolkit.process_registry import ProcessRegistry
 
     class CleanupDockerEnv(FakeDockerEnv):
         def __init__(self):
@@ -200,7 +200,7 @@ def test_process_registry_network_release_failure_cleans_environment():
 
 
 def test_docker_temporary_network_overlapping_leases_disconnect_after_last_release():
-    from agent_tools.hermes_terminal_toolkit.environments.docker import DockerEnvironment
+    from agent_tools.terminal_toolkit.environments.docker import DockerEnvironment
 
     env = object.__new__(DockerEnvironment)
     env._container_id = "container-1"
@@ -241,7 +241,7 @@ def test_docker_temporary_network_overlapping_leases_disconnect_after_last_relea
 
 
 def test_process_registry_releases_background_network_lease_after_spawn_failure():
-    from agent_tools.hermes_terminal_toolkit.process_registry import ProcessRegistry
+    from agent_tools.terminal_toolkit.process_registry import ProcessRegistry
 
     class FailingDockerEnv(FakeDockerEnv):
         def execute(self, command, **kwargs):

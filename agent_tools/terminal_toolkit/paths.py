@@ -1,4 +1,4 @@
-"""Path helpers for the standalone Hermes terminal toolkit."""
+"""Path helpers for the standalone terminal toolkit."""
 
 from __future__ import annotations
 
@@ -9,17 +9,13 @@ from pathlib import Path
 
 def _toolkit_home_candidates() -> Iterator[Path]:
     """Yield toolkit-home candidates in priority order."""
-    custom = os.getenv("HERMES_TERMINAL_TOOLKIT_HOME")
+    custom = os.getenv("TERMINAL_TOOLKIT_HOME")
     if custom:
         yield Path(os.path.expanduser(custom))
 
-    hermes_home = os.getenv("HERMES_HOME")
-    if hermes_home:
-        yield Path(os.path.expanduser(hermes_home)) / "terminal-toolkit"
-
-    yield Path.home() / ".hermes-terminal-toolkit"
-    yield Path.cwd() / ".hermes-terminal-toolkit"
-    yield Path("/tmp") / ".hermes-terminal-toolkit"
+    yield Path.home() / ".terminal-toolkit"
+    yield Path.cwd() / ".terminal-toolkit"
+    yield Path("/tmp") / ".terminal-toolkit"
 
 
 def get_toolkit_home() -> Path:
@@ -43,10 +39,10 @@ def display_toolkit_home() -> str:
 
 def get_subprocess_home() -> str:
     """Return an isolated HOME override for subprocesses, or empty string."""
-    custom = os.getenv("HERMES_TERMINAL_TOOLKIT_SUBPROCESS_HOME")
+    custom = os.getenv("TERMINAL_TOOLKIT_SUBPROCESS_HOME")
     if custom:
         home = Path(os.path.expanduser(custom))
-    elif os.getenv("HERMES_TERMINAL_TOOLKIT_ISOLATE_HOME", "").lower() in ("1", "true", "yes", "on"):
+    elif os.getenv("TERMINAL_TOOLKIT_ISOLATE_HOME", "").lower() in ("1", "true", "yes", "on"):
         home = get_toolkit_home() / "home"
     else:
         return ""
