@@ -178,3 +178,22 @@ def test_expired_events_are_pruned(monkeypatch):
     )
 
     assert notifications.drain_cron_notifications_for_thread_id("thread-1") == []
+
+
+def test_origin_notification_survives_module_reload(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    import importlib
+    import cron.notifications as notifications
+
+    notifications.queue_cron_notification(
+        "thread-1",
+        {"type": "cron_result", "job_id": "job-1", "final_response": "done"},
+    )
+
+    reloaded = importlib.reload(notifications)
+
+    assert reloaded.drain_cron_notifications_for_thread_id("thread-1") == [
+        {"type": "cron_result", "job_id": "job-1", "final_response": "done"}
+    ]
+    assert reloaded.drain_cron_notifications_for_thread_id("thread-1") == []

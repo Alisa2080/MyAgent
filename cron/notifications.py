@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import defaultdict, deque
+import json
 import threading
 import time
 from typing import Any
@@ -47,6 +48,28 @@ def queue_cron_notification(thread_id: str | None, event: dict[str, Any]) -> Non
         while len(queue) > _MAX_PENDING_EVENTS_PER_THREAD:
             queue.popleft()
 
+    try:
+        _persist_notification(str(thread_id), event)
+    except Exception:
+        pass
+
+
+def _persist_notification(thread_id: str, event: dict[str, Any]) -> None:
+    from cron.delivery_store import DeliveryStore
+
+    payload = dict(event)
+    DeliveryStore().enqueue(
+        job_id=str(payload.get("job_id") or ""),
+        job_name=payload.get("job_name"),
+        run_at=payload.get("run_at"),
+        target="origin",
+        target_type="origin",
+        target_id=str(thread_id),
+        final_response=payload.get("final_response"),
+        output_path=payload.get("output_path"),
+        payload=payload,
+    )
+
 
 def drain_cron_notifications_for_thread_id(
     thread_id: str | None,
@@ -59,17 +82,36 @@ def drain_cron_notifications_for_thread_id(
     with _events_lock:
         _prune_locked(time.time())
         queue = _events_by_thread.get(str(thread_id))
-        if queue is None:
-            return []
+        if queue is not None:
+            while queue and len(events) < max(0, max_events):
+                event = dict(queue.popleft())
+                event.pop(_QUEUED_AT_KEY, None)
+                events.append(event)
+            if not queue:
+                _events_by_thread.pop(str(thread_id), None)
 
-        while queue and len(events) < max(0, max_events):
-            event = dict(queue.popleft())
-            event.pop(_QUEUED_AT_KEY, None)
-            events.append(event)
-        if not queue:
-            _events_by_thread.pop(str(thread_id), None)
+    if not events:
+        events = _drain_persisted_notifications(str(thread_id), max_events)
+    else:
+        _drain_persisted_notifications(str(thread_id), max_events)
 
     return events
+
+
+def _drain_persisted_notifications(thread_id: str, max_events: int) -> list[dict[str, Any]]:
+    from cron.delivery_store import DeliveryStore
+
+    try:
+        store = DeliveryStore()
+        stored = store.pending_origin_events(str(thread_id), limit=max_events)
+        events = []
+        for row in stored:
+            payload = json.loads(row["payload_json"])
+            events.append(payload)
+            store.mark_delivered(row["id"])
+        return events
+    except Exception:
+        return []
 
 
 def _shorten(text: Any, max_chars: int) -> str:
