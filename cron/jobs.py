@@ -153,40 +153,33 @@ def _normalize_enabled_toolsets(value: Any) -> list[str] | None:
     return normalized or None
 
 
+def _store():
+    from cron.state_store import StateStore
+
+    return StateStore()
+
+
 def load_jobs() -> list[dict[str, Any]]:
-    ensure_cron_dirs()
-    path = get_jobs_file()
-    if not path.exists():
-        return []
-
-    try:
-        with path.open("r", encoding="utf-8") as handle:
-            payload = json.load(handle)
-    except json.JSONDecodeError as exc:
-        raise RuntimeError(f"Cron jobs file is invalid JSON: {path}") from exc
-
-    jobs = payload.get("jobs", [])
-    if not isinstance(jobs, list):
-        raise RuntimeError("Cron jobs file is invalid: 'jobs' must be a list.")
-    return jobs
+    return _store().list_jobs(include_disabled=True)
 
 
 def save_jobs(jobs: list[dict[str, Any]]) -> None:
-    atomic_write_json(get_jobs_file(), {"jobs": jobs, "updated_at": now().isoformat()})
+    store = _store()
+    existing_ids = {job["id"] for job in store.list_jobs(include_disabled=True)}
+    for job in jobs:
+        if job.get("id") in existing_ids:
+            store.update_job(str(job["id"]), job)
+        else:
+            store.create_job(job)
 
 
 def list_jobs(include_disabled: bool = False) -> list[dict[str, Any]]:
-    jobs = load_jobs()
-    if not include_disabled:
-        jobs = [job for job in jobs if job.get("enabled", True)]
-    return copy.deepcopy(jobs)
+    return copy.deepcopy(_store().list_jobs(include_disabled=include_disabled))
 
 
 def get_job(job_id: str) -> dict[str, Any] | None:
-    for job in load_jobs():
-        if job.get("id") == job_id:
-            return copy.deepcopy(job)
-    return None
+    job = _store().get_job(job_id)
+    return copy.deepcopy(job) if job is not None else None
 
 
 def _find_job_index(jobs: list[dict[str, Any]], job_id: str) -> int:
@@ -349,28 +342,19 @@ def create_job(
         "created_at": current.isoformat(),
     }
 
-    with _jobs_file_lock:
-        jobs = load_jobs()
-        jobs.append(job)
-        save_jobs(jobs)
-    return copy.deepcopy(job)
+    return copy.deepcopy(_store().create_job(job))
 
 
 def update_job(job_id: str, updates: dict[str, Any]) -> dict[str, Any]:
-    with _jobs_file_lock:
-        jobs = load_jobs()
-        index = _find_job_index(jobs, job_id)
-        return _update_job_locked(jobs, index, updates)
+    existing = get_job(job_id)
+    if existing is None:
+        raise KeyError(f"Cron job not found: {job_id}")
+    normalized = _normalize_updates(updates, existing)
+    return copy.deepcopy(_store().update_job(job_id, normalized))
 
 
 def remove_job(job_id: str) -> bool:
-    with _jobs_file_lock:
-        jobs = load_jobs()
-        kept = [job for job in jobs if job.get("id") != job_id]
-        if len(kept) == len(jobs):
-            return False
-        save_jobs(kept)
-        return True
+    return _store().remove_job(job_id)
 
 
 def pause_job(job_id: str, reason: str | None = None) -> dict[str, Any]:

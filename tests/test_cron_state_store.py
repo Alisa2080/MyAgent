@@ -101,3 +101,31 @@ def test_state_store_imports_jobs_json_once(monkeypatch, tmp_path):
 
     assert jobs_file.read_text(encoding="utf-8") == before
     assert {job["id"] for job in store.list_jobs(include_disabled=True)} == {"job-1", "job-2"}
+
+
+def test_jobs_facade_create_update_pause_resume_remove(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    from cron.jobs import create_job, get_job, list_jobs, pause_job, remove_job, resume_job, update_job
+
+    job = create_job(prompt="write report", schedule="30m", name="daily", deliver="local")
+
+    assert job["id"]
+    assert job["state"] == "scheduled"
+    assert list_jobs()[0]["id"] == job["id"]
+
+    updated = update_job(job["id"], {"name": "daily updated"})
+    assert updated["name"] == "daily updated"
+
+    paused = pause_job(job["id"], reason="test")
+    assert paused["state"] == "paused"
+    assert paused["enabled"] is False
+    assert list_jobs() == []
+    assert get_job(job["id"])["paused_reason"] == "test"
+
+    resumed = resume_job(job["id"])
+    assert resumed["state"] == "scheduled"
+    assert resumed["enabled"] is True
+
+    assert remove_job(job["id"]) is True
+    assert get_job(job["id"]) is None

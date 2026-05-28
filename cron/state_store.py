@@ -83,6 +83,8 @@ class StateStore:
                     concurrency_key TEXT,
                     lease_run_id TEXT,
                     lease_expires_at TEXT,
+                    paused_reason TEXT,
+                    paused_at TEXT,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 )
@@ -195,6 +197,8 @@ class StateStore:
             "concurrency_key": job.get("concurrency_key") or job.get("workdir") or str(job["id"]),
             "lease_run_id": job.get("lease_run_id"),
             "lease_expires_at": job.get("lease_expires_at"),
+            "paused_reason": job.get("paused_reason"),
+            "paused_at": job.get("paused_at"),
             "created_at": job.get("created_at") or now_text,
             "updated_at": now_text,
         }
@@ -227,6 +231,8 @@ class StateStore:
             "concurrency_key": row["concurrency_key"],
             "lease_run_id": row["lease_run_id"],
             "lease_expires_at": row["lease_expires_at"],
+            "paused_reason": row["paused_reason"],
+            "paused_at": row["paused_at"],
             "created_at": row["created_at"],
             "updated_at": row["updated_at"],
         }
@@ -300,6 +306,27 @@ class StateStore:
         with self._connect() as conn:
             rows = conn.execute("SELECT state, COUNT(*) AS count FROM jobs GROUP BY state").fetchall()
         return {str(row["state"]): int(row["count"]) for row in rows}
+
+    def update_job(self, job_id: str, updates: dict[str, Any]) -> dict[str, Any]:
+        existing = self.get_job(job_id)
+        if existing is None:
+            raise KeyError(f"Cron job not found: {job_id}")
+        merged = dict(existing)
+        merged.update(updates)
+        values = self._job_to_row_values(merged)
+        assignments = ", ".join(f"{column} = ?" for column in values if column != "id")
+        params = [values[column] for column in values if column != "id"] + [job_id]
+        with self._connect() as conn:
+            conn.execute(f"UPDATE jobs SET {assignments} WHERE id = ?", params)
+        updated = self.get_job(job_id)
+        if updated is None:
+            raise KeyError(f"Cron job not found after update: {job_id}")
+        return updated
+
+    def remove_job(self, job_id: str) -> bool:
+        with self._connect() as conn:
+            cursor = conn.execute("DELETE FROM jobs WHERE id = ?", (job_id,))
+        return bool(cursor.rowcount)
 
     def delivery_stats(self) -> dict[str, int]:
         stats = {status: 0 for status in DELIVERY_STATUSES}
