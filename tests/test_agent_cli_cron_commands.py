@@ -67,6 +67,34 @@ def test_top_level_create_defaults_to_local(monkeypatch, tmp_path):
     assert calls[0][2]["deliver"] == "local"
 
 
+def test_create_accepts_webhook_delivery(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+    import agent_cli.cron_commands as cron_commands
+
+    calls = []
+
+    def fake_action(action, *, origin_thread_id=None, **kwargs):
+        calls.append((action, origin_thread_id, kwargs))
+        return {
+            "success": True,
+            "job_id": "job-1",
+            "job": {"job_id": "job-1", "name": "report", "schedule": "30m"},
+            "message": "created",
+        }
+
+    monkeypatch.setattr(cron_commands, "run_cronjob_action", fake_action)
+
+    result = cron_commands.create_cron_job(
+        schedule="30m",
+        prompt="write report",
+        deliver="webhook:https://example.invalid/hook",
+        top_level=True,
+    )
+
+    assert result.exit_code == 0
+    assert calls[0][2]["deliver"] == "webhook:https://example.invalid/hook"
+
+
 def test_top_level_origin_delivery_is_rejected():
     import agent_cli.cron_commands as cron_commands
 
@@ -239,6 +267,22 @@ def test_cron_doctor_reports_delivery_db(monkeypatch, tmp_path):
     assert result.exit_code in {0, 1}
 
 
+def test_cron_doctor_reports_invalid_jobs_json_without_raising(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    from agent_cli import cron_commands
+    from cron.paths import get_jobs_file
+
+    get_jobs_file().parent.mkdir(parents=True, exist_ok=True)
+    get_jobs_file().write_text("{invalid", encoding="utf-8")
+    monkeypatch.setattr(cron_commands, "is_cron_scheduler_running", lambda: False)
+
+    result = cron_commands.cron_doctor()
+
+    assert result.exit_code == 2
+    assert "jobs file JSON is invalid" in result.text
+
+
 def test_test_delivery_local(monkeypatch, tmp_path):
     monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
 
@@ -249,3 +293,14 @@ def test_test_delivery_local(monkeypatch, tmp_path):
     assert result.exit_code == 0
     assert "test-delivery" in result.text
     assert "delivered" in result.text or "pending" in result.text
+
+
+def test_test_delivery_dead_target_returns_exit_code_2(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    from agent_cli import cron_commands
+
+    result = cron_commands.test_delivery(target="webhook")
+
+    assert result.exit_code == 2
+    assert "status=dead" in result.text

@@ -200,7 +200,7 @@ def test_cronjob_create_normalizes_nonpositive_repeat_to_forever(monkeypatch):
     assert created["repeat"] is None
 
 
-@pytest.mark.parametrize("deliver", [None, "local", "origin"])
+@pytest.mark.parametrize("deliver", [None, "local", "origin", "webhook:https://example.invalid/hook"])
 def test_cronjob_create_accepts_supported_deliveries(monkeypatch, deliver):
     cronjob_tool = _cronjob_tool()
     created = {}
@@ -225,6 +225,8 @@ def test_cronjob_create_accepts_supported_deliveries(monkeypatch, deliver):
 
     assert result["success"] is True
     assert created["deliver"] == deliver
+    if deliver == "webhook:https://example.invalid/hook":
+        assert created["origin"] is None
 
 
 def test_cronjob_create_rejects_origin_without_thread(monkeypatch):
@@ -268,7 +270,7 @@ def test_cronjob_list_formats_jobs(monkeypatch):
     assert set(result["jobs"][0]) == REQUIRED_SUMMARY_FIELDS
 
 
-@pytest.mark.parametrize("deliver", [None, "local", "origin"])
+@pytest.mark.parametrize("deliver", [None, "local", "origin", "webhook:https://example.invalid/hook"])
 def test_cronjob_update_accepts_supported_deliveries(monkeypatch, deliver):
     cronjob_tool = _cronjob_tool()
     updated = {}
@@ -300,6 +302,22 @@ def test_cronjob_update_accepts_supported_deliveries(monkeypatch, deliver):
         assert updated["updates"]["deliver"] == deliver
     if deliver == "origin":
         assert updated["updates"]["origin"] == {"thread_id": "thread-1"}
+    elif deliver == "webhook:https://example.invalid/hook":
+        assert updated["updates"]["origin"] is None
+
+
+def test_cronjob_rejects_invalid_webhook_delivery():
+    cronjob_tool = _cronjob_tool()
+
+    result = cronjob_tool._cronjob_impl(
+        action="create",
+        prompt="write report",
+        schedule="30m",
+        deliver="webhook:file:///etc/passwd",
+    )
+
+    assert result["success"] is False
+    assert result["code"] == "invalid_webhook"
 
 
 def test_cronjob_pause_resume_remove_and_run_dispatch(monkeypatch):

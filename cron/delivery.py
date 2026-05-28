@@ -2,10 +2,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+import ipaddress
 import json
 import os
+import socket
 import urllib.error
 import urllib.request
+from urllib.parse import urlparse
 from typing import Any, Callable
 
 from cron.delivery_store import DeliveryStore
@@ -29,16 +32,77 @@ class DeliveryTarget:
 
 def parse_target(job: dict[str, Any]) -> DeliveryTarget:
     raw = str(job.get("deliver") or "local").strip() or "local"
-    if raw == "local":
+    lowered = raw.lower()
+    if lowered == "local":
         return DeliveryTarget(raw=raw, target_type="local", target_id=None)
-    if raw == "origin":
+    if lowered == "origin":
         thread_id = (job.get("origin") or {}).get("thread_id")
         return DeliveryTarget(raw=raw, target_type="origin", target_id=str(thread_id) if thread_id else None)
-    if raw == "webhook":
+    if lowered == "webhook":
         return DeliveryTarget(raw=raw, target_type="webhook", target_id=os.getenv("AGENT_CRON_WEBHOOK_URL"))
-    if raw.startswith("webhook:"):
+    if lowered.startswith("webhook:"):
         return DeliveryTarget(raw=raw, target_type="webhook", target_id=raw.split(":", 1)[1].strip() or None)
     return DeliveryTarget(raw=raw, target_type="unsupported", target_id=None)
+
+
+def _private_webhook_error() -> str:
+    return "webhook URL must not target private or local addresses unless AGENT_CRON_ALLOW_PRIVATE_WEBHOOKS=1"
+
+
+def _allow_private_webhooks() -> bool:
+    return os.getenv("AGENT_CRON_ALLOW_PRIVATE_WEBHOOKS", "").lower() in {"1", "true", "yes"}
+
+
+def _resolved_addresses(host: str, port: int | None) -> set[ipaddress.IPv4Address | ipaddress.IPv6Address]:
+    addresses = set()
+    for info in socket.getaddrinfo(host, port, type=socket.SOCK_STREAM):
+        sockaddr = info[4]
+        if not sockaddr:
+            continue
+        addresses.add(ipaddress.ip_address(str(sockaddr[0])))
+    return addresses
+
+
+def validate_webhook_url(url: str | None, *, resolve_host: bool = False) -> str | None:
+    if not url:
+        return "webhook delivery requires a URL"
+    parsed = urlparse(str(url))
+    if parsed.scheme not in {"http", "https"}:
+        return "webhook URL must use http or https"
+    if not parsed.hostname:
+        return "webhook URL must include a hostname"
+    try:
+        port = parsed.port
+    except ValueError:
+        return "webhook URL port is invalid"
+
+    host = parsed.hostname.lower()
+    if not _allow_private_webhooks():
+        if host == "localhost" or host.endswith(".localhost"):
+            return "webhook URL must not target localhost unless AGENT_CRON_ALLOW_PRIVATE_WEBHOOKS=1"
+        try:
+            ip = ipaddress.ip_address(host)
+        except ValueError:
+            if resolve_host:
+                try:
+                    addresses = _resolved_addresses(host, port)
+                except socket.gaierror as exc:
+                    return f"webhook URL hostname could not be resolved: {exc}"
+                except OSError as exc:
+                    return f"webhook URL hostname resolution failed: {exc}"
+                if not addresses:
+                    return "webhook URL hostname did not resolve to an address"
+                if any(not address.is_global for address in addresses):
+                    return _private_webhook_error()
+        else:
+            if not ip.is_global:
+                return _private_webhook_error()
+    return None
+
+
+class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
 
 
 def _payload(job: dict[str, Any], result: JobRunResult, output_path: str, run_at: str) -> dict[str, Any]:
@@ -62,9 +126,7 @@ def enqueue_result(
     *,
     store: DeliveryStore | None = None,
 ) -> dict[str, Any] | None:
-    if not result.success:
-        return None
-    if str(result.final_response or "").lstrip().startswith(SILENT_MARKER):
+    if result.success and str(result.final_response or "").lstrip().startswith(SILENT_MARKER):
         return None
 
     store = store or DeliveryStore()
@@ -101,7 +163,20 @@ def enqueue_result(
             last_error="origin delivery requires origin.thread_id",
         )
 
-    if target.target_type == "webhook" and not target.target_id:
+    if target.target_type == "webhook":
+        webhook_error = validate_webhook_url(target.target_id)
+        if not webhook_error:
+            return store.enqueue(
+                job_id=str(job.get("id") or ""),
+                job_name=job.get("name"),
+                run_at=run_at_text,
+                target=target.raw,
+                target_type=target.target_type,
+                target_id=target.target_id,
+                final_response=result.final_response,
+                output_path=output_path,
+                payload=payload,
+            )
         return store.enqueue(
             job_id=str(job.get("id") or ""),
             job_name=job.get("name"),
@@ -113,7 +188,7 @@ def enqueue_result(
             output_path=output_path,
             payload=payload,
             status="dead",
-            last_error="webhook delivery requires a URL",
+            last_error=webhook_error,
         )
 
     if target.target_type == "unsupported":
@@ -145,6 +220,9 @@ def enqueue_result(
 
 
 def default_webhook_sender(url: str, payload: dict[str, Any], timeout: int = 10) -> tuple[int, str]:
+    webhook_error = validate_webhook_url(url, resolve_host=True)
+    if webhook_error:
+        raise ValueError(webhook_error)
     body = json.dumps(payload).encode("utf-8")
     request = urllib.request.Request(
         url,
@@ -152,8 +230,9 @@ def default_webhook_sender(url: str, payload: dict[str, Any], timeout: int = 10)
         headers={"Content-Type": "application/json"},
         method="POST",
     )
+    opener = urllib.request.build_opener(_NoRedirectHandler)
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
+        with opener.open(request, timeout=timeout) as response:
             return int(response.status), response.read().decode("utf-8", errors="replace")
     except urllib.error.HTTPError as exc:
         return int(exc.code), exc.read().decode("utf-8", errors="replace")
@@ -175,11 +254,8 @@ def process_due(
     webhook_sender = webhook_sender or default_webhook_sender
     summary = {"claimed": 0, "delivered": 0, "failed": 0, "dead": 0}
 
-    for event in store.claim_due(limit=limit):
+    for event in store.claim_due(limit=limit, target_types={"local", "webhook", "unsupported"}):
         summary["claimed"] += 1
-        if event["target_type"] == "origin":
-            store.update_event(event["id"], status="pending")
-            continue
         if event["target_type"] == "local":
             store.mark_delivered(event["id"])
             summary["delivered"] += 1

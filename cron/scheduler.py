@@ -4,7 +4,6 @@ import concurrent.futures
 import errno
 import logging
 import os
-import sys
 import threading
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -27,14 +26,19 @@ from cron.jobs import (
     now,
     save_job_output,
 )
+from cron.delivery import JobRunResult
+from cron.delivery_store import DeliveryStore
 from cron.paths import ensure_cron_dirs, get_cron_dir
 
 logger = logging.getLogger(__name__)
 
-run_job = None
-JobRunResult = None
-
 _fallback_lock = threading.Lock()
+
+
+def run_job(job: dict[str, Any]) -> JobRunResult:
+    from cron.runner import run_job as runner_run_job
+
+    return runner_run_job(job)
 
 
 class _TickLockBusy(Exception):
@@ -127,7 +131,7 @@ def _max_parallel(default: int) -> int:
 def _delivery_error_from_event(event: dict[str, Any] | None) -> str | None:
     if not event:
         return None
-    if event.get("status") == "dead":
+    if event.get("status") in {"failed", "dead"}:
         return str(event.get("last_error") or "delivery target is not deliverable")
     return None
 
@@ -136,17 +140,17 @@ def _process_job(job: dict[str, Any], run_at: datetime) -> JobTickResult:
     job_id = str(job["id"])
     try:
         advanced = advance_next_run(job_id, run_at)
-        this_mod = sys.modules[__name__]
-        _run_job = getattr(this_mod, "run_job", None)
-        if _run_job is None:
-            from cron import runner as _runner_mod
-            _run_job = getattr(_runner_mod, "run_job", None)
-        result = _run_job(advanced)
+        result = run_job(advanced)
         output_path = save_job_output(job_id, result.output_doc, run_at=run_at)
         from cron.delivery import enqueue_result, process_due
 
         delivery_event = enqueue_result(advanced, result, output_path, run_at)
         process_due(limit=20)
+        if delivery_event:
+            try:
+                delivery_event = DeliveryStore().get(delivery_event["id"])
+            except KeyError:
+                pass
         delivery_error = _delivery_error_from_event(delivery_event)
         mark_job_run(
             job_id,

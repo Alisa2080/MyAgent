@@ -243,7 +243,7 @@ def test_silent_response_suppresses_origin_notification(monkeypatch, tmp_path):
     assert DeliveryStore().stats()["pending"] == 0
 
 
-def test_failed_run_saves_marks_failed_and_does_not_notify(monkeypatch, tmp_path):
+def test_failed_run_saves_marks_failed_and_enqueues_error_delivery(monkeypatch, tmp_path):
     import cron.scheduler as scheduler
     from cron.delivery import JobRunResult
     from cron.delivery_store import DeliveryStore
@@ -294,8 +294,57 @@ def test_failed_run_saves_marks_failed_and_does_not_notify(monkeypatch, tmp_path
         ("save", "job-1", "failure doc", RUN_AT),
         ("mark", "job-1", False, "boom", RUN_AT, None),
     ]
-    # Failed runs do not enqueue delivery
-    assert DeliveryStore().stats()["pending"] == 0
+    events = DeliveryStore().pending_origin_events("thread-1")
+    assert len(events) == 1
+    assert events[0]["job_id"] == "job-1"
+    assert '"status": "error"' in events[0]["payload_json"]
+
+
+def test_webhook_failure_is_recorded_as_delivery_error(monkeypatch, tmp_path):
+    import cron.scheduler as scheduler
+    from cron.delivery import JobRunResult
+
+    calls = []
+    job = {
+        "id": "job-1",
+        "name": "daily",
+        "workdir": None,
+        "deliver": "webhook:https://example.invalid/hook",
+    }
+
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+    monkeypatch.setattr(scheduler, "get_due_jobs", lambda now_dt=None: [job])
+    monkeypatch.setattr(scheduler, "advance_next_run", lambda job_id, run_at: job)
+    monkeypatch.setattr(
+        scheduler,
+        "run_job",
+        lambda advanced: JobRunResult(True, "doc", "final", None),
+    )
+    monkeypatch.setattr(
+        scheduler,
+        "save_job_output",
+        lambda job_id, doc, run_at=None: "/tmp/out.md",
+    )
+    monkeypatch.setattr(
+        scheduler,
+        "mark_job_run",
+        lambda job_id, success, error=None, run_at=None, delivery_error=None: calls.append(
+            ("mark", job_id, success, error, run_at, delivery_error)
+        ),
+    )
+
+    from cron import delivery
+
+    monkeypatch.setattr(
+        delivery,
+        "default_webhook_sender",
+        lambda url, payload, timeout=10: (500, "server down"),
+    )
+
+    result = scheduler.tick(now_dt=RUN_AT)
+
+    assert result.results[0].error == "HTTP 500: server down"
+    assert calls == [("mark", "job-1", True, None, RUN_AT, "HTTP 500: server down")]
 
 
 def test_workdir_jobs_run_sequentially(monkeypatch, tmp_path):

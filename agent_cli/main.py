@@ -166,7 +166,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def _add_cron_create_flags(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--name")
-    parser.add_argument("--deliver", choices=("origin", "local"))
+    parser.add_argument("--deliver")
     parser.add_argument("--repeat", type=int)
     parser.add_argument("--skill", dest="skills", action="append")
     parser.add_argument("--script")
@@ -177,7 +177,7 @@ def _add_cron_edit_flags(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--schedule")
     parser.add_argument("--prompt")
     parser.add_argument("--name")
-    parser.add_argument("--deliver", choices=("origin", "local"))
+    parser.add_argument("--deliver")
     parser.add_argument("--repeat", type=int)
     parser.add_argument("--skill", dest="skills", action="append")
     parser.add_argument("--add-skill", dest="add_skills", action="append")

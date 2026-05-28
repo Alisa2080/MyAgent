@@ -32,7 +32,7 @@ class CronJobInput(BaseModel):
     schedule: str | None = Field(default=None, description="Schedule such as 30m, every 2h, cron, or ISO timestamp.")
     name: str | None = Field(default=None, description="Optional job name.")
     repeat: int | None = Field(default=None, description="Optional repeat count; <=0 means forever.")
-    deliver: str | None = Field(default=None, description="local or origin only in this project.")
+    deliver: str | None = Field(default=None, description="Delivery target: local, origin, webhook, or webhook:<url>.")
     include_disabled: bool = Field(default=False, description="Include disabled jobs when listing.")
     skills: list[str] | None = Field(default=None, description="Ordered skill names to load before prompt.")
     model: str | None = Field(default=None, description="Stored for compatibility; ignored by first runner.")
@@ -45,7 +45,7 @@ class CronJobInput(BaseModel):
     workdir: str | None = Field(default=None, description="Absolute project directory for this job.")
 
 
-_ALLOWED_DELIVERIES = {None, "local", "origin"}
+_ALLOWED_DELIVERIES = {None, "local", "origin", "webhook"}
 _INVISIBLE_CHARS = {
     "\u200b",
     "\u200c",
@@ -174,10 +174,21 @@ def _format_job(job: dict[str, Any]) -> dict[str, Any]:
 def _delivery_error(deliver: Any) -> dict[str, Any] | None:
     if deliver in _ALLOWED_DELIVERIES:
         return None
+    if isinstance(deliver, str) and deliver.strip().lower().startswith("webhook:"):
+        from cron.delivery import validate_webhook_url
+
+        error = validate_webhook_url(deliver.split(":", 1)[1].strip())
+        if error:
+            return {
+                "success": False,
+                "code": "invalid_webhook",
+                "error": error,
+            }
+        return None
     return {
         "success": False,
         "code": "unsupported_delivery",
-        "error": "Only deliver='local' and deliver='origin' are supported.",
+        "error": "Only deliver='local', deliver='origin', deliver='webhook', or deliver='webhook:<url>' are supported.",
     }
 
 
@@ -240,7 +251,7 @@ def _cronjob_impl(
                     "code": "missing_origin_thread",
                     "error": "deliver='origin' requires an active thread id.",
                 }
-            origin = {"thread_id": thread_id} if thread_id else None
+            origin = {"thread_id": thread_id} if thread_id and deliver in {None, "origin"} else None
             job = create_job(
                 prompt=prompt,
                 schedule=schedule,
@@ -320,7 +331,10 @@ def _cronjob_impl(
                         "error": "deliver='origin' requires an active thread id.",
                     }
                 updates["origin"] = {"thread_id": thread_id}
-            elif updates.get("deliver") == "local":
+            elif updates.get("deliver") in {"local", "webhook"} or (
+                isinstance(updates.get("deliver"), str)
+                and updates["deliver"].strip().lower().startswith("webhook:")
+            ):
                 updates["origin"] = None
 
             return {"success": True, "job": _format_job(update_job(job_id, updates))}
@@ -351,7 +365,7 @@ def cronjob(
     enabled_toolsets: list[str] | None = None,
     workdir: str | None = None,
 ) -> ToolMessage:
-    """Manage unattended scheduled cron jobs. Only local and origin delivery are supported."""
+    """Manage unattended scheduled cron jobs with local, origin, or webhook delivery."""
     result = run_cronjob_action(
         action=action,
         origin_thread_id=_runtime_thread_id(runtime),

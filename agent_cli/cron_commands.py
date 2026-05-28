@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 from typing import Any
 
 from agent_core.cron_lifecycle import is_cron_scheduler_running, tick as cron_tick
@@ -187,6 +188,7 @@ def _check_line(status: str, message: str) -> str:
 
 
 def cron_doctor() -> CronCommandResult:
+    from cron.delivery import parse_target, validate_webhook_url
     from cron.delivery_store import DeliveryStore
 
     lines: list[str] = []
@@ -211,8 +213,19 @@ def cron_doctor() -> CronCommandResult:
         add("ok", f"jobs file path: {get_jobs_file()}")
         add("ok", f"output dir writable: {get_output_dir()}")
         add("ok", f"scripts dir writable: {get_scripts_dir()}")
+        for directory in (get_output_dir(), get_scripts_dir()):
+            probe = directory / ".doctor-write-test"
+            probe.write_text("ok", encoding="utf-8")
+            probe.unlink()
     except Exception as exc:
         add("fail", f"cron paths are not writable: {exc}")
+
+    if get_jobs_file().exists():
+        try:
+            json.loads(get_jobs_file().read_text(encoding="utf-8"))
+            add("ok", "jobs file JSON is valid")
+        except Exception as exc:
+            add("fail", f"jobs file JSON is invalid or unreadable: {exc}")
 
     try:
         store = DeliveryStore()
@@ -233,9 +246,24 @@ def cron_doctor() -> CronCommandResult:
     else:
         add("warn", "scheduler is stopped; jobs will only run via manual cron tick")
 
-    for job in list_jobs(include_disabled=False):
+    try:
+        active_jobs = list_jobs(include_disabled=False)
+    except Exception as exc:
+        active_jobs = []
+        add("fail", f"jobs could not be loaded: {exc}")
+
+    for job in active_jobs:
         if not job.get("next_run_at"):
             add("warn", f"active job {job.get('id')} has no next_run_at")
+        target = parse_target(job)
+        if target.target_type == "origin" and not target.target_id:
+            add("fail", f"active job {job.get('id')} origin delivery has no thread id")
+        elif target.target_type == "webhook":
+            webhook_error = validate_webhook_url(target.target_id)
+            if webhook_error:
+                add("fail", f"active job {job.get('id')} webhook delivery invalid: {webhook_error}")
+        elif target.target_type == "unsupported":
+            add("fail", f"active job {job.get('id')} has unsupported delivery target: {target.raw}")
 
     exit_code = 2 if failures else (1 if warnings else 0)
     return CronCommandResult("\n".join(lines), exit_code=exit_code)
@@ -307,4 +335,6 @@ def test_delivery(
     )
     if stored["status"] in {"delivered", "pending"}:
         return CronCommandResult(text, exit_code=0)
+    if stored["status"] == "dead":
+        return CronCommandResult(text, exit_code=2)
     return CronCommandResult(text, exit_code=1)

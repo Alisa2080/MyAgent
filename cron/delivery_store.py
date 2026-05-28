@@ -125,23 +125,45 @@ class DeliveryStore:
             conn.execute(f"UPDATE delivery_events SET {assignments} WHERE id = ?", values)
         return self.get(event_id)
 
-    def claim_due(self, *, limit: int = 20) -> list[dict[str, Any]]:
+    def claim_due(
+        self,
+        *,
+        limit: int = 20,
+        target_types: list[str] | tuple[str, ...] | set[str] | None = None,
+    ) -> list[dict[str, Any]]:
         now = utc_now().isoformat()
+        capped_limit = max(0, int(limit))
+        if capped_limit <= 0:
+            return []
+
+        target_filter = ""
+        params: list[Any] = [now]
+        if target_types is not None:
+            normalized_targets = [str(item) for item in target_types]
+            if not normalized_targets:
+                return []
+            placeholders = ", ".join("?" for _ in normalized_targets)
+            target_filter = f" AND target_type IN ({placeholders})"
+            params.extend(normalized_targets)
+        params.append(capped_limit)
+
         with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
             rows = conn.execute(
-                """
+                f"""
                 SELECT * FROM delivery_events
                 WHERE status IN ('pending', 'failed')
                   AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
+                  {target_filter}
                 ORDER BY created_at
                 LIMIT ?
                 """,
-                (now, max(0, int(limit))),
+                params,
             ).fetchall()
             claimed: list[dict[str, Any]] = []
             for row in rows:
                 event = dict(row)
-                conn.execute(
+                cursor = conn.execute(
                     """
                     UPDATE delivery_events
                     SET status = 'delivering',
@@ -149,10 +171,13 @@ class DeliveryStore:
                         last_attempt_at = ?,
                         updated_at = ?
                     WHERE id = ?
+                      AND status IN ('pending', 'failed')
+                      AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
                     """,
-                    (now, now, event["id"]),
+                    (now, now, event["id"], now),
                 )
-                claimed.append(dict(conn.execute("SELECT * FROM delivery_events WHERE id = ?", (event["id"],)).fetchone()))
+                if cursor.rowcount:
+                    claimed.append(dict(conn.execute("SELECT * FROM delivery_events WHERE id = ?", (event["id"],)).fetchone()))
         return claimed
 
     def mark_delivered(self, event_id: str) -> dict[str, Any]:

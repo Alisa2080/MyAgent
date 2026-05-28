@@ -761,6 +761,36 @@ def test_main_cron_test_delivery(monkeypatch, tmp_path, capsys):
     assert "target=local" in capsys.readouterr().out
 
 
+def test_main_cron_create_accepts_webhook_deliver(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    import agent_cli.main as main_module
+    from agent_cli.cron_commands import CronCommandResult
+
+    captured = {}
+
+    def fake_create(**kwargs):
+        captured.update(kwargs)
+        return CronCommandResult("created", exit_code=0)
+
+    monkeypatch.setattr(main_module.cron_commands, "create_cron_job", fake_create)
+
+    code = main_module.main(
+        [
+            "cron",
+            "create",
+            "30m",
+            "write report",
+            "--deliver",
+            "webhook:https://example.invalid/hook",
+        ]
+    )
+
+    assert code == 0
+    assert captured["deliver"] == "webhook:https://example.invalid/hook"
+    assert "created" in capsys.readouterr().out
+
+
 def test_main_cron_test_delivery_requires_target(monkeypatch, tmp_path, capsys):
     monkeypatch.setenv("AGENT_CLI_HOME", str(tmp_path))
 
