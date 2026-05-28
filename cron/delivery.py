@@ -163,6 +163,10 @@ def enqueue_result(
             target_error = validate_webhook_url(None)
         elif target.target_type == "webhook":
             target_error = validate_webhook_url(target.address)
+        elif target.target_type == "platform":
+            from cron.delivery_registry import default_delivery_registry
+            if default_delivery_registry().get(target.adapter_key) is None:
+                target_error = f"unsupported delivery target: {target.raw}"
         if target_error:
             events.append(
                 store.enqueue(

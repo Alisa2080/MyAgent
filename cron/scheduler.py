@@ -21,6 +21,7 @@ except ImportError:  # pragma: no cover - Windows path is best-effort fallback
 
 from cron.jobs import (
     advance_next_run,
+    compute_next_run,
     get_due_jobs,
     mark_job_run,
     now,
@@ -29,10 +30,15 @@ from cron.jobs import (
 from cron.contracts import JobRunner
 from cron.delivery_store import DeliveryStore
 from cron.paths import ensure_cron_dirs, get_cron_dir
+from cron.state_store import StateStore
 
 logger = logging.getLogger(__name__)
 
 _fallback_lock = threading.Lock()
+
+
+def _store() -> StateStore:
+    return StateStore()
 
 
 def _default_job_runner() -> JobRunner:
@@ -140,6 +146,77 @@ def _delivery_error_from_event(event: dict[str, Any] | None) -> str | None:
     return None
 
 
+def _next_run_after_completion(job: dict[str, Any], run_at: datetime) -> tuple[str | None, bool]:
+    repeat = dict(job.get("repeat") or {"times": None, "completed": 0})
+    repeat["completed"] = int(repeat.get("completed") or 0) + 1
+    repeat_times = repeat.get("times")
+    completed = repeat_times is not None and repeat["completed"] >= int(repeat_times)
+    if completed:
+        return None, True
+    schedule = job.get("schedule") or {}
+    kind = schedule.get("kind")
+    if kind == "once":
+        return None, True
+    if kind in {"interval", "cron"}:
+        return compute_next_run(schedule, base=run_at), False
+    return None, False
+
+
+def _process_claimed(
+    claimed: dict[str, Any],
+    run_at: datetime,
+    job_runner: JobRunner,
+) -> JobTickResult:
+    store = _store()
+    job = dict(claimed["job"])
+    run = dict(claimed["run"])
+    job_id = str(job["id"])
+    job["run_id"] = run["id"]
+    try:
+        store.mark_run_started(run["id"])
+        result = job_runner(job)
+        output_path = save_job_output(job_id, result.output_doc, run_at=run_at)
+        from cron.delivery import enqueue_result, process_due
+
+        delivery_events = enqueue_result(job, result, output_path, run_at)
+        process_due(limit=20)
+        next_run_at, completed = _next_run_after_completion(job, run_at)
+        store.complete_run(
+            run["id"],
+            success=result.success,
+            output_path=output_path,
+            final_response=result.final_response,
+            error=result.error,
+            next_run_at=next_run_at,
+            completed=completed,
+        )
+        delivery_error = None
+        if delivery_events:
+            events = delivery_events if isinstance(delivery_events, list) else [delivery_events]
+            for evt in events:
+                try:
+                    evt_data = DeliveryStore().get(evt["id"])
+                    err = _delivery_error_from_event(evt_data)
+                    if err:
+                        delivery_error = err
+                except KeyError:
+                    pass
+        mark_job_run(job_id, success=result.success, error=result.error, run_at=run_at, delivery_error=delivery_error)
+        return JobTickResult(job_id=job_id, success=result.success, output_path=output_path, error=result.error or delivery_error)
+    except Exception as exc:
+        logger.exception("Cron job %s failed during tick.", job_id)
+        store.complete_run(
+            run["id"],
+            success=False,
+            output_path=None,
+            final_response=None,
+            error=str(exc),
+            next_run_at=job.get("next_run_at"),
+            completed=False,
+        )
+        return JobTickResult(job_id=job_id, success=False, error=str(exc))
+
+
 def _process_job(
     job: dict[str, Any],
     run_at: datetime,
@@ -200,6 +277,24 @@ def _run_parallel(
         return [future.result() for future in futures]
 
 
+def _run_parallel_claimed(
+    claimed_items: list[dict[str, Any]],
+    run_at: datetime,
+    job_runner: JobRunner,
+) -> list[JobTickResult]:
+    if not claimed_items:
+        return []
+
+    def process(claimed: dict[str, Any]) -> JobTickResult:
+        return _process_claimed(claimed, run_at, job_runner)
+
+    with concurrent.futures.ThreadPoolExecutor(
+        max_workers=_max_parallel(len(claimed_items))
+    ) as pool:
+        futures = [pool.submit(process, item) for item in claimed_items]
+        return [future.result() for future in futures]
+
+
 def tick(
     now_dt: datetime | None = None,
     *,
@@ -213,20 +308,21 @@ def tick(
         return TickResult(skipped=1)
 
     try:
-        due_jobs = get_due_jobs(now_dt=run_at)
-        result = TickResult(due=len(due_jobs))
+        store = _store()
+        store.recover_expired_leases(now_text=run_at.isoformat())
+        claimed = store.claim_due_jobs(now_text=run_at.isoformat(), limit=100)
+        result = TickResult(due=len(claimed))
 
-        if not due_jobs:
+        if not claimed:
             return result
 
         resolved_runner: JobRunner = job_runner if job_runner is not None else _run_default_job
+        workdir_claimed = [item for item in claimed if item["job"].get("workdir")]
+        parallel_claimed = [item for item in claimed if not item["job"].get("workdir")]
 
-        workdir_jobs = [job for job in due_jobs if job.get("workdir")]
-        parallel_jobs = [job for job in due_jobs if not job.get("workdir")]
-
-        for job in workdir_jobs:
-            result.results.append(_process_job(job, run_at, resolved_runner))
-        result.results.extend(_run_parallel(parallel_jobs, run_at, resolved_runner))
+        for item in workdir_claimed:
+            result.results.append(_process_claimed(item, run_at, resolved_runner))
+        result.results.extend(_run_parallel_claimed(parallel_claimed, run_at, resolved_runner))
 
         result.ran = len(result.results)
         result.succeeded = sum(1 for item in result.results if item.success)
