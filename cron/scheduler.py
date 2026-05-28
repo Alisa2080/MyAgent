@@ -26,7 +26,7 @@ from cron.jobs import (
     now,
     save_job_output,
 )
-from cron.delivery import JobRunResult
+from cron.contracts import JobRunner
 from cron.delivery_store import DeliveryStore
 from cron.paths import ensure_cron_dirs, get_cron_dir
 
@@ -35,10 +35,14 @@ logger = logging.getLogger(__name__)
 _fallback_lock = threading.Lock()
 
 
-def run_job(job: dict[str, Any]) -> JobRunResult:
-    from cron.runner import run_job as runner_run_job
+def _default_job_runner() -> JobRunner:
+    from cron.runner import run_job
 
-    return runner_run_job(job)
+    return run_job
+
+
+def _run_default_job(job: dict[str, Any]):
+    return _default_job_runner()(job)
 
 
 class _TickLockBusy(Exception):
@@ -136,11 +140,15 @@ def _delivery_error_from_event(event: dict[str, Any] | None) -> str | None:
     return None
 
 
-def _process_job(job: dict[str, Any], run_at: datetime) -> JobTickResult:
+def _process_job(
+    job: dict[str, Any],
+    run_at: datetime,
+    job_runner: JobRunner,
+) -> JobTickResult:
     job_id = str(job["id"])
     try:
         advanced = advance_next_run(job_id, run_at)
-        result = run_job(advanced)
+        result = job_runner(advanced)
         output_path = save_job_output(job_id, result.output_doc, run_at=run_at)
         from cron.delivery import enqueue_result, process_due
 
@@ -174,18 +182,29 @@ def _process_job(job: dict[str, Any], run_at: datetime) -> JobTickResult:
         return JobTickResult(job_id=job_id, success=False, error=str(exc))
 
 
-def _run_parallel(jobs: list[dict[str, Any]], run_at: datetime) -> list[JobTickResult]:
+def _run_parallel(
+    jobs: list[dict[str, Any]],
+    run_at: datetime,
+    job_runner: JobRunner,
+) -> list[JobTickResult]:
     if not jobs:
         return []
+
+    def process(job: dict[str, Any]) -> JobTickResult:
+        return _process_job(job, run_at, job_runner)
 
     with concurrent.futures.ThreadPoolExecutor(
         max_workers=_max_parallel(len(jobs))
     ) as pool:
-        futures = [pool.submit(_process_job, job, run_at) for job in jobs]
+        futures = [pool.submit(process, job) for job in jobs]
         return [future.result() for future in futures]
 
 
-def tick(now_dt: datetime | None = None) -> TickResult:
+def tick(
+    now_dt: datetime | None = None,
+    *,
+    job_runner: JobRunner | None = None,
+) -> TickResult:
     run_at = now_dt or now()
     lock = _TickLock()
     try:
@@ -197,12 +216,17 @@ def tick(now_dt: datetime | None = None) -> TickResult:
         due_jobs = get_due_jobs(now_dt=run_at)
         result = TickResult(due=len(due_jobs))
 
+        if not due_jobs:
+            return result
+
+        resolved_runner: JobRunner = job_runner if job_runner is not None else _run_default_job
+
         workdir_jobs = [job for job in due_jobs if job.get("workdir")]
         parallel_jobs = [job for job in due_jobs if not job.get("workdir")]
 
         for job in workdir_jobs:
-            result.results.append(_process_job(job, run_at))
-        result.results.extend(_run_parallel(parallel_jobs, run_at))
+            result.results.append(_process_job(job, run_at, resolved_runner))
+        result.results.extend(_run_parallel(parallel_jobs, run_at, resolved_runner))
 
         result.ran = len(result.results)
         result.succeeded = sum(1 for item in result.results if item.success)

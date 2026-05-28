@@ -11,16 +11,9 @@ import urllib.request
 from urllib.parse import urlparse
 from typing import Any, Callable
 
+from cron.contracts import JobRunResult
 from cron.delivery_store import DeliveryStore
 from cron.notifications import SILENT_MARKER
-
-
-@dataclass(frozen=True)
-class JobRunResult:
-    success: bool
-    output_doc: str | None = None
-    final_response: str | None = None
-    error: str | None = None
 
 
 @dataclass(frozen=True)

@@ -10,7 +10,7 @@ RUN_AT = datetime(2026, 5, 22, 9, 0, tzinfo=timezone.utc)
 
 def test_tick_advances_before_run_and_marks_result(monkeypatch, tmp_path):
     import cron.scheduler as scheduler
-    from cron.delivery import JobRunResult
+    from cron.contracts import JobRunResult
 
     calls = []
     job = {"id": "job-1", "name": "daily", "workdir": None, "deliver": "local"}
@@ -21,12 +21,6 @@ def test_tick_advances_before_run_and_marks_result(monkeypatch, tmp_path):
         scheduler,
         "advance_next_run",
         lambda job_id, run_at: calls.append(("advance", job_id, run_at)) or job,
-    )
-    monkeypatch.setattr(
-        scheduler,
-        "run_job",
-        lambda advanced: calls.append(("run", advanced["id"]))
-        or JobRunResult(True, "doc", "final", None),
     )
     monkeypatch.setattr(
         scheduler,
@@ -42,7 +36,11 @@ def test_tick_advances_before_run_and_marks_result(monkeypatch, tmp_path):
         ),
     )
 
-    result = scheduler.tick(now_dt=RUN_AT)
+    fake_runner = lambda advanced: (
+        calls.append(("run", advanced["id"]))
+        or JobRunResult(True, "doc", "final", None)
+    )
+    result = scheduler.tick(now_dt=RUN_AT, job_runner=fake_runner)
 
     assert result.due == 1
     assert result.ran == 1
@@ -59,9 +57,49 @@ def test_tick_advances_before_run_and_marks_result(monkeypatch, tmp_path):
     ]
 
 
+def test_default_runner_import_failure_marks_job_failed(monkeypatch, tmp_path):
+    import cron.scheduler as scheduler
+
+    calls = []
+    job = {"id": "job-1", "name": "daily", "workdir": None, "deliver": "local"}
+
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+    monkeypatch.setattr(scheduler, "get_due_jobs", lambda now_dt=None: [job])
+    monkeypatch.setattr(
+        scheduler,
+        "advance_next_run",
+        lambda job_id, run_at: calls.append(("advance", job_id, run_at)) or job,
+    )
+    monkeypatch.setattr(
+        scheduler,
+        "_default_job_runner",
+        lambda: (_ for _ in ()).throw(ImportError("runner unavailable")),
+    )
+    monkeypatch.setattr(
+        scheduler,
+        "mark_job_run",
+        lambda job_id, success, error=None, run_at=None, delivery_error=None: (
+            calls.append(("mark", job_id, success, error, run_at, delivery_error))
+        ),
+    )
+
+    result = scheduler.tick(now_dt=RUN_AT)
+
+    assert result.due == 1
+    assert result.ran == 1
+    assert result.failed == 1
+    assert result.results[0].job_id == "job-1"
+    assert result.results[0].success is False
+    assert "runner unavailable" in str(result.results[0].error)
+    assert calls == [
+        ("advance", "job-1", RUN_AT),
+        ("mark", "job-1", False, "runner unavailable", RUN_AT, None),
+    ]
+
+
 def test_tick_queues_origin_notification(monkeypatch, tmp_path):
     import cron.scheduler as scheduler
-    from cron.delivery import JobRunResult
+    from cron.contracts import JobRunResult
     from cron.delivery_store import DeliveryStore
 
     job = {
@@ -77,11 +115,6 @@ def test_tick_queues_origin_notification(monkeypatch, tmp_path):
     monkeypatch.setattr(scheduler, "advance_next_run", lambda job_id, run_at: job)
     monkeypatch.setattr(
         scheduler,
-        "run_job",
-        lambda advanced: JobRunResult(True, "doc", "final", None),
-    )
-    monkeypatch.setattr(
-        scheduler,
         "save_job_output",
         lambda job_id, doc, run_at=None: "/tmp/out.md",
     )
@@ -91,7 +124,8 @@ def test_tick_queues_origin_notification(monkeypatch, tmp_path):
         lambda job_id, success, error=None, run_at=None, delivery_error=None: None,
     )
 
-    scheduler.tick(now_dt=RUN_AT)
+    fake_runner = lambda advanced: JobRunResult(True, "doc", "final", None)
+    scheduler.tick(now_dt=RUN_AT, job_runner=fake_runner)
 
     store = DeliveryStore()
     stats = store.stats()
@@ -103,7 +137,7 @@ def test_tick_queues_origin_notification(monkeypatch, tmp_path):
 
 def test_legacy_delivery_value_runs_without_origin_notification(monkeypatch, tmp_path):
     import cron.scheduler as scheduler
-    from cron.delivery import JobRunResult
+    from cron.contracts import JobRunResult
     from cron.delivery_store import DeliveryStore
 
     calls = []
@@ -120,11 +154,6 @@ def test_legacy_delivery_value_runs_without_origin_notification(monkeypatch, tmp
     monkeypatch.setattr(scheduler, "advance_next_run", lambda job_id, run_at: job)
     monkeypatch.setattr(
         scheduler,
-        "run_job",
-        lambda advanced: JobRunResult(True, "doc", "final", None),
-    )
-    monkeypatch.setattr(
-        scheduler,
         "save_job_output",
         lambda job_id, doc, run_at=None: calls.append(("save", job_id, doc, run_at))
         or "/tmp/out.md",
@@ -137,7 +166,8 @@ def test_legacy_delivery_value_runs_without_origin_notification(monkeypatch, tmp
         ),
     )
 
-    result = scheduler.tick(now_dt=RUN_AT)
+    fake_runner = lambda advanced: JobRunResult(True, "doc", "final", None)
+    result = scheduler.tick(now_dt=RUN_AT, job_runner=fake_runner)
 
     assert result.due == 1
     assert result.ran == 1
@@ -161,7 +191,7 @@ def test_legacy_delivery_value_runs_without_origin_notification(monkeypatch, tmp
 def test_legacy_delivery_error_is_persisted_with_real_job_storage(monkeypatch, tmp_path):
     import cron.jobs as jobs
     import cron.scheduler as scheduler
-    from cron.delivery import JobRunResult
+    from cron.contracts import JobRunResult
 
     delivery_error = "unsupported delivery target: telegram:123"
 
@@ -173,13 +203,9 @@ def test_legacy_delivery_error_is_persisted_with_real_job_storage(monkeypatch, t
         origin={"thread_id": "thread-1"},
     )
     jobs.update_job(job["id"], {"next_run_at": RUN_AT.isoformat()})
-    monkeypatch.setattr(
-        scheduler,
-        "run_job",
-        lambda advanced: JobRunResult(True, "doc", "final", None),
-    )
 
-    result = scheduler.tick(now_dt=RUN_AT)
+    fake_runner = lambda advanced: JobRunResult(True, "doc", "final", None)
+    result = scheduler.tick(now_dt=RUN_AT, job_runner=fake_runner)
 
     persisted = jobs.get_job(job["id"])
     assert result.due == 1
@@ -201,7 +227,7 @@ def test_legacy_delivery_error_is_persisted_with_real_job_storage(monkeypatch, t
 
 def test_silent_response_suppresses_origin_notification(monkeypatch, tmp_path):
     import cron.scheduler as scheduler
-    from cron.delivery import JobRunResult
+    from cron.contracts import JobRunResult
     from cron.delivery_store import DeliveryStore
 
     job = {
@@ -217,16 +243,6 @@ def test_silent_response_suppresses_origin_notification(monkeypatch, tmp_path):
     monkeypatch.setattr(scheduler, "advance_next_run", lambda job_id, run_at: job)
     monkeypatch.setattr(
         scheduler,
-        "run_job",
-        lambda advanced: JobRunResult(
-            True,
-            "doc",
-            "[SILENT] nothing changed",
-            None,
-        ),
-    )
-    monkeypatch.setattr(
-        scheduler,
         "save_job_output",
         lambda job_id, doc, run_at=None: "/tmp/out.md",
     )
@@ -236,7 +252,13 @@ def test_silent_response_suppresses_origin_notification(monkeypatch, tmp_path):
         lambda job_id, success, error=None, run_at=None, delivery_error=None: None,
     )
 
-    result = scheduler.tick(now_dt=RUN_AT)
+    fake_runner = lambda advanced: JobRunResult(
+        True,
+        "doc",
+        "[SILENT] nothing changed",
+        None,
+    )
+    result = scheduler.tick(now_dt=RUN_AT, job_runner=fake_runner)
 
     assert result.succeeded == 1
     # SILENT responses do not create delivery events
@@ -245,7 +267,7 @@ def test_silent_response_suppresses_origin_notification(monkeypatch, tmp_path):
 
 def test_failed_run_saves_marks_failed_and_enqueues_error_delivery(monkeypatch, tmp_path):
     import cron.scheduler as scheduler
-    from cron.delivery import JobRunResult
+    from cron.contracts import JobRunResult
     from cron.delivery_store import DeliveryStore
 
     calls = []
@@ -262,11 +284,6 @@ def test_failed_run_saves_marks_failed_and_enqueues_error_delivery(monkeypatch, 
     monkeypatch.setattr(scheduler, "advance_next_run", lambda job_id, run_at: job)
     monkeypatch.setattr(
         scheduler,
-        "run_job",
-        lambda advanced: JobRunResult(False, "failure doc", "", "boom"),
-    )
-    monkeypatch.setattr(
-        scheduler,
         "save_job_output",
         lambda job_id, doc, run_at=None: calls.append(("save", job_id, doc, run_at))
         or "/tmp/out.md",
@@ -279,7 +296,8 @@ def test_failed_run_saves_marks_failed_and_enqueues_error_delivery(monkeypatch, 
         ),
     )
 
-    result = scheduler.tick(now_dt=RUN_AT)
+    fake_runner = lambda advanced: JobRunResult(False, "failure doc", "", "boom")
+    result = scheduler.tick(now_dt=RUN_AT, job_runner=fake_runner)
 
     assert result.failed == 1
     assert result.results == [
@@ -302,7 +320,7 @@ def test_failed_run_saves_marks_failed_and_enqueues_error_delivery(monkeypatch, 
 
 def test_webhook_failure_is_recorded_as_delivery_error(monkeypatch, tmp_path):
     import cron.scheduler as scheduler
-    from cron.delivery import JobRunResult
+    from cron.contracts import JobRunResult
 
     calls = []
     job = {
@@ -315,11 +333,6 @@ def test_webhook_failure_is_recorded_as_delivery_error(monkeypatch, tmp_path):
     monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
     monkeypatch.setattr(scheduler, "get_due_jobs", lambda now_dt=None: [job])
     monkeypatch.setattr(scheduler, "advance_next_run", lambda job_id, run_at: job)
-    monkeypatch.setattr(
-        scheduler,
-        "run_job",
-        lambda advanced: JobRunResult(True, "doc", "final", None),
-    )
     monkeypatch.setattr(
         scheduler,
         "save_job_output",
@@ -341,7 +354,8 @@ def test_webhook_failure_is_recorded_as_delivery_error(monkeypatch, tmp_path):
         lambda url, payload, timeout=10: (500, "server down"),
     )
 
-    result = scheduler.tick(now_dt=RUN_AT)
+    fake_runner = lambda advanced: JobRunResult(True, "doc", "final", None)
+    result = scheduler.tick(now_dt=RUN_AT, job_runner=fake_runner)
 
     assert result.results[0].error == "HTTP 500: server down"
     assert calls == [("mark", "job-1", True, None, RUN_AT, "HTTP 500: server down")]
@@ -349,6 +363,7 @@ def test_webhook_failure_is_recorded_as_delivery_error(monkeypatch, tmp_path):
 
 def test_workdir_jobs_run_sequentially(monkeypatch, tmp_path):
     import cron.scheduler as scheduler
+    from cron.contracts import JobRunResult
 
     order = []
     jobs = [
@@ -365,12 +380,6 @@ def test_workdir_jobs_run_sequentially(monkeypatch, tmp_path):
     )
     monkeypatch.setattr(
         scheduler,
-        "run_job",
-        lambda job: order.append(job["id"])
-        or scheduler.JobRunResult(True, "doc", "final", None),
-    )
-    monkeypatch.setattr(
-        scheduler,
         "save_job_output",
         lambda job_id, doc, run_at=None: "/tmp/out.md",
     )
@@ -380,13 +389,18 @@ def test_workdir_jobs_run_sequentially(monkeypatch, tmp_path):
         lambda job_id, success, error=None, run_at=None, delivery_error=None: None,
     )
 
-    scheduler.tick(now_dt=RUN_AT)
+    fake_runner = lambda job: (
+        order.append(job["id"])
+        or JobRunResult(True, "doc", "final", None)
+    )
+    scheduler.tick(now_dt=RUN_AT, job_runner=fake_runner)
 
     assert order == ["a", "b"]
 
 
 def test_non_workdir_jobs_use_parallel_executor_and_env_max(monkeypatch, tmp_path):
     import cron.scheduler as scheduler
+    from cron.contracts import JobRunResult
 
     jobs = [
         {"id": "a", "name": "a", "workdir": None, "deliver": "local"},
@@ -412,9 +426,9 @@ def test_non_workdir_jobs_use_parallel_executor_and_env_max(monkeypatch, tmp_pat
         def __exit__(self, exc_type, exc, tb):
             executor_calls.append(("exit",))
 
-        def submit(self, fn, job, run_at):
-            executor_calls.append(("submit", job["id"], run_at))
-            return FakeFuture(fn(job, run_at))
+        def submit(self, fn, job):
+            executor_calls.append(("submit", job["id"]))
+            return FakeFuture(fn(job))
 
     monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
     monkeypatch.setenv("AGENT_CRON_MAX_PARALLEL", "2")
@@ -423,11 +437,6 @@ def test_non_workdir_jobs_use_parallel_executor_and_env_max(monkeypatch, tmp_pat
         scheduler,
         "advance_next_run",
         lambda job_id, run_at: next(job for job in jobs if job["id"] == job_id),
-    )
-    monkeypatch.setattr(
-        scheduler,
-        "run_job",
-        lambda job: scheduler.JobRunResult(True, "doc", "final", None),
     )
     monkeypatch.setattr(
         scheduler,
@@ -441,20 +450,22 @@ def test_non_workdir_jobs_use_parallel_executor_and_env_max(monkeypatch, tmp_pat
     )
     monkeypatch.setattr(scheduler.concurrent.futures, "ThreadPoolExecutor", FakeExecutor)
 
-    result = scheduler.tick(now_dt=RUN_AT)
+    fake_runner = lambda job: JobRunResult(True, "doc", "final", None)
+    result = scheduler.tick(now_dt=RUN_AT, job_runner=fake_runner)
 
     assert result.ran == 3
     assert executor_calls == [
         ("init", 2),
-        ("submit", "a", RUN_AT),
-        ("submit", "b", RUN_AT),
-        ("submit", "c", RUN_AT),
+        ("submit", "a"),
+        ("submit", "b"),
+        ("submit", "c"),
         ("exit",),
     ]
 
 
 def test_invalid_env_parallel_uses_due_job_count(monkeypatch, tmp_path):
     import cron.scheduler as scheduler
+    from cron.contracts import JobRunResult
 
     jobs = [
         {"id": "a", "name": "a", "workdir": None, "deliver": "local"},
@@ -472,10 +483,10 @@ def test_invalid_env_parallel_uses_due_job_count(monkeypatch, tmp_path):
         def __exit__(self, exc_type, exc, tb):
             return None
 
-        def submit(self, fn, job, run_at):
+        def submit(self, fn, job):
             class Future:
                 def result(self):
-                    return fn(job, run_at)
+                    return fn(job)
 
             return Future()
 
@@ -486,11 +497,6 @@ def test_invalid_env_parallel_uses_due_job_count(monkeypatch, tmp_path):
         scheduler,
         "advance_next_run",
         lambda job_id, run_at: next(job for job in jobs if job["id"] == job_id),
-    )
-    monkeypatch.setattr(
-        scheduler,
-        "run_job",
-        lambda job: scheduler.JobRunResult(True, "doc", "final", None),
     )
     monkeypatch.setattr(
         scheduler,
@@ -508,7 +514,8 @@ def test_invalid_env_parallel_uses_due_job_count(monkeypatch, tmp_path):
         FakeExecutor,
     )
 
-    scheduler.tick(now_dt=RUN_AT)
+    fake_runner = lambda job: JobRunResult(True, "doc", "final", None)
+    scheduler.tick(now_dt=RUN_AT, job_runner=fake_runner)
 
     assert workers_seen == [2]
 
@@ -553,8 +560,8 @@ def test_blocking_io_error_after_lock_acquisition_propagates(monkeypatch, tmp_pa
 
 def test_tick_enqueues_delivery_event(monkeypatch, tmp_path):
     import cron.scheduler as scheduler
+    from cron.contracts import JobRunResult
     from cron.delivery_store import DeliveryStore
-    from cron.delivery import JobRunResult
 
     job = {
         "id": "job-1",
@@ -567,11 +574,6 @@ def test_tick_enqueues_delivery_event(monkeypatch, tmp_path):
     monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
     monkeypatch.setattr(scheduler, "get_due_jobs", lambda now_dt=None: [job])
     monkeypatch.setattr(scheduler, "advance_next_run", lambda job_id, run_at: job)
-    monkeypatch.setattr(
-        scheduler,
-        "run_job",
-        lambda advanced: JobRunResult(success=True, output_doc="# out", final_response="done"),
-    )
     monkeypatch.setattr(scheduler, "save_job_output", lambda job_id, output_doc, run_at=None: "/tmp/out.md")
     marked = []
     monkeypatch.setattr(
@@ -580,7 +582,8 @@ def test_tick_enqueues_delivery_event(monkeypatch, tmp_path):
         lambda job_id, success, error=None, run_at=None, delivery_error=None: marked.append(delivery_error),
     )
 
-    result = scheduler.tick(now_dt=RUN_AT)
+    fake_runner = lambda advanced: JobRunResult(success=True, output_doc="# out", final_response="done")
+    result = scheduler.tick(now_dt=RUN_AT, job_runner=fake_runner)
 
     assert result.ran == 1
     assert DeliveryStore().stats()["pending"] == 1

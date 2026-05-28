@@ -16,6 +16,8 @@ from typing import Any
 
 from langchain.agents import create_agent
 
+from cron.contracts import JobRunResult
+
 from agent_core.message_utils import extract_text_from_agent_response
 from agent_core.model_config import MAIN_MODEL
 from agent_core.system_prompt import (
@@ -42,14 +44,6 @@ class _ScriptTimeoutError(TimeoutError):
     def __init__(self, message: str, output: str):
         super().__init__(message)
         self.output = output
-
-
-@dataclass
-class JobRunResult:
-    success: bool
-    output_doc: str
-    final_response: str
-    error: str | None = None
 
 
 def _bounded(text: str, max_chars: int | None = None) -> str:
