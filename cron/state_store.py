@@ -152,6 +152,19 @@ class StateStore:
                 )
                 """
             )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS scheduler_leases (
+                    name TEXT PRIMARY KEY,
+                    owner_id TEXT NOT NULL,
+                    pid INTEGER,
+                    hostname TEXT,
+                    acquired_at TEXT NOT NULL,
+                    heartbeat_at TEXT NOT NULL,
+                    expires_at TEXT NOT NULL
+                )
+                """
+            )
             self._init_poll_state_schema()
             self._migrate_schema(conn)
             conn.execute("CREATE INDEX IF NOT EXISTS idx_jobs_due ON jobs(state, enabled, next_run_at)")
@@ -320,6 +333,65 @@ class StateStore:
     def set_meta(self, key: str, value: str) -> None:
         with self._connect() as conn:
             conn.execute("INSERT OR REPLACE INTO schema_meta(key, value) VALUES (?, ?)", (key, value))
+
+    def get_scheduler_lease(self, name: str = "scheduler") -> dict[str, Any] | None:
+        with self._connect() as conn:
+            row = conn.execute("SELECT * FROM scheduler_leases WHERE name = ?", (name,)).fetchone()
+        return None if row is None else dict(row)
+
+    def try_acquire_scheduler_lease(
+        self,
+        name: str,
+        owner_id: str,
+        pid: int | None,
+        hostname: str | None,
+        now_text: str,
+        expires_at: str,
+    ) -> dict[str, Any]:
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute("SELECT * FROM scheduler_leases WHERE name = ?", (name,)).fetchone()
+            if row is None:
+                conn.execute(
+                    """
+                    INSERT INTO scheduler_leases (
+                        name, owner_id, pid, hostname, acquired_at, heartbeat_at, expires_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (name, owner_id, pid, hostname, now_text, now_text, expires_at),
+                )
+            elif row["owner_id"] == owner_id:
+                conn.execute(
+                    """
+                    UPDATE scheduler_leases
+                    SET pid = ?,
+                        hostname = ?,
+                        heartbeat_at = ?,
+                        expires_at = ?
+                    WHERE name = ? AND owner_id = ?
+                    """,
+                    (pid, hostname, now_text, expires_at, name, owner_id),
+                )
+            elif str(row["expires_at"]) <= now_text:
+                conn.execute(
+                    """
+                    UPDATE scheduler_leases
+                    SET owner_id = ?,
+                        pid = ?,
+                        hostname = ?,
+                        acquired_at = ?,
+                        heartbeat_at = ?,
+                        expires_at = ?
+                    WHERE name = ?
+                    """,
+                    (owner_id, pid, hostname, now_text, now_text, expires_at, name),
+                )
+            return dict(conn.execute("SELECT * FROM scheduler_leases WHERE name = ?", (name,)).fetchone())
+
+    def release_scheduler_lease(self, name: str, owner_id: str) -> bool:
+        with self._connect() as conn:
+            cursor = conn.execute("DELETE FROM scheduler_leases WHERE name = ? AND owner_id = ?", (name, owner_id))
+        return bool(cursor.rowcount)
 
     def _delivery_targets_for_job(self, job: dict[str, Any], *, strict: bool) -> list[dict[str, Any]] | None:
         origin = DeliveryIdentity.from_job_origin(job.get("origin"))
