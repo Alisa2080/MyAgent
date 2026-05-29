@@ -26,8 +26,15 @@ class DeliveryRegistry:
     def adapter_keys(self) -> list[str]:
         return sorted(self._adapters)
 
-    def validate_targets(self, deliver: str | None, *, origin: DeliveryIdentity | None, job: dict[str, Any]) -> DeliveryValidation:
-        stored_targets = job.get("delivery_targets")
+    def validate_targets(
+        self,
+        deliver: str | None,
+        *,
+        origin: DeliveryIdentity | None,
+        job: dict[str, Any],
+        use_stored_targets: bool = False,
+    ) -> DeliveryValidation:
+        stored_targets = job.get("delivery_targets") if use_stored_targets else None
         if stored_targets is not None:
             targets = [
                 DeliveryTarget(

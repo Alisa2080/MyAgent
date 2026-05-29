@@ -110,7 +110,12 @@ def enqueue_result(
 
     origin = DeliveryIdentity.from_job_origin(job.get("origin"))
     registry = registry or default_delivery_registry()
-    validation = registry.validate_targets(job.get("deliver"), origin=origin, job=job)
+    validation = registry.validate_targets(
+        job.get("deliver"),
+        origin=origin,
+        job=job,
+        use_stored_targets=True,
+    )
 
     events = []
     if not validation.ok:
