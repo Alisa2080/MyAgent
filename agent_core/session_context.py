@@ -126,3 +126,31 @@ def _tool_call_id_from_runtime(runtime: Any | None) -> str | None:
     except Exception:
         return None
     return str(value) if value else None
+
+
+def origin_identity_from_runtime(runtime: Any | None) -> dict[str, str] | None:
+    config = getattr(runtime, "config", None)
+    if not isinstance(config, dict):
+        return None
+    configurable = config.get("configurable")
+    if not isinstance(configurable, dict):
+        return None
+
+    source_type = str(configurable.get("source_type") or "cli")
+    identity = {
+        "source_type": source_type,
+        "platform": configurable.get("platform"),
+        "chat_id": configurable.get("chat_id"),
+        "thread_id": configurable.get("thread_id"),
+        "session_id": configurable.get("session_id"),
+        "display_name": configurable.get("display_name") or configurable.get("chat_name"),
+    }
+    if source_type == "cli" and not identity["session_id"]:
+        identity["session_id"] = identity["thread_id"]
+    if source_type == "cli" and not identity["thread_id"]:
+        return None
+    if source_type == "gateway" and not (identity["platform"] and identity["chat_id"]):
+        return None
+    if source_type == "web" and not identity["session_id"]:
+        return None
+    return {key: str(value) for key, value in identity.items() if value is not None}

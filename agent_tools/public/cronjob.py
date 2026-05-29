@@ -8,7 +8,7 @@ from langchain.tools import ToolRuntime, tool
 from langchain_core.messages import ToolMessage
 from pydantic import BaseModel, Field
 
-from agent_core.session_context import RuntimeContext
+from agent_core.session_context import RuntimeContext, origin_identity_from_runtime
 from agent_tools.shared.tool_result import tool_failure, tool_success
 from cron.jobs import (
     create_job,
@@ -228,6 +228,19 @@ def _origin_identity_from_thread(thread_id: str | None) -> dict[str, str] | None
     }
 
 
+def _runtime_origin_identity(runtime: Any, origin_thread_id: str | None = None) -> dict[str, str] | None:
+    identity = origin_identity_from_runtime(runtime)
+    if identity is not None:
+        return identity
+    if origin_thread_id:
+        return {
+            "source_type": "cli",
+            "session_id": str(origin_thread_id),
+            "thread_id": str(origin_thread_id),
+        }
+    return None
+
+
 def _cronjob_impl(
     action: str,
     runtime: ToolRuntime | None = None,
@@ -266,7 +279,8 @@ def _cronjob_impl(
                     "code": "missing_origin_thread",
                     "error": "deliver='origin' requires an active thread id.",
                 }
-            origin = _origin_identity_from_thread(thread_id) if thread_id and (deliver is None or _deliver_mentions_origin(deliver)) else None
+            identity = _runtime_origin_identity(runtime, origin_thread_id)
+            origin = identity if identity is not None and (deliver is None or _deliver_mentions_origin(deliver)) else None
             delivery_error = _validate_delivery(deliver, origin=origin)
             if delivery_error:
                 return delivery_error
@@ -348,7 +362,7 @@ def _cronjob_impl(
                         "code": "missing_origin_thread",
                         "error": "deliver='origin' requires an active thread id.",
                     }
-                updates["origin"] = _origin_identity_from_thread(thread_id)
+                updates["origin"] = _runtime_origin_identity(runtime, origin_thread_id)
             elif "deliver" in updates:
                 updates["origin"] = None
             delivery_error = _validate_delivery(updates.get("deliver"), origin=updates.get("origin"))
