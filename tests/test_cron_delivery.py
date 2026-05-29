@@ -1,6 +1,26 @@
 from __future__ import annotations
 
 
+class FakeSlackAdapter:
+    key = "slack"
+
+    def __init__(self) -> None:
+        self.delivered: list[dict] = []
+
+    def validate(self, target, job):
+        from cron.delivery_adapters import AdapterValidation
+
+        if not target.address:
+            return AdapterValidation(False, "slack delivery requires a channel id")
+        return AdapterValidation(True)
+
+    def deliver(self, event, job, run):
+        from cron.delivery_adapters import DeliveryResult
+
+        self.delivered.append({"event": event, "job": job, "run": run})
+        return DeliveryResult(True)
+
+
 def test_enqueue_local_result_marks_delivered(monkeypatch, tmp_path):
     monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
 
@@ -112,6 +132,70 @@ def test_bare_webhook_dispatch_uses_env_url(monkeypatch, tmp_path):
     assert summary["delivered"] == 1
     assert sent[0][0] == "https://example.invalid/env-hook"
     assert DeliveryStore().get(event["id"])["address"] == "https://example.invalid/env-hook"
+
+
+def test_registered_platform_adapter_enqueues_and_dispatches_without_core_branch(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    from cron.delivery import JobRunResult, enqueue_result
+    from cron.delivery_dispatcher import DeliveryDispatcher
+    from cron.delivery_registry import default_delivery_registry
+    from cron.delivery_store import DeliveryStore
+    from cron.state_store import StateStore
+
+    adapter = FakeSlackAdapter()
+    registry = default_delivery_registry()
+    registry.register(adapter)
+
+    event = enqueue_result(
+        {"id": "job-1", "name": "Daily", "deliver": "slack:C123"},
+        JobRunResult(success=True, output_doc="# out", final_response="done"),
+        "/tmp/out.md",
+        "2026-05-28T10:00:00+00:00",
+        registry=registry,
+    )
+
+    assert event is not None
+    stored = DeliveryStore().get(event["id"])
+    assert stored["target"] == "slack:C123"
+    assert stored["target_type"] == "platform"
+    assert stored["adapter_key"] == "slack"
+    assert stored["address"] == "C123"
+    assert stored["status"] == "pending"
+
+    summary = DeliveryDispatcher(store=StateStore(), registry=registry).dispatch_due(
+        limit=10,
+        adapter_keys={"slack"},
+    )
+
+    assert summary["claimed"] == 1
+    assert summary["delivered"] == 1
+    assert DeliveryStore().get(event["id"])["status"] == "delivered"
+    assert adapter.delivered[0]["event"]["adapter_key"] == "slack"
+    assert adapter.delivered[0]["event"]["address"] == "C123"
+
+
+def test_enqueue_result_records_registry_validation_failure_as_dead_event(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    from cron.delivery import JobRunResult, enqueue_result
+    from cron.delivery_store import DeliveryStore
+
+    event = enqueue_result(
+        {"id": "job-1", "name": "Daily", "deliver": "slack:C123"},
+        JobRunResult(success=True, output_doc="# out", final_response="done"),
+        "/tmp/out.md",
+        "2026-05-28T10:00:00+00:00",
+    )
+
+    assert event is not None
+    stored = DeliveryStore().get(event["id"])
+    assert stored["target"] == "slack:C123"
+    assert stored["target_type"] == "platform"
+    assert stored["adapter_key"] == "slack"
+    assert stored["address"] == "C123"
+    assert stored["status"] == "dead"
+    assert stored["last_error"] == "unsupported delivery target: slack:C123"
 
 
 def test_enqueue_result_uses_stored_delivery_targets(monkeypatch, tmp_path):

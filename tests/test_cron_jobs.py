@@ -7,6 +7,22 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 
+class FakeSlackAdapter:
+    key = "slack"
+
+    def validate(self, target, job):
+        from cron.delivery_adapters import AdapterValidation
+
+        if not target.address:
+            return AdapterValidation(False, "slack delivery requires a channel id")
+        return AdapterValidation(True)
+
+    def deliver(self, event, job, run):
+        from cron.delivery_adapters import DeliveryResult
+
+        return DeliveryResult(True)
+
+
 def test_import_cron_keeps_scheduler_lazy_until_tick_access():
     for module_name in (
         "agent_core.model_config",
@@ -307,6 +323,33 @@ def test_update_job_clears_origin_when_delivery_no_longer_targets_origin(jobs_mo
     assert updated["deliver"] == "local"
     assert updated["origin"] is None
     assert updated["delivery_targets"][0]["target_type"] == "local"
+
+
+def test_create_job_accepts_registered_platform_adapter_and_persists_target(jobs_module, monkeypatch):
+    from cron.delivery_registry import default_delivery_registry
+
+    registry = default_delivery_registry()
+    registry.register(FakeSlackAdapter())
+    monkeypatch.setattr("cron.delivery_registry.default_delivery_registry", lambda **kwargs: registry)
+
+    job = jobs_module.create_job(
+        prompt="write a report",
+        schedule="30m",
+        deliver="slack:C123",
+    )
+
+    assert job["deliver"] == "slack:C123"
+    assert job["origin"] is None
+    assert job["delivery_targets"] == [
+        {
+            "raw": "slack:C123",
+            "target_type": "platform",
+            "adapter_key": "slack",
+            "address": "C123",
+            "thread_id": None,
+            "metadata": {},
+        }
+    ]
 
 
 def test_create_job_recurring_repeat_defaults_to_forever(jobs_module):
