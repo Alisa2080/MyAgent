@@ -95,3 +95,129 @@ def test_service_records_tick_error(monkeypatch, tmp_path):
     assert status["process_state"] == "exited"
     assert "tick exploded" in status["last_error"]
     assert status["exit_reason"] == "once"
+
+
+def test_service_records_service_level_loop_error(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    from cron.service import CronService
+    from cron.service_state import read_service_status
+
+    service = CronService(
+        interval_seconds=1,
+        lease_seconds=30,
+        owner_id="host:1:test",
+        pid=1,
+        hostname="host",
+        tick_fn=lambda: None,
+        clock=lambda: "2026-05-29T10:00:00+00:00",
+        sleeper=lambda seconds: None,
+    )
+
+    def bad_acquire(**_kwargs):
+        raise RuntimeError("lease unavailable")
+
+    monkeypatch.setattr(service.lease, "try_acquire_or_renew", bad_acquire)
+
+    assert service.run(once=True) == 1
+    status = read_service_status()
+    assert status["process_state"] == "exited"
+    assert "lease unavailable" in status["last_error"]
+    assert status["exit_reason"] == "error"
+
+
+def test_release_failure_preserves_tick_error(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    from cron.service import CronService
+    from cron.service_state import read_service_status
+
+    def bad_tick():
+        raise RuntimeError("tick exploded")
+
+    service = CronService(
+        interval_seconds=1,
+        lease_seconds=30,
+        owner_id="host:1:test",
+        pid=1,
+        hostname="host",
+        tick_fn=bad_tick,
+        clock=lambda: "2026-05-29T10:00:00+00:00",
+        sleeper=lambda seconds: None,
+    )
+
+    def bad_release(_owner_id):
+        raise RuntimeError("release exploded")
+
+    monkeypatch.setattr(service.lease, "release", bad_release)
+
+    assert service.run(once=True) == 1
+    status = read_service_status()
+    assert "tick exploded" in status["last_error"]
+    assert "release exploded" not in status["last_error"]
+
+
+def test_follower_run_once_does_not_release_another_owners_lease(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    from cron.leader import SchedulerLeaderLease
+    from cron.service import CronService
+    from cron.state_store import StateStore
+
+    lease = SchedulerLeaderLease(store=StateStore(), lease_seconds=30)
+    lease.try_acquire_or_renew(
+        owner_id="host:1:other",
+        pid=1,
+        hostname="host",
+        now_text="2026-05-29T10:00:00+00:00",
+    )
+
+    service = CronService(
+        interval_seconds=1,
+        lease_seconds=30,
+        owner_id="host:2:test",
+        pid=2,
+        hostname="host",
+        tick_fn=lambda: None,
+        clock=lambda: "2026-05-29T10:00:10+00:00",
+        sleeper=lambda seconds: None,
+    )
+
+    assert service.run(once=True) == 0
+    assert lease.current().owner_id == "host:1:other"
+
+
+def test_signal_handler_does_not_write_status(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    from cron import service as service_module
+    from cron.service import CronService
+    from cron.service_state import read_service_status
+
+    handlers = {}
+
+    def fake_signal(signum, handler):
+        handlers[signum] = handler
+
+    service = CronService(
+        interval_seconds=1,
+        lease_seconds=30,
+        owner_id="host:1:test",
+        pid=1,
+        hostname="host",
+        tick_fn=lambda: None,
+        clock=lambda: "2026-05-29T10:00:00+00:00",
+        sleeper=lambda seconds: None,
+    )
+    writes = []
+
+    monkeypatch.setattr(service_module.signal, "signal", fake_signal)
+    monkeypatch.setattr(service, "_write_status", lambda: writes.append("write"), raising=False)
+
+    service.install_signal_handlers()
+    handlers[service_module.signal.SIGTERM](service_module.signal.SIGTERM, None)
+
+    assert service.status["process_state"] == "stopping"
+    assert service.status["exit_reason"] == f"signal:{service_module.signal.SIGTERM}"
+    assert writes == []
+    assert read_service_status() is None
