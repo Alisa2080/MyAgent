@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 from types import SimpleNamespace
 
 
@@ -221,3 +222,100 @@ def test_signal_handler_does_not_write_status(monkeypatch, tmp_path):
     assert service.status["exit_reason"] == f"signal:{service_module.signal.SIGTERM}"
     assert writes == []
     assert read_service_status() is None
+
+
+def test_initial_status_write_failure_records_error_on_final_write(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    from cron.service import CronService
+    from cron.service_state import read_service_status, write_service_status
+
+    service = CronService(
+        interval_seconds=1,
+        lease_seconds=30,
+        owner_id="host:1:test",
+        pid=1,
+        hostname="host",
+        tick_fn=lambda: None,
+        clock=lambda: "2026-05-29T10:00:00+00:00",
+        sleeper=lambda seconds: None,
+    )
+    calls = []
+
+    def flaky_write():
+        calls.append("write")
+        if len(calls) == 1:
+            raise RuntimeError("status write exploded")
+        write_service_status(service.status)
+
+    monkeypatch.setattr(service, "_write_status", flaky_write)
+
+    assert service.run(once=True) == 1
+    status = read_service_status()
+    assert status["process_state"] == "exited"
+    assert status["exit_reason"] == "error"
+    assert "status write exploded" in status["last_error"]
+
+
+def test_final_status_write_failure_returns_error_without_raising(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    from cron.service import CronService
+
+    service = CronService(
+        interval_seconds=1,
+        lease_seconds=30,
+        owner_id="host:1:test",
+        pid=1,
+        hostname="host",
+        tick_fn=lambda: SimpleNamespace(due=0, ran=0, succeeded=0, failed=0, skipped=0),
+        clock=lambda: "2026-05-29T10:00:00+00:00",
+        sleeper=lambda seconds: None,
+    )
+    calls = []
+
+    def flaky_write():
+        calls.append("write")
+        if len(calls) == 4:
+            raise RuntimeError("final status write exploded")
+
+    monkeypatch.setattr(service, "_write_status", flaky_write)
+
+    assert service.run(once=True) == 1
+    assert service.status["process_state"] == "exited"
+    assert service.status["exit_reason"] == "once"
+    assert "final status write exploded" in service.status["last_error"]
+
+
+def test_default_tick_imports_scheduler_lazily(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    from cron.service import CronService
+
+    monkeypatch.delitem(sys.modules, "cron.scheduler", raising=False)
+
+    CronService(tick_fn=lambda: None)
+
+    assert "cron.scheduler" not in sys.modules
+
+
+def test_serve_constructs_installs_and_runs(monkeypatch):
+    from cron import service as service_module
+
+    calls = []
+
+    class FakeService:
+        def __init__(self, *, interval_seconds, lease_seconds):
+            calls.append(("init", interval_seconds, lease_seconds))
+
+        def install_signal_handlers(self):
+            calls.append(("install",))
+
+        def run(self, *, once):
+            calls.append(("run", once))
+            return 23
+
+    monkeypatch.setattr(service_module, "CronService", FakeService)
+
+    assert service_module.serve(interval_seconds=2.5, lease_seconds=90, once=True) == 23
+    assert calls == [("init", 2.5, 90), ("install",), ("run", True)]

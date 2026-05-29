@@ -45,7 +45,7 @@ class CronService:
         clock: Callable[[], str] = _now_text,
         sleeper: Callable[[float], None] = time.sleep,
     ) -> None:
-        self.interval_seconds = max(1, int(interval_seconds))
+        self.interval_seconds = max(1.0, float(interval_seconds))
         self.lease_seconds = max(1, int(lease_seconds))
         self.pid = os.getpid() if pid is None else pid
         self.hostname = hostname or socket.gethostname()
@@ -96,22 +96,21 @@ class CronService:
     def run(self, once: bool = False) -> int:
         had_error = False
         self.status["process_state"] = "running"
-        self._write_status()
 
         try:
-            while not self._stop_requested:
-                try:
+            try:
+                self._write_status()
+                while not self._stop_requested:
                     had_error = self._run_one_loop() or had_error
-                except Exception as exc:
-                    had_error = True
-                    self.status["last_error"] = f"{type(exc).__name__}: {exc}"
-                    if self.status["exit_reason"] is None:
-                        self.status["exit_reason"] = "error"
-                    break
-                if once:
-                    break
-                if not self._stop_requested:
-                    self._wait_interval()
+                    if once:
+                        break
+                    if not self._stop_requested:
+                        self._wait_interval()
+            except Exception as exc:
+                had_error = True
+                self.status["last_error"] = f"{type(exc).__name__}: {exc}"
+                if self.status["exit_reason"] is None:
+                    self.status["exit_reason"] = "error"
         finally:
             try:
                 self.lease.release(self.owner_id)
@@ -122,7 +121,14 @@ class CronService:
             self.status["process_state"] = "exited"
             if self.status["exit_reason"] is None:
                 self.status["exit_reason"] = "once" if once else "stopped"
-            self._write_status()
+            try:
+                self._write_status()
+            except Exception as exc:
+                had_error = True
+                if not self.status["last_error"]:
+                    self.status["last_error"] = f"{type(exc).__name__}: {exc}"
+                if self.status["exit_reason"] is None:
+                    self.status["exit_reason"] = "error"
 
         return 1 if had_error else 0
 
