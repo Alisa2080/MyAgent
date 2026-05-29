@@ -49,6 +49,9 @@ class DeliveryStore:
     def mark_failed(self, event_id: str, error: str) -> dict[str, Any]:
         return self._store.mark_delivery_failed(event_id, error)
 
+    def delete_events(self, event_ids: list[str]) -> int:
+        return self._store.delete_delivery_events(event_ids)
+
     def stats(self) -> dict[str, int]:
         return self._store.delivery_stats()
 

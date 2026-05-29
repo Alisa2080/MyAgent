@@ -42,6 +42,18 @@ def _format_job_line(job: dict[str, Any]) -> str:
     )
 
 
+def _deliver_mentions_origin(deliver: str | None) -> bool:
+    return any(part.strip().lower() == "origin" for part in str(deliver or "").split(","))
+
+
+def _cli_origin(session_id: str) -> dict[str, str]:
+    return {
+        "source_type": "cli",
+        "session_id": session_id,
+        "thread_id": session_id,
+    }
+
+
 def list_cron_jobs(*, include_disabled: bool = False) -> CronCommandResult:
     result = _get_run_cronjob_action()("list", include_disabled=include_disabled)
     if not result.get("success"):
@@ -63,19 +75,19 @@ def create_cron_job(
     **kwargs: Any,
 ) -> CronCommandResult:
     deliver = kwargs.pop("deliver", None)
-    if deliver == "origin" and not session_id:
+    if _deliver_mentions_origin(deliver) and not session_id:
         return CronCommandResult(
             "origin delivery requires an active CLI session",
             exit_code=2,
         )
     if deliver is None:
         deliver = "local" if top_level else "origin"
-    if deliver == "origin" and top_level:
+    if _deliver_mentions_origin(deliver) and top_level:
         return CronCommandResult(
             "origin delivery requires an active CLI session",
             exit_code=2,
         )
-    origin_thread_id = session_id if deliver == "origin" else None
+    origin_thread_id = session_id if _deliver_mentions_origin(deliver) else None
     result = _get_run_cronjob_action()(
         "create",
         origin_thread_id=origin_thread_id,
@@ -102,16 +114,16 @@ def update_cron_job(*, job_id: str, **kwargs: Any) -> CronCommandResult:
     session_id = kwargs.pop("session_id", None)
     top_level = bool(kwargs.pop("top_level", False))
     deliver = kwargs.get("deliver")
-    if deliver == "origin" and (top_level or not session_id):
+    if _deliver_mentions_origin(deliver) and (top_level or not session_id):
         return CronCommandResult(
             "origin delivery requires an active CLI session",
             exit_code=2,
         )
-    if deliver == "origin":
-        kwargs["origin"] = {"thread_id": session_id}
+    if _deliver_mentions_origin(deliver):
+        kwargs["origin"] = _cli_origin(str(session_id))
     result = _get_run_cronjob_action()(
         "update",
-        origin_thread_id=session_id if deliver == "origin" else None,
+        origin_thread_id=session_id if _deliver_mentions_origin(deliver) else None,
         job_id=job_id,
         **kwargs,
     )
@@ -146,19 +158,27 @@ def simple_job_action(action: str, *, job_id: str, reason: str | None = None) ->
 
 
 def cron_status() -> CronCommandResult:
+    from cron.delivery_registry import default_delivery_registry
     from cron.runner_client import runner_mode_diagnostic
+    from cron.state_store import StateStore
 
     jobs = list_jobs(include_disabled=True)
+    state_store = StateStore()
     mode, mode_ok = runner_mode_diagnostic()
     mode_label = f"{'ok' if mode_ok else 'UNSUPPORTED'} ({mode})"
+    counts = state_store.job_counts_by_state()
+    count_text = ", ".join(f"{state}={count}" for state, count in sorted(counts.items())) or "-"
     lines = [
         f"Scheduler: {'running' if is_cron_scheduler_running() else 'stopped'}",
         f"Cron home: {display_cron_home()}",
+        f"Cron sqlite: {state_store.path}",
         f"Runner mode: {mode_label}",
         f"Jobs file: {get_jobs_file()}",
         f"Output dir: {get_output_dir()}",
         f"Scripts dir: {get_scripts_dir()}",
         f"Jobs: {len(jobs)}",
+        f"Job states: {count_text}",
+        f"Delivery adapters: {', '.join(default_delivery_registry().adapter_keys())}",
     ]
     if mode == "subprocess":
         from cron.runner_subprocess import subprocess_timeout_diagnostic
@@ -202,11 +222,14 @@ def _check_line(status: str, message: str) -> str:
 
 
 def cron_doctor() -> CronCommandResult:
-    from cron.delivery import parse_target, validate_webhook_url
+    from cron.delivery import validate_webhook_url
+    from cron.delivery_registry import default_delivery_registry
+    from cron.delivery_targets import DeliveryIdentity
     from cron.delivery_store import DeliveryStore
     from cron.paths import get_runner_tmp_dir
     from cron.runner_client import runner_mode_diagnostic
     from cron.runner_subprocess import subprocess_timeout_diagnostic
+    from cron.state_store import StateStore
 
     lines: list[str] = []
     warnings = 0
@@ -288,6 +311,13 @@ def cron_doctor() -> CronCommandResult:
             add("fail", f"jobs file JSON is invalid or unreadable: {exc}")
 
     try:
+        state_store = StateStore()
+        add("ok", f"cron sqlite: {state_store.path}")
+        counts = state_store.job_counts_by_state()
+        count_text = ", ".join(f"{state}={count}" for state, count in sorted(counts.items())) or "-"
+        add("ok", f"job states: {count_text}")
+        registry = default_delivery_registry()
+        add("ok", f"delivery adapters: {', '.join(registry.adapter_keys())}")
         store = DeliveryStore()
         stats = store.stats()
         add("ok", f"delivery db readable/writable: {store.path}")
@@ -315,15 +345,20 @@ def cron_doctor() -> CronCommandResult:
     for job in active_jobs:
         if not job.get("next_run_at"):
             add("warn", f"active job {job.get('id')} has no next_run_at")
-        target = parse_target(job)
-        if target.target_type == "origin" and not target.target_id:
-            add("fail", f"active job {job.get('id')} origin delivery has no thread id")
-        elif target.target_type == "webhook":
-            webhook_error = validate_webhook_url(target.target_id)
-            if webhook_error:
-                add("fail", f"active job {job.get('id')} webhook delivery invalid: {webhook_error}")
-        elif target.target_type == "unsupported":
-            add("fail", f"active job {job.get('id')} has unsupported delivery target: {target.raw}")
+        origin = DeliveryIdentity.from_job_origin(job.get("origin"))
+        validation = default_delivery_registry().validate_targets(
+            job.get("deliver"),
+            origin=origin,
+            job=job,
+        )
+        if not validation.ok:
+            add("fail", f"active job {job.get('id')} delivery invalid: {validation.error}")
+            continue
+        for target in validation.targets:
+            if target.target_type == "webhook":
+                webhook_error = validate_webhook_url(target.address)
+                if webhook_error:
+                    add("fail", f"active job {job.get('id')} webhook delivery invalid: {webhook_error}")
 
     exit_code = 2 if failures else (1 if warnings else 0)
     return CronCommandResult("\n".join(lines), exit_code=exit_code)
@@ -367,12 +402,13 @@ def test_delivery(
         "name": "test-delivery",
         "deliver": target,
     }
-    if target == "origin":
+    target_parts = {part.strip().lower() for part in str(target).split(",") if part.strip()}
+    if "origin" in target_parts:
         if not session_id:
             return CronCommandResult(
                 "origin test-delivery requires --session-id", exit_code=2
             )
-        job["origin"] = {"thread_id": session_id}
+        job["origin"] = _cli_origin(session_id)
 
     result = enqueue_result(
         job,
@@ -387,14 +423,20 @@ def test_delivery(
     process_due(limit=20)
     if result is None:
         return CronCommandResult("No delivery event created.", exit_code=2)
-    stored = DeliveryStore().get(result["id"])
-    text = (
-        f"test-delivery event={stored['id']} "
-        f"target={stored['target']} status={stored['status']} "
-        f"error={stored['last_error'] or '-'}"
-    )
-    if stored["status"] in {"delivered", "pending"}:
+    events = result if isinstance(result, list) else [result]
+    stored_events = [DeliveryStore().get(event["id"]) for event in events]
+    lines = [
+        (
+            f"test-delivery event={stored['id']} "
+            f"target={stored['target']} status={stored['status']} "
+            f"error={stored['last_error'] or '-'}"
+        )
+        for stored in stored_events
+    ]
+    text = "\n".join(lines)
+    statuses = {stored["status"] for stored in stored_events}
+    if statuses <= {"delivered", "pending"}:
         return CronCommandResult(text, exit_code=0)
-    if stored["status"] == "dead":
+    if "dead" in statuses:
         return CronCommandResult(text, exit_code=2)
     return CronCommandResult(text, exit_code=1)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import json
 
 import pytest
 
@@ -66,6 +67,158 @@ def test_default_runner_import_failure_marks_job_failed(monkeypatch, tmp_path):
     assert result.failed == 1
     assert "runner unavailable" in str(result.results[0].error)
     assert runs[0]["status"] == "failed"
+    assert store.get_job(job["id"])["state"] == "completed"
+    assert store.get_job(job["id"])["next_run_at"] is None
+
+
+def test_runner_exception_advances_recurring_job(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    from cron.jobs import create_job, update_job
+    import cron.scheduler as scheduler
+    from cron.state_store import StateStore
+
+    job = create_job(prompt="write report", schedule="every 30m", name="daily", deliver="local")
+    update_job(job["id"], {"next_run_at": RUN_AT.isoformat()})
+    store = StateStore()
+
+    result = scheduler.tick(
+        now_dt=RUN_AT,
+        job_runner=lambda claimed_job: (_ for _ in ()).throw(RuntimeError("boom")),
+    )
+
+    stored_job = store.get_job(job["id"])
+    assert result.failed == 1
+    assert store.runs_for_job(job["id"])[0]["status"] == "failed"
+    assert stored_job["state"] == "scheduled"
+    assert stored_job["next_run_at"] == "2026-05-22T09:30:00+00:00"
+    assert stored_job["next_run_at"] != RUN_AT.isoformat()
+
+
+def test_lost_lease_skips_output_and_delivery(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+    sent = []
+    saved = []
+
+    from cron.contracts import JobRunResult
+    from cron.delivery_store import DeliveryStore
+    from cron.jobs import create_job, update_job
+    import cron.scheduler as scheduler
+    from cron.state_store import StateStore
+
+    job = create_job(prompt="write report", schedule="every 30m", name="daily", deliver="webhook:https://example.invalid/hook")
+    update_job(job["id"], {"next_run_at": RUN_AT.isoformat()})
+    store = StateStore(lease_seconds=1)
+
+    def runner(claimed_job):
+        store.recover_expired_leases(now_text="2100-01-01T00:00:00+00:00")
+        return JobRunResult(True, "doc", "final", None)
+
+    monkeypatch.setattr(
+        scheduler,
+        "_store",
+        lambda: StateStore(lease_seconds=1),
+    )
+    monkeypatch.setattr(
+        scheduler,
+        "save_job_output",
+        lambda job_id, doc, run_at=None: saved.append((job_id, doc)) or str(tmp_path / "out.md"),
+    )
+    from cron import delivery
+    monkeypatch.setattr(
+        delivery,
+        "default_webhook_sender",
+        lambda url, payload, timeout=10: sent.append(url) or (204, "ok"),
+    )
+
+    result = scheduler.tick(now_dt=RUN_AT, job_runner=runner)
+
+    runs = store.runs_for_job(job["id"])
+    assert result.failed == 1
+    assert result.results[0].error == "run lease lost before delivery"
+    assert saved == []
+    assert sent == []
+    assert DeliveryStore().stats()["pending"] == 0
+    assert runs[0]["status"] == "abandoned"
+    assert runs[0]["exit_reason"] == "late_completion"
+
+
+def test_expired_unrecovered_lease_skips_output_and_delivery(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+    saved = []
+    sent = []
+
+    from datetime import datetime, timedelta, timezone
+
+    from cron.contracts import JobRunResult
+    from cron.delivery_store import DeliveryStore
+    from cron.jobs import create_job, update_job
+    import cron.scheduler as scheduler
+    import cron.state_store as state_store
+    from cron.state_store import StateStore
+
+    base = datetime(2026, 5, 22, 9, 0, tzinfo=timezone.utc)
+    current = [datetime(2026, 5, 28, 12, 0, tzinfo=timezone.utc)]
+    later = current[0] + timedelta(minutes=1)
+    job = create_job(prompt="write report", schedule="every 30m", name="daily", deliver="webhook:https://example.invalid/hook")
+    update_job(job["id"], {"next_run_at": base.isoformat()})
+    store = StateStore(lease_seconds=1)
+
+    monkeypatch.setattr(scheduler, "_store", lambda: StateStore(lease_seconds=1))
+    monkeypatch.setattr(scheduler, "save_job_output", lambda job_id, doc, run_at=None: saved.append((job_id, doc)) or str(tmp_path / "out.md"))
+    monkeypatch.setattr(state_store, "utc_now", lambda: current[0])
+    from cron import delivery
+    monkeypatch.setattr(delivery, "default_webhook_sender", lambda url, payload, timeout=10: sent.append(url) or (204, "ok"))
+
+    def runner(claimed_job):
+        current[0] = later
+        return JobRunResult(True, "doc", "final", None)
+
+    result = scheduler.tick(now_dt=base, job_runner=runner)
+
+    assert result.failed == 1
+    assert result.results[0].error == "run lease lost before delivery"
+    assert saved == []
+    assert sent == []
+    assert DeliveryStore().stats()["pending"] == 0
+    assert store.runs_for_job(job["id"])[0]["status"] == "abandoned"
+    stored_job = store.get_job(job["id"])
+    assert stored_job["state"] == "scheduled"
+    assert stored_job["lease_run_id"] is None
+    assert stored_job["lease_expires_at"] is None
+
+
+def test_lease_loss_after_enqueue_deletes_pending_delivery(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+    saved = []
+
+    from cron.contracts import JobRunResult
+    from cron.delivery_store import DeliveryStore
+    from cron.jobs import create_job, update_job
+    import cron.delivery as delivery_module
+    import cron.scheduler as scheduler
+    from cron.state_store import StateStore
+
+    job = create_job(prompt="write report", schedule="every 30m", name="daily", deliver="webhook:https://example.invalid/hook")
+    update_job(job["id"], {"next_run_at": RUN_AT.isoformat()})
+    store = StateStore(lease_seconds=1)
+    real_enqueue = delivery_module.enqueue_result
+
+    def enqueue_then_lose_lease(*args, **kwargs):
+        events = real_enqueue(*args, **kwargs)
+        store.recover_expired_leases(now_text="2100-01-01T00:00:00+00:00")
+        return events
+
+    monkeypatch.setattr(scheduler, "_store", lambda: StateStore(lease_seconds=1))
+    monkeypatch.setattr(scheduler, "save_job_output", lambda job_id, doc, run_at=None: saved.append((job_id, doc)) or str(tmp_path / "out.md"))
+    monkeypatch.setattr(delivery_module, "enqueue_result", enqueue_then_lose_lease)
+
+    result = scheduler.tick(now_dt=RUN_AT, job_runner=lambda claimed_job: JobRunResult(True, "doc", "final", None))
+
+    assert result.failed == 1
+    assert result.results[0].error == "run lease lost before dispatch"
+    assert saved == [(job["id"], "doc")]
+    assert DeliveryStore().stats()["pending"] == 0
 
 
 def test_tick_queues_origin_notification(monkeypatch, tmp_path):
@@ -90,41 +243,62 @@ def test_tick_queues_origin_notification(monkeypatch, tmp_path):
     assert events[0]["job_id"] == job["id"]
 
 
-def test_legacy_delivery_value_runs_without_origin_notification(monkeypatch, tmp_path):
+def test_jobs_facade_rejects_unsupported_delivery(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    from cron.jobs import create_job
+
+    with pytest.raises(ValueError, match="unsupported delivery target: telegram:123"):
+        create_job(prompt="daily report", schedule="30m", deliver="telegram:123", origin={"thread_id": "thread-1"})
+
+
+def test_migrated_legacy_delivery_error_is_persisted_with_real_job_storage(monkeypatch, tmp_path):
     monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
 
     from cron.contracts import JobRunResult
-    from cron.jobs import create_job, update_job
+    from cron.jobs import update_job
+    from cron.state_store import StateStore
     import cron.scheduler as scheduler
 
-    job = create_job(prompt="daily report", schedule="30m", deliver="telegram:123", origin={"thread_id": "thread-1"})
-    update_job(job["id"], {"next_run_at": RUN_AT.isoformat()})
-
-    monkeypatch.setattr(
-        scheduler,
-        "save_job_output",
-        lambda job_id, doc, run_at=None: str(tmp_path / "out.md"),
+    delivery_error = "unsupported delivery target: telegram:123"
+    cron_dir = tmp_path / "cron"
+    cron_dir.mkdir(parents=True)
+    (cron_dir / "jobs.json").write_text(
+        json.dumps(
+            {
+                "jobs": [
+                    {
+                        "id": "legacy-job",
+                        "name": "daily report",
+                        "prompt": "daily report",
+                        "schedule": {"kind": "interval", "minutes": 30},
+                        "schedule_display": "every 30m",
+                        "enabled": True,
+                        "state": "scheduled",
+                        "next_run_at": RUN_AT.isoformat(),
+                        "last_run_at": None,
+                        "last_status": None,
+                        "last_error": None,
+                        "last_delivery_error": None,
+                        "repeat": {"times": None, "completed": 0},
+                        "deliver": "telegram:123",
+                        "origin": {"thread_id": "thread-1"},
+                        "workdir": None,
+                        "script": None,
+                        "context_from": None,
+                        "skills": [],
+                        "enabled_toolsets": None,
+                        "model": None,
+                        "provider": None,
+                        "base_url": None,
+                        "created_at": RUN_AT.isoformat(),
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
     )
-
-    fake_runner = lambda claimed_job: JobRunResult(True, "doc", "final", None)
-    result = scheduler.tick(now_dt=RUN_AT, job_runner=fake_runner)
-
-    assert result.due == 1
-    assert result.ran == 1
-    assert result.succeeded == 1
-    delivery_error = "unsupported delivery target: telegram:123"
-    assert result.results[0].error == delivery_error
-
-
-def test_legacy_delivery_error_is_persisted_with_real_job_storage(monkeypatch, tmp_path):
-    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
-
-    from cron.contracts import JobRunResult
-    from cron.jobs import create_job, update_job
-    import cron.scheduler as scheduler
-
-    delivery_error = "unsupported delivery target: telegram:123"
-    job = create_job(prompt="daily report", schedule="30m", deliver="telegram:123", origin={"thread_id": "thread-1"})
+    job = StateStore().get_job("legacy-job")
     update_job(job["id"], {"next_run_at": RUN_AT.isoformat()})
 
     fake_runner = lambda claimed_job: JobRunResult(True, "doc", "final", None)

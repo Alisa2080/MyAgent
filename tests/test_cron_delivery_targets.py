@@ -28,6 +28,38 @@ def test_origin_without_identity_fails_closed():
         raise AssertionError("expected origin without identity to fail")
 
 
+def test_bare_webhook_uses_env_url(monkeypatch):
+    monkeypatch.setenv("AGENT_CRON_WEBHOOK_URL", "https://example.invalid/hook")
+
+    from cron.delivery_targets import parse_delivery_targets
+
+    targets = parse_delivery_targets("webhook", origin=None)
+
+    assert targets[0].address == "https://example.invalid/hook"
+
+
+def test_bare_webhook_without_env_fails_validation(monkeypatch):
+    monkeypatch.delenv("AGENT_CRON_WEBHOOK_URL", raising=False)
+
+    from cron.delivery_registry import default_delivery_registry
+
+    result = default_delivery_registry().validate_targets("webhook", origin=None, job={})
+
+    assert result.ok is False
+    assert "webhook delivery requires a URL" in result.error
+
+
+def test_empty_delivery_target_fails():
+    from cron.delivery_targets import DeliveryTargetError, parse_delivery_targets
+
+    try:
+        parse_delivery_targets(",", origin=None)
+    except DeliveryTargetError as exc:
+        assert "delivery target is required" in str(exc)
+    else:
+        raise AssertionError("expected empty target list to fail")
+
+
 def test_reserved_platform_target_rejected_without_adapter():
     from cron.delivery_registry import default_delivery_registry
 

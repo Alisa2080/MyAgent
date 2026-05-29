@@ -197,3 +197,29 @@ def test_origin_notification_survives_module_reload(monkeypatch, tmp_path):
         {"type": "cron_result", "job_id": "job-1", "final_response": "done"}
     ]
     assert reloaded.drain_cron_notifications_for_thread_id("thread-1") == []
+
+
+def test_persisted_origin_notification_stores_structured_identity(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    import json
+    import cron.notifications as notifications
+    from cron.delivery_store import DeliveryStore
+
+    monkeypatch.setattr(notifications, "_events_by_thread", {})
+
+    notifications.queue_cron_notification(
+        "thread-1",
+        {"type": "cron_result", "job_id": "job-1", "run_id": "run-1", "final_response": "done"},
+    )
+
+    event = DeliveryStore().pending_origin_events("thread-1")[0]
+
+    assert event["run_id"] == "run-1"
+    assert event["address"] == "thread-1"
+    assert event["thread_id"] == "thread-1"
+    assert json.loads(event["origin_json"]) == {
+        "source_type": "cli",
+        "session_id": "thread-1",
+        "thread_id": "thread-1",
+    }

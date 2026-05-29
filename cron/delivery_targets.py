@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import os
 from typing import Any
 
 
@@ -78,6 +79,8 @@ def parse_delivery_targets(deliver: str | None, *, origin: DeliveryIdentity | No
         if key not in seen:
             seen.add(key)
             targets.append(target)
+    if not targets:
+        raise DeliveryTargetError("delivery target is required")
     return targets
 
 
@@ -101,7 +104,12 @@ def _parse_one(raw: str, *, origin: DeliveryIdentity | None) -> DeliveryTarget:
             metadata={"origin": origin.to_json()},
         )
     if lowered == "webhook":
-        return DeliveryTarget(raw=raw, target_type="webhook", adapter_key="webhook")
+        return DeliveryTarget(
+            raw=raw,
+            target_type="webhook",
+            adapter_key="webhook",
+            address=os.getenv("AGENT_CRON_WEBHOOK_URL") or None,
+        )
     if lowered.startswith("webhook:"):
         return DeliveryTarget(
             raw=raw,

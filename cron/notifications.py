@@ -58,13 +58,18 @@ def _persist_notification(thread_id: str, event: dict[str, Any]) -> None:
     from cron.delivery_store import DeliveryStore
 
     payload = dict(event)
+    origin = {"source_type": "cli", "session_id": str(thread_id), "thread_id": str(thread_id)}
     DeliveryStore().enqueue(
         job_id=str(payload.get("job_id") or ""),
+        run_id=payload.get("run_id"),
         job_name=payload.get("job_name"),
         run_at=payload.get("run_at"),
         target="origin",
         target_type="origin",
         target_id=str(thread_id),
+        address=str(thread_id),
+        thread_id=str(thread_id),
+        origin=origin,
         final_response=payload.get("final_response"),
         output_path=payload.get("output_path"),
         payload=payload,

@@ -113,17 +113,132 @@ def test_load_save_list_get_update_remove_pause_resume_trigger(jobs_module):
     assert jobs.get_job("job-2") is None
 
 
-def test_locked_mutators_do_not_delegate_to_update_job(monkeypatch, jobs_module):
+def test_save_jobs_replaces_existing_job_set(jobs_module):
+    jobs = jobs_module
+
+    jobs.save_jobs(
+        [
+            {
+                "id": "job-1",
+                "name": "one",
+                "prompt": "one",
+                "enabled": True,
+                "state": "scheduled",
+                "schedule": {"kind": "once", "run_at": "2026-05-22T09:30:00+00:00"},
+            },
+            {
+                "id": "job-2",
+                "name": "two",
+                "prompt": "two",
+                "enabled": True,
+                "state": "scheduled",
+                "schedule": {"kind": "once", "run_at": "2026-05-22T10:30:00+00:00"},
+            },
+        ]
+    )
+
+    jobs.save_jobs(
+        [
+            {
+                "id": "job-1",
+                "name": "one updated",
+                "prompt": "one",
+                "enabled": True,
+                "state": "scheduled",
+                "schedule": {"kind": "once", "run_at": "2026-05-22T09:30:00+00:00"},
+            }
+        ]
+    )
+
+    assert [job["id"] for job in jobs.load_jobs()] == ["job-1"]
+    assert jobs.get_job("job-1")["name"] == "one updated"
+    assert jobs.get_job("job-2") is None
+
+
+def test_save_jobs_replacement_is_atomic_on_validation_error(jobs_module):
+    jobs = jobs_module
+
+    jobs.save_jobs(
+        [
+            {
+                "id": "job-1",
+                "name": "one",
+                "prompt": "one",
+                "enabled": True,
+                "state": "scheduled",
+                "schedule": {"kind": "once", "run_at": "2026-05-22T09:30:00+00:00"},
+                "deliver": "local",
+            }
+        ]
+    )
+
+    with pytest.raises(ValueError, match="unsupported delivery target: telegram:123"):
+        jobs.save_jobs(
+            [
+                {
+                    "id": "job-1",
+                    "name": "one updated",
+                    "prompt": "one",
+                    "enabled": True,
+                    "state": "scheduled",
+                    "schedule": {"kind": "once", "run_at": "2026-05-22T09:30:00+00:00"},
+                    "deliver": "local",
+                },
+                {
+                    "id": "job-2",
+                    "name": "bad",
+                    "prompt": "bad",
+                    "enabled": True,
+                    "state": "scheduled",
+                    "schedule": {"kind": "once", "run_at": "2026-05-22T10:30:00+00:00"},
+                    "deliver": "telegram:123",
+                },
+            ]
+        )
+
+    assert [job["id"] for job in jobs.load_jobs()] == ["job-1"]
+    assert jobs.get_job("job-1")["name"] == "one"
+    assert jobs.get_job("job-2") is None
+
+
+def test_save_jobs_round_trips_legacy_unsupported_delivery(jobs_module, tmp_path):
+    jobs = jobs_module
+    cron_dir = tmp_path / "cron"
+    cron_dir.mkdir(parents=True, exist_ok=True)
+    (cron_dir / "jobs.json").write_text(
+        """
+        {
+          "jobs": [
+            {
+              "id": "legacy-job",
+              "name": "legacy",
+              "prompt": "legacy",
+              "enabled": true,
+              "state": "scheduled",
+              "schedule": {"kind": "interval", "minutes": 60},
+              "next_run_at": "2026-05-22T09:30:00+00:00",
+              "repeat": {"times": null, "completed": 0},
+              "deliver": "telegram:123"
+            }
+          ]
+        }
+        """,
+        encoding="utf-8",
+    )
+
+    loaded = jobs.load_jobs()
+    jobs.save_jobs(loaded)
+
+    assert jobs.get_job("legacy-job")["deliver"] == "telegram:123"
+    assert jobs.get_job("legacy-job")["delivery_targets"][0]["adapter_key"] == "telegram"
+
+
+def test_single_job_mutators_do_not_replace_unrelated_jobs(jobs_module):
     jobs = jobs_module
     base = jobs.now()
     once_job = jobs.create_job(prompt="once", schedule="30m", deliver="local")
     interval_job = jobs.create_job(prompt="interval", schedule="every 30m", deliver="local")
     complete_job = jobs.create_job(prompt="complete", schedule="30m", deliver="local")
-
-    def fail_update(*args, **kwargs):
-        raise AssertionError("must update under the existing lock")
-
-    monkeypatch.setattr(jobs, "update_job", fail_update)
 
     assert jobs.resume_job(once_job["id"])["state"] == "scheduled"
     assert jobs.advance_next_run(interval_job["id"], base)["next_run_at"] == (
@@ -132,6 +247,11 @@ def test_locked_mutators_do_not_delegate_to_update_job(monkeypatch, jobs_module)
     assert jobs.mark_job_run(complete_job["id"], success=True, run_at=base)[
         "state"
     ] == "completed"
+    assert {job["id"] for job in jobs.load_jobs()} == {
+        once_job["id"],
+        interval_job["id"],
+        complete_job["id"],
+    }
 
 
 def test_parse_duration_schedule_creates_oneshot(jobs_module):
@@ -170,6 +290,23 @@ def test_create_job_defaults_origin_delivery(jobs_module):
     assert job["deliver"] == "origin"
     assert job["repeat"] == {"times": 1, "completed": 0}
     assert jobs.get_job(job["id"])["name"] == "write a report"
+
+
+def test_update_job_clears_origin_when_delivery_no_longer_targets_origin(jobs_module):
+    jobs = jobs_module
+
+    job = jobs.create_job(
+        prompt="write a report",
+        schedule="30m",
+        deliver="origin",
+        origin={"source_type": "cli", "session_id": "session-1", "thread_id": "thread-1"},
+    )
+
+    updated = jobs.update_job(job["id"], {"deliver": "local"})
+
+    assert updated["deliver"] == "local"
+    assert updated["origin"] is None
+    assert updated["delivery_targets"][0]["target_type"] == "local"
 
 
 def test_create_job_recurring_repeat_defaults_to_forever(jobs_module):
@@ -364,7 +501,7 @@ def test_mark_job_run_error_and_completion_disable(jobs_module):
 def test_mark_job_run_separates_execution_and_delivery_errors(jobs_module):
     jobs = jobs_module
     base = jobs.now()
-    job = jobs.create_job(prompt="x", schedule="every 30m", deliver="telegram:123")
+    job = jobs.create_job(prompt="x", schedule="every 30m", deliver="local")
 
     marked = jobs.mark_job_run(
         job["id"],

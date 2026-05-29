@@ -32,7 +32,7 @@ class CronJobInput(BaseModel):
     schedule: str | None = Field(default=None, description="Schedule such as 30m, every 2h, cron, or ISO timestamp.")
     name: str | None = Field(default=None, description="Optional job name.")
     repeat: int | None = Field(default=None, description="Optional repeat count; <=0 means forever.")
-    deliver: str | None = Field(default=None, description="Delivery target: local, origin, webhook, or webhook:<url>.")
+    deliver: str | None = Field(default=None, description="Delivery target(s), comma-separated: local, origin, webhook:<url>.")
     include_disabled: bool = Field(default=False, description="Include disabled jobs when listing.")
     skills: list[str] | None = Field(default=None, description="Ordered skill names to load before prompt.")
     model: str | None = Field(default=None, description="Stored for compatibility; ignored by first runner.")
@@ -45,7 +45,6 @@ class CronJobInput(BaseModel):
     workdir: str | None = Field(default=None, description="Absolute project directory for this job.")
 
 
-_ALLOWED_DELIVERIES = {None, "local", "origin", "webhook"}
 _INVISIBLE_CHARS = {
     "\u200b",
     "\u200c",
@@ -171,24 +170,30 @@ def _format_job(job: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _delivery_error(deliver: Any) -> dict[str, Any] | None:
-    if deliver in _ALLOWED_DELIVERIES:
-        return None
-    if isinstance(deliver, str) and deliver.strip().lower().startswith("webhook:"):
-        from cron.delivery import validate_webhook_url
+def _deliver_mentions_origin(deliver: Any) -> bool:
+    if deliver is None:
+        return False
+    return any(part.strip().lower() == "origin" for part in str(deliver).split(","))
 
-        error = validate_webhook_url(deliver.split(":", 1)[1].strip())
-        if error:
-            return {
-                "success": False,
-                "code": "invalid_webhook",
-                "error": error,
-            }
+
+def _validate_delivery(deliver: Any, *, origin: dict[str, Any] | None) -> dict[str, Any] | None:
+    if deliver is None:
         return None
+    from cron.delivery_registry import default_delivery_registry
+    from cron.delivery_targets import DeliveryIdentity
+
+    validation = default_delivery_registry().validate_targets(
+        str(deliver),
+        origin=DeliveryIdentity.from_job_origin(origin),
+        job={},
+    )
+    if validation.ok:
+        return None
+    code = "invalid_webhook" if validation.error and "webhook URL" in validation.error else "unsupported_delivery"
     return {
         "success": False,
-        "code": "unsupported_delivery",
-        "error": "Only deliver='local', deliver='origin', deliver='webhook', or deliver='webhook:<url>' are supported.",
+        "code": code,
+        "error": validation.error or f"Unsupported delivery target: {deliver}",
     }
 
 
@@ -228,9 +233,6 @@ def _cronjob_impl(
 ) -> dict[str, Any]:
     normalized = (action or "").strip().lower()
     deliver = kwargs.get("deliver")
-    delivery_error = _delivery_error(deliver)
-    if delivery_error:
-        return delivery_error
 
     try:
         if normalized == "create":
@@ -255,13 +257,16 @@ def _cronjob_impl(
                 return script_error
 
             thread_id = origin_thread_id or _runtime_thread_id(runtime)
-            if deliver == "origin" and not thread_id:
+            if _deliver_mentions_origin(deliver) and not thread_id:
                 return {
                     "success": False,
                     "code": "missing_origin_thread",
                     "error": "deliver='origin' requires an active thread id.",
                 }
-            origin = _origin_identity_from_thread(thread_id) if thread_id and deliver in {None, "origin"} else None
+            origin = _origin_identity_from_thread(thread_id) if thread_id and (deliver is None or _deliver_mentions_origin(deliver)) else None
+            delivery_error = _validate_delivery(deliver, origin=origin)
+            if delivery_error:
+                return delivery_error
             job = create_job(
                 prompt=prompt,
                 schedule=schedule,
@@ -332,7 +337,7 @@ def _cronjob_impl(
             if "repeat" in updates:
                 updates["repeat"] = _normalize_repeat(updates["repeat"])
 
-            if updates.get("deliver") == "origin":
+            if _deliver_mentions_origin(updates.get("deliver")):
                 thread_id = origin_thread_id or _runtime_thread_id(runtime)
                 if not thread_id:
                     return {
@@ -340,12 +345,12 @@ def _cronjob_impl(
                         "code": "missing_origin_thread",
                         "error": "deliver='origin' requires an active thread id.",
                     }
-                updates["origin"] = {"thread_id": thread_id}
-            elif updates.get("deliver") in {"local", "webhook"} or (
-                isinstance(updates.get("deliver"), str)
-                and updates["deliver"].strip().lower().startswith("webhook:")
-            ):
+                updates["origin"] = _origin_identity_from_thread(thread_id)
+            elif "deliver" in updates:
                 updates["origin"] = None
+            delivery_error = _validate_delivery(updates.get("deliver"), origin=updates.get("origin"))
+            if delivery_error:
+                return delivery_error
 
             return {"success": True, "job": _format_job(update_job(job_id, updates))}
 

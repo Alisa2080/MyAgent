@@ -3,22 +3,34 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 import copy
 import json
+import logging
 import sqlite3
 import uuid
 from pathlib import Path
 from typing import Any
 
 from cron.paths import ensure_cron_dirs, get_cron_dir, get_jobs_file, secure_file
+from cron.delivery_targets import DeliveryIdentity, DeliveryTargetError, parse_delivery_targets
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 JOB_STATES = {"scheduled", "running", "paused", "completed", "error"}
 RUN_STATUSES = {"claimed", "running", "succeeded", "failed", "skipped", "abandoned"}
 DELIVERY_STATUSES = {"pending", "delivering", "delivered", "failed", "dead"}
 RETRY_DELAYS = (60, 300, 900, 3600, 21600)
+logger = logging.getLogger(__name__)
 
 
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _parse_time(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00")).astimezone(timezone.utc)
+    except (TypeError, ValueError):
+        return None
 
 
 def _json_dumps(value: Any) -> str:
@@ -42,6 +54,7 @@ class StateStore:
         self.max_delivery_attempts = max(1, int(max_delivery_attempts))
         self.lease_seconds = max(1, int(lease_seconds))
         self._init_schema()
+        self._import_legacy_delivery_db_if_needed()
         self._import_jobs_json_if_needed()
         secure_file(self.path)
 
@@ -139,6 +152,7 @@ class StateStore:
                 )
                 """
             )
+            self._migrate_schema(conn)
             conn.execute("CREATE INDEX IF NOT EXISTS idx_jobs_due ON jobs(state, enabled, next_run_at)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_jobs_lease ON jobs(lease_expires_at)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_runs_job ON runs(job_id, scheduled_for)")
@@ -149,6 +163,149 @@ class StateStore:
             conn.execute(
                 "INSERT OR REPLACE INTO schema_meta(key, value) VALUES ('schema_version', ?)",
                 (str(SCHEMA_VERSION),),
+            )
+
+    def _migrate_schema(self, conn: sqlite3.Connection) -> None:
+        self._ensure_columns(
+            conn,
+            "jobs",
+            {
+                "prompt": "TEXT NOT NULL DEFAULT ''",
+                "schedule_json": "TEXT NOT NULL DEFAULT '{}'",
+                "schedule_display": "TEXT",
+                "enabled": "INTEGER NOT NULL DEFAULT 1",
+                "state": "TEXT NOT NULL DEFAULT 'scheduled'",
+                "next_run_at": "TEXT",
+                "last_run_at": "TEXT",
+                "last_status": "TEXT",
+                "last_error": "TEXT",
+                "last_delivery_error": "TEXT",
+                "repeat_json": "TEXT NOT NULL DEFAULT '{\"times\": null, \"completed\": 0}'",
+                "deliver": "TEXT NOT NULL DEFAULT 'local'",
+                "delivery_targets_json": "TEXT",
+                "origin_json": "TEXT",
+                "workdir": "TEXT",
+                "script": "TEXT",
+                "context_from_json": "TEXT",
+                "skills_json": "TEXT",
+                "enabled_toolsets_json": "TEXT",
+                "model": "TEXT",
+                "provider": "TEXT",
+                "base_url": "TEXT",
+                "concurrency_key": "TEXT",
+                "lease_run_id": "TEXT",
+                "lease_expires_at": "TEXT",
+                "paused_reason": "TEXT",
+                "paused_at": "TEXT",
+                "created_at": "TEXT NOT NULL DEFAULT ''",
+                "updated_at": "TEXT NOT NULL DEFAULT ''",
+            },
+        )
+        self._ensure_columns(
+            conn,
+            "runs",
+            {
+                "lease_expires_at": "TEXT",
+                "started_at": "TEXT",
+                "finished_at": "TEXT",
+                "exit_reason": "TEXT",
+                "output_path": "TEXT",
+                "final_response": "TEXT",
+                "error": "TEXT",
+                "delivery_status": "TEXT",
+            },
+        )
+        self._ensure_columns(
+            conn,
+            "delivery_events",
+            {
+                "run_id": "TEXT",
+                "adapter_key": "TEXT",
+                "address": "TEXT",
+                "thread_id": "TEXT",
+                "origin_json": "TEXT",
+            },
+        )
+        delivery_columns = self._table_columns(conn, "delivery_events")
+        if "adapter_key" in delivery_columns:
+            conn.execute("UPDATE delivery_events SET adapter_key = COALESCE(NULLIF(adapter_key, ''), target_type)")
+        if "address" in delivery_columns and "target_id" in delivery_columns:
+            conn.execute("UPDATE delivery_events SET address = COALESCE(address, target_id)")
+
+    def _table_columns(self, conn: sqlite3.Connection, table: str) -> set[str]:
+        rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
+        return {str(row["name"]) for row in rows}
+
+    def _ensure_columns(self, conn: sqlite3.Connection, table: str, columns: dict[str, str]) -> None:
+        existing = self._table_columns(conn, table)
+        for name, ddl in columns.items():
+            if name not in existing:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}")
+
+    def _import_legacy_delivery_db_if_needed(self) -> None:
+        if self.get_meta("legacy_delivery_sqlite_imported_at"):
+            return
+        legacy_path = get_cron_dir() / "delivery.sqlite3"
+        if not legacy_path.exists() or legacy_path == self.path:
+            self.set_meta("legacy_delivery_sqlite_imported_at", utc_now().isoformat())
+            return
+        try:
+            source = sqlite3.connect(str(legacy_path))
+            source.row_factory = sqlite3.Row
+            source_rows = source.execute("SELECT * FROM delivery_events").fetchall()
+            source_columns = {str(row["name"]) for row in source.execute("PRAGMA table_info(delivery_events)").fetchall()}
+        except sqlite3.Error as exc:
+            logger.warning("Could not import legacy cron delivery database %s: %s", legacy_path, exc)
+            return
+        finally:
+            try:
+                source.close()
+            except Exception:
+                pass
+
+        now_text = utc_now().isoformat()
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            for row in source_rows:
+                event_id = str(row["id"])
+                exists = conn.execute("SELECT 1 FROM delivery_events WHERE id = ?", (event_id,)).fetchone()
+                if exists:
+                    continue
+                target_type = str(row["target_type"])
+                target_id = row["target_id"] if "target_id" in source_columns else None
+                conn.execute(
+                    """
+                    INSERT INTO delivery_events (
+                        id, job_id, run_id, job_name, run_at, target, target_type,
+                        adapter_key, address, thread_id, origin_json, status,
+                        attempt_count, next_attempt_at, last_attempt_at, last_error,
+                        output_path, final_response, payload_json, created_at, updated_at
+                    ) VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        event_id,
+                        row["job_id"],
+                        row["job_name"],
+                        row["run_at"],
+                        row["target"],
+                        target_type,
+                        target_type,
+                        target_id,
+                        row["status"],
+                        int(row["attempt_count"] or 0),
+                        row["next_attempt_at"],
+                        row["last_attempt_at"],
+                        row["last_error"],
+                        row["output_path"],
+                        row["final_response"],
+                        row["payload_json"],
+                        row["created_at"] or now_text,
+                        row["updated_at"] or now_text,
+                    ),
+                )
+            conn.execute(
+                "INSERT OR REPLACE INTO schema_meta(key, value) VALUES ('legacy_delivery_sqlite_imported_at', ?)",
+                (now_text,),
             )
 
     def schema_version(self) -> int:
@@ -163,12 +320,44 @@ class StateStore:
         with self._connect() as conn:
             conn.execute("INSERT OR REPLACE INTO schema_meta(key, value) VALUES (?, ?)", (key, value))
 
-    def _job_to_row_values(self, job: dict[str, Any], now_text: str | None = None) -> dict[str, Any]:
+    def _delivery_targets_for_job(self, job: dict[str, Any], *, strict: bool) -> list[dict[str, Any]] | None:
+        origin = DeliveryIdentity.from_job_origin(job.get("origin"))
+        if strict:
+            from cron.delivery_registry import default_delivery_registry
+
+            validation = default_delivery_registry().validate_targets(
+                job.get("deliver"),
+                origin=origin,
+                job=job,
+            )
+            if not validation.ok:
+                raise ValueError(validation.error or f"unsupported delivery target: {job.get('deliver')}")
+            return [target.to_json() for target in validation.targets]
+
+        delivery_targets = job.get("delivery_targets")
+        if delivery_targets is not None:
+            return list(delivery_targets)
+
+        try:
+            return [
+                target.to_json()
+                for target in parse_delivery_targets(job.get("deliver"), origin=origin)
+            ]
+        except DeliveryTargetError:
+            return None
+
+    def _normalize_origin_for_job(self, job: dict[str, Any]) -> dict[str, Any] | None:
+        origin = DeliveryIdentity.from_job_origin(job.get("origin"))
+        return origin.to_json() if origin is not None else None
+
+    def _job_to_row_values(self, job: dict[str, Any], now_text: str | None = None, *, strict_delivery: bool = True) -> dict[str, Any]:
         now_text = now_text or utc_now().isoformat()
         skills = list(job.get("skills") or [])
         skill = str(job.get("skill") or "").strip()
         if skill and skill not in skills:
             skills.append(skill)
+        delivery_targets = self._delivery_targets_for_job(job, strict=strict_delivery)
+        origin = self._normalize_origin_for_job(job)
         return {
             "id": str(job["id"]),
             "name": str(job.get("name") or "cron job"),
@@ -184,8 +373,8 @@ class StateStore:
             "last_delivery_error": job.get("last_delivery_error"),
             "repeat_json": _json_dumps(job.get("repeat") or {"times": None, "completed": 0}),
             "deliver": str(job.get("deliver") or "local"),
-            "delivery_targets_json": _json_dumps(job.get("delivery_targets")) if job.get("delivery_targets") is not None else None,
-            "origin_json": _json_dumps(job.get("origin")) if job.get("origin") is not None else None,
+            "delivery_targets_json": _json_dumps(delivery_targets) if delivery_targets is not None else None,
+            "origin_json": _json_dumps(origin) if origin is not None else None,
             "workdir": job.get("workdir"),
             "script": job.get("script"),
             "context_from_json": _json_dumps(job.get("context_from")) if job.get("context_from") is not None else None,
@@ -202,6 +391,15 @@ class StateStore:
             "created_at": job.get("created_at") or now_text,
             "updated_at": now_text,
         }
+
+    def _can_preserve_legacy_delivery(self, existing: dict[str, Any] | None, job: dict[str, Any]) -> bool:
+        return (
+            existing is not None
+            and existing.get("deliver") == job.get("deliver")
+            and existing.get("origin") == job.get("origin")
+            and existing.get("delivery_targets") == job.get("delivery_targets")
+            and job.get("delivery_targets") is not None
+        )
 
     def _row_to_job(self, row: sqlite3.Row) -> dict[str, Any]:
         job = {
@@ -253,6 +451,38 @@ class StateStore:
             )
         return self.get_job(str(job["id"])) or copy.deepcopy(job)
 
+    def replace_jobs(self, jobs: list[dict[str, Any]]) -> None:
+        now_text = utc_now().isoformat()
+        existing_jobs = {str(job["id"]): job for job in self.list_jobs(include_disabled=True)}
+        rows = []
+        seen_ids: set[str] = set()
+        for job in jobs:
+            job_id = str(job["id"])
+            if job_id in seen_ids:
+                raise ValueError(f"duplicate cron job id: {job_id}")
+            seen_ids.add(job_id)
+            existing = existing_jobs.get(job_id)
+            strict_delivery = not self._can_preserve_legacy_delivery(existing, dict(job))
+            rows.append(self._job_to_row_values(dict(job), now_text=now_text, strict_delivery=strict_delivery))
+
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            existing_rows = conn.execute("SELECT id FROM jobs").fetchall()
+            existing_ids = {str(row["id"]) for row in existing_rows}
+            for values in rows:
+                columns = list(values)
+                assignments = ", ".join(f"{column} = excluded.{column}" for column in columns if column != "id")
+                placeholders = ", ".join("?" for _ in columns)
+                conn.execute(
+                    f"""
+                    INSERT INTO jobs ({', '.join(columns)}) VALUES ({placeholders})
+                    ON CONFLICT(id) DO UPDATE SET {assignments}
+                    """,
+                    [values[column] for column in columns],
+                )
+            for job_id in existing_ids - seen_ids:
+                conn.execute("DELETE FROM jobs WHERE id = ?", (job_id,))
+
     def list_jobs(self, *, include_disabled: bool = False) -> list[dict[str, Any]]:
         query = "SELECT * FROM jobs"
         params: list[Any] = []
@@ -290,7 +520,7 @@ class StateStore:
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             for job in jobs:
-                values = self._job_to_row_values(dict(job), now_text=now_text)
+                values = self._job_to_row_values(dict(job), now_text=now_text, strict_delivery=False)
                 columns = list(values)
                 placeholders = ", ".join("?" for _ in columns)
                 conn.execute(
@@ -313,7 +543,8 @@ class StateStore:
             raise KeyError(f"Cron job not found: {job_id}")
         merged = dict(existing)
         merged.update(updates)
-        values = self._job_to_row_values(merged)
+        strict_delivery = any(key in updates for key in ("deliver", "origin", "delivery_targets"))
+        values = self._job_to_row_values(merged, strict_delivery=strict_delivery)
         assignments = ", ".join(f"{column} = ?" for column in values if column != "id")
         params = [values[column] for column in values if column != "id"] + [job_id]
         with self._connect() as conn:
@@ -322,6 +553,13 @@ class StateStore:
         if updated is None:
             raise KeyError(f"Cron job not found after update: {job_id}")
         return updated
+
+    def update_job_delivery_error(self, job_id: str, error: str | None) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE jobs SET last_delivery_error = ?, updated_at = ? WHERE id = ?",
+                (error, utc_now().isoformat(), job_id),
+            )
 
     def remove_job(self, job_id: str) -> bool:
         with self._connect() as conn:
@@ -427,7 +665,11 @@ class StateStore:
 
     def claim_due_delivery_events(self, *, limit: int = 20, adapter_keys: set[str] | None = None) -> list[dict[str, Any]]:
         now_text = utc_now().isoformat()
-        params: list[Any] = [now_text]
+        now_dt = _parse_time(now_text)
+        event_limit = max(0, int(limit))
+        if now_dt is None or event_limit == 0:
+            return []
+        params: list[Any] = []
         key_filter = ""
         if adapter_keys is not None:
             if not adapter_keys:
@@ -435,22 +677,22 @@ class StateStore:
             placeholders = ", ".join("?" for _ in adapter_keys)
             key_filter = f" AND adapter_key IN ({placeholders})"
             params.extend(sorted(adapter_keys))
-        params.append(max(0, int(limit)))
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             rows = conn.execute(
                 f"""
                 SELECT * FROM delivery_events
                 WHERE status IN ('pending', 'failed')
-                  AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
                   {key_filter}
                 ORDER BY created_at
-                LIMIT ?
                 """,
                 params,
             ).fetchall()
             claimed = []
             for row in rows:
+                next_attempt_at = _parse_time(row["next_attempt_at"])
+                if row["next_attempt_at"] and next_attempt_at is not None and next_attempt_at > now_dt:
+                    continue
                 cursor = conn.execute(
                     """
                     UPDATE delivery_events
@@ -464,7 +706,55 @@ class StateStore:
                 )
                 if cursor.rowcount:
                     claimed.append(dict(conn.execute("SELECT * FROM delivery_events WHERE id = ?", (row["id"],)).fetchone()))
+                if len(claimed) >= event_limit:
+                    break
         return claimed
+
+    def dead_letter_unsupported_delivery_events(
+        self,
+        *,
+        supported_adapter_keys: set[str],
+        ignored_adapter_keys: set[str] | None = None,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        event_limit = max(0, int(limit))
+        if event_limit == 0:
+            return []
+        now_dt = utc_now()
+        ignored = ignored_adapter_keys or set()
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            rows = conn.execute(
+                """
+                SELECT * FROM delivery_events
+                WHERE status IN ('pending', 'failed')
+                ORDER BY created_at
+                """
+            ).fetchall()
+            updated = []
+            for row in rows:
+                adapter_key = str(row["adapter_key"] or "")
+                if adapter_key in supported_adapter_keys or adapter_key in ignored:
+                    continue
+                next_attempt_at = _parse_time(row["next_attempt_at"])
+                if row["next_attempt_at"] and next_attempt_at is not None and next_attempt_at > now_dt:
+                    continue
+                now_text = utc_now().isoformat()
+                conn.execute(
+                    """
+                    UPDATE delivery_events
+                    SET status = 'dead',
+                        last_error = ?,
+                        next_attempt_at = NULL,
+                        updated_at = ?
+                    WHERE id = ? AND status IN ('pending', 'failed')
+                    """,
+                    (f"unsupported delivery target: {row['target']}", now_text, row["id"]),
+                )
+                updated.append(dict(conn.execute("SELECT * FROM delivery_events WHERE id = ?", (row["id"],)).fetchone()))
+                if len(updated) >= event_limit:
+                    break
+        return updated
 
     def mark_delivery_failed(self, event_id: str, error: str) -> dict[str, Any]:
         event = self.get_delivery_event(event_id)
@@ -479,6 +769,30 @@ class StateStore:
             next_attempt_at=next_attempt.isoformat(),
         )
 
+    def delete_delivery_events(self, event_ids: list[str]) -> int:
+        deleted = 0
+        with self._connect() as conn:
+            for event_id in event_ids:
+                cursor = conn.execute(
+                    "DELETE FROM delivery_events WHERE id = ?",
+                    (event_id,),
+                )
+                deleted += int(cursor.rowcount or 0)
+        return deleted
+
+    def recover_stale_delivery_events(self, *, max_age_seconds: int = 600) -> int:
+        cutoff = (utc_now() - timedelta(seconds=max_age_seconds)).isoformat()
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT id FROM delivery_events WHERE status = 'delivering' AND updated_at < ?",
+                (cutoff,),
+            ).fetchall()
+        recovered = 0
+        for row in rows:
+            self.mark_delivery_failed(str(row["id"]), "delivery attempt abandoned")
+            recovered += 1
+        return recovered
+
     def _row_to_run(self, row: sqlite3.Row) -> dict[str, Any]:
         return dict(row)
 
@@ -490,7 +804,11 @@ class StateStore:
         return self._row_to_run(row)
 
     def claim_due_jobs(self, *, now_text: str, limit: int = 20) -> list[dict[str, Any]]:
-        lease_expires = (datetime.fromisoformat(now_text.replace("Z", "+00:00")) + timedelta(seconds=self.lease_seconds)).isoformat()
+        now_dt = _parse_time(now_text)
+        claim_limit = max(0, int(limit))
+        if now_dt is None or claim_limit == 0:
+            return []
+        lease_expires = (utc_now() + timedelta(seconds=self.lease_seconds)).isoformat()
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             rows = conn.execute(
@@ -499,15 +817,24 @@ class StateStore:
                 WHERE enabled = 1
                   AND state = 'scheduled'
                   AND next_run_at IS NOT NULL
-                  AND next_run_at <= ?
-                ORDER BY next_run_at, created_at
-                LIMIT ?
+                ORDER BY created_at
                 """,
-                (now_text, max(0, int(limit))),
             ).fetchall()
-            claimed = []
+            due_jobs = []
             for row in rows:
                 job = self._row_to_job(row)
+                due_at = _parse_time(job.get("next_run_at"))
+                if due_at is None or due_at > now_dt:
+                    continue
+                due_jobs.append((due_at, str(job.get("created_at") or ""), str(job["id"]), job))
+            due_jobs.sort(key=lambda item: (item[0], item[1], item[2]))
+
+            claimed = []
+            for _, _, _, job in due_jobs:
+                if len(claimed) >= claim_limit:
+                    break
+                if self._skip_missed_job_if_needed(conn, job, now_dt):
+                    continue
                 run_id = uuid.uuid4().hex
                 now_actual = utc_now().isoformat()
                 previous_attempts = conn.execute(
@@ -537,17 +864,160 @@ class StateStore:
                     (run_id, lease_expires, now_actual, job["id"]),
                 )
                 run = dict(conn.execute("SELECT * FROM runs WHERE id = ?", (run_id,)).fetchone())
-                claimed.append({"job": self.get_job(job["id"]) or job, "run": run})
+                claimed_job = self._row_to_job(conn.execute("SELECT * FROM jobs WHERE id = ?", (job["id"],)).fetchone())
+                claimed.append({"job": claimed_job, "run": run})
         return claimed
 
-    def mark_run_started(self, run_id: str) -> dict[str, Any]:
+    def _skip_missed_job_if_needed(self, conn: sqlite3.Connection, job: dict[str, Any], now_dt: datetime) -> bool:
+        next_run_at = job.get("next_run_at")
+        if not next_run_at:
+            return False
+        try:
+            from cron.jobs import ONESHOT_GRACE_SECONDS, _parse_datetime, _recurring_grace_seconds, compute_next_run
+
+            run_at = _parse_datetime(str(next_run_at))
+        except Exception:
+            return False
+
+        schedule = job.get("schedule") or {}
+        kind = schedule.get("kind")
+        if kind == "once":
+            missed = now_dt - run_at > timedelta(seconds=ONESHOT_GRACE_SECONDS)
+            if not missed:
+                return False
+            next_run = None
+            job_state = "completed"
+            enabled = 0
+        else:
+            grace_seconds = _recurring_grace_seconds(schedule, run_at)
+            missed = now_dt - run_at > timedelta(seconds=grace_seconds)
+            if not missed:
+                return False
+            next_run = compute_next_run(schedule, base=now_dt)
+            job_state = "scheduled"
+            enabled = 1
+
+        run_id = uuid.uuid4().hex
+        now_actual = utc_now().isoformat()
+        previous_attempts = conn.execute(
+            "SELECT COUNT(*) AS count FROM runs WHERE job_id = ?",
+            (job["id"],),
+        ).fetchone()["count"]
+        conn.execute(
+            """
+            INSERT INTO runs (
+                id, job_id, scheduled_for, claimed_at, lease_expires_at,
+                started_at, finished_at, attempt, status, exit_reason,
+                output_path, final_response, error, delivery_status,
+                created_at, updated_at
+            ) VALUES (?, ?, ?, ?, NULL, NULL, ?, ?, 'skipped', 'missed_run',
+                      NULL, NULL, NULL, NULL, ?, ?)
+            """,
+            (run_id, job["id"], next_run_at, now_actual, now_actual, int(previous_attempts) + 1, now_actual, now_actual),
+        )
+        conn.execute(
+            """
+            UPDATE jobs
+            SET state = ?, enabled = ?, next_run_at = ?, lease_run_id = NULL,
+                lease_expires_at = NULL, updated_at = ?
+            WHERE id = ?
+            """,
+            (job_state, enabled, next_run, now_actual, job["id"]),
+        )
+        return True
+
+    def mark_run_started(self, run_id: str) -> dict[str, Any] | None:
         now_text = utc_now().isoformat()
+        now_dt = _parse_time(now_text)
         with self._connect() as conn:
-            conn.execute(
-                "UPDATE runs SET status = 'running', started_at = ?, updated_at = ? WHERE id = ?",
+            row = conn.execute(
+                """
+                SELECT runs.status AS run_status, runs.job_id AS job_id,
+                       jobs.state AS job_state, jobs.lease_run_id AS lease_run_id,
+                       jobs.lease_expires_at AS lease_expires_at
+                FROM runs
+                JOIN jobs ON jobs.id = runs.job_id
+                WHERE runs.id = ?
+                """,
+                (run_id,),
+            ).fetchone()
+            lease_expires_at = _parse_time(row["lease_expires_at"]) if row else None
+            if (
+                row is None
+                or row["run_status"] != "claimed"
+                or row["job_state"] != "running"
+                or row["lease_run_id"] != run_id
+                or lease_expires_at is None
+                or now_dt is None
+                or lease_expires_at <= now_dt
+            ):
+                if row is not None and row["lease_run_id"] == run_id:
+                    conn.execute(
+                        """
+                        UPDATE runs
+                        SET status = 'abandoned', finished_at = ?,
+                            exit_reason = 'lease_expired', updated_at = ?
+                        WHERE id = ? AND status = 'claimed'
+                        """,
+                        (now_text, now_text, run_id),
+                    )
+                    conn.execute(
+                        """
+                        UPDATE jobs
+                        SET state = 'scheduled', lease_run_id = NULL,
+                            lease_expires_at = NULL, updated_at = ?
+                        WHERE id = ? AND lease_run_id = ?
+                        """,
+                        (now_text, row["job_id"], run_id),
+                    )
+                return None
+            cursor = conn.execute(
+                """
+                UPDATE runs
+                SET status = 'running', started_at = ?, updated_at = ?
+                WHERE id = ? AND status = 'claimed'
+                """,
                 (now_text, now_text, run_id),
             )
+        if not cursor.rowcount:
+            return None
         return self.get_run(run_id)
+
+    def run_owns_lease(self, run_id: str, *, now_text: str | None = None) -> bool:
+        run = self.get_run(run_id)
+        now_text = now_text or utc_now().isoformat()
+        now_dt = _parse_time(now_text)
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT lease_run_id, lease_expires_at, state
+                FROM jobs
+                WHERE id = ?
+                """,
+                (run["job_id"],),
+            ).fetchone()
+        return (
+            row is not None
+            and row["state"] == "running"
+            and row["lease_run_id"] == run_id
+            and row["lease_expires_at"] is not None
+            and now_dt is not None
+            and (_parse_time(row["lease_expires_at"]) or datetime.min.replace(tzinfo=timezone.utc)) > now_dt
+        )
+
+    def delivery_error_for_run(self, run_id: str) -> str | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT last_error FROM delivery_events
+                WHERE run_id = ?
+                  AND status IN ('failed', 'dead')
+                ORDER BY updated_at DESC
+                LIMIT 1
+                """,
+                (run_id,),
+            ).fetchone()
+        return None if row is None else str(row["last_error"] or "delivery failed")
 
     def complete_run(
         self,
@@ -559,49 +1029,133 @@ class StateStore:
         error: str | None,
         next_run_at: str | None,
         completed: bool,
+        delivery_error: str | None = None,
     ) -> dict[str, Any]:
         run = self.get_run(run_id)
         now_text = utc_now().isoformat()
+        now_dt = _parse_time(now_text)
         run_status = "succeeded" if success else "failed"
         job_state = "completed" if completed else "scheduled"
+        late_completion = False
         with self._connect() as conn:
-            conn.execute(
-                """
-                UPDATE runs
-                SET status = ?, finished_at = ?, output_path = ?, final_response = ?,
-                    error = ?, updated_at = ?
-                WHERE id = ?
-                """,
-                (run_status, now_text, output_path, final_response, error, now_text, run_id),
-            )
-            conn.execute(
-                """
-                UPDATE jobs
-                SET state = ?, enabled = ?, next_run_at = ?, lease_run_id = NULL,
-                    lease_expires_at = NULL, last_run_at = ?, last_status = ?,
-                    last_error = ?, updated_at = ?
-                WHERE id = ?
-                """,
-                (job_state, 0 if completed else 1, next_run_at, now_text, "ok" if success else "error", None if success else error, now_text, run["job_id"]),
-            )
+            owner = conn.execute(
+                "SELECT lease_run_id, lease_expires_at, state FROM jobs WHERE id = ?",
+                (run["job_id"],),
+            ).fetchone()
+            if (
+                owner is None
+                or owner["state"] != "running"
+                or owner["lease_run_id"] != run_id
+                or owner["lease_expires_at"] is None
+                or now_dt is None
+                or (_parse_time(owner["lease_expires_at"]) or datetime.min.replace(tzinfo=timezone.utc)) <= now_dt
+            ):
+                conn.execute(
+                    """
+                    UPDATE runs
+                    SET status = 'abandoned', finished_at = ?, output_path = ?,
+                        final_response = ?, error = ?, exit_reason = 'late_completion',
+                        updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (now_text, output_path, final_response, error, now_text, run_id),
+                )
+                if owner is not None and owner["lease_run_id"] == run_id:
+                    conn.execute(
+                        """
+                        UPDATE jobs
+                        SET state = 'scheduled', lease_run_id = NULL,
+                            lease_expires_at = NULL, updated_at = ?
+                        WHERE id = ? AND lease_run_id = ?
+                        """,
+                        (now_text, run["job_id"], run_id),
+                    )
+                late_completion = True
+            if not late_completion:
+                job_row = conn.execute("SELECT repeat_json FROM jobs WHERE id = ?", (run["job_id"],)).fetchone()
+                repeat = _json_loads(job_row["repeat_json"], {"times": None, "completed": 0}) if job_row else {"times": None, "completed": 0}
+                repeat["completed"] = int(repeat.get("completed") or 0) + 1
+                conn.execute(
+                    """
+                    UPDATE runs
+                    SET status = ?, finished_at = ?, output_path = ?, final_response = ?,
+                        error = ?, updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (run_status, now_text, output_path, final_response, error, now_text, run_id),
+                )
+                conn.execute(
+                    """
+                    UPDATE jobs
+                    SET state = ?, enabled = ?, next_run_at = ?, repeat_json = ?,
+                        lease_run_id = NULL,
+                        lease_expires_at = NULL, last_run_at = ?, last_status = ?,
+                        last_error = ?, last_delivery_error = ?, updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        job_state,
+                        0 if completed else 1,
+                        next_run_at,
+                        _json_dumps(repeat),
+                        now_text,
+                        "ok" if success else "error",
+                        None if success else error,
+                        delivery_error,
+                        now_text,
+                        run["job_id"],
+                    ),
+                )
         return {"run": self.get_run(run_id), "job": self.get_job(run["job_id"])}
+
+    def update_run_delivery_status(self, run_id: str) -> str | None:
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT status FROM delivery_events WHERE run_id = ?",
+                (run_id,),
+            ).fetchall()
+            if not rows:
+                delivery_status = None
+            else:
+                statuses = {str(row["status"]) for row in rows}
+                if "dead" in statuses:
+                    delivery_status = "failed"
+                elif "failed" in statuses:
+                    delivery_status = "retrying"
+                elif statuses <= {"delivered"}:
+                    delivery_status = "delivered"
+                elif "delivered" in statuses:
+                    delivery_status = "partial"
+                else:
+                    delivery_status = "pending"
+            conn.execute(
+                "UPDATE runs SET delivery_status = ?, updated_at = ? WHERE id = ?",
+                (delivery_status, utc_now().isoformat(), run_id),
+            )
+        return delivery_status
 
     def recover_expired_leases(self, *, now_text: str) -> int:
         now_actual = utc_now().isoformat()
+        now_dt = _parse_time(now_text)
+        if now_dt is None:
+            return 0
+        recovered = 0
         with self._connect() as conn:
             rows = conn.execute(
                 """
-                SELECT runs.id AS run_id, runs.job_id AS job_id
+                SELECT runs.id AS run_id, runs.job_id AS job_id,
+                       jobs.lease_expires_at AS lease_expires_at
                 FROM runs
                 JOIN jobs ON jobs.lease_run_id = runs.id
                 WHERE jobs.state = 'running'
                   AND jobs.lease_expires_at IS NOT NULL
-                  AND jobs.lease_expires_at <= ?
                   AND runs.status IN ('claimed', 'running')
                 """,
-                (now_text,),
             ).fetchall()
             for row in rows:
+                lease_expires_at = _parse_time(row["lease_expires_at"])
+                if lease_expires_at is None or lease_expires_at > now_dt:
+                    continue
                 conn.execute(
                     "UPDATE runs SET status = 'abandoned', finished_at = ?, exit_reason = 'lease_expired', updated_at = ? WHERE id = ?",
                     (now_actual, now_actual, row["run_id"]),
@@ -610,7 +1164,8 @@ class StateStore:
                     "UPDATE jobs SET state = 'scheduled', lease_run_id = NULL, lease_expires_at = NULL, updated_at = ? WHERE id = ?",
                     (now_actual, row["job_id"]),
                 )
-        return len(rows)
+                recovered += 1
+        return recovered
 
     def runs_for_job(self, job_id: str) -> list[dict[str, Any]]:
         with self._connect() as conn:

@@ -111,6 +111,30 @@ def _payload(job: dict[str, Any], result: JobRunResult, output_path: str, run_at
     }
 
 
+def _targets_for_job(job: dict[str, Any]):
+    from cron.delivery_targets import DeliveryIdentity, DeliveryTarget, DeliveryTargetError, parse_delivery_targets
+
+    stored_targets = job.get("delivery_targets")
+    if stored_targets is not None:
+        targets = [
+            DeliveryTarget(
+                raw=str(item.get("raw") or item.get("target_type") or ""),
+                target_type=str(item["target_type"]),
+                adapter_key=str(item["adapter_key"]),
+                address=item.get("address"),
+                thread_id=item.get("thread_id"),
+                metadata=dict(item.get("metadata") or {}),
+            )
+            for item in stored_targets
+        ]
+        if not targets:
+            raise DeliveryTargetError("delivery target is required")
+        return targets
+
+    origin = DeliveryIdentity.from_job_origin(job.get("origin"))
+    return parse_delivery_targets(job.get("deliver"), origin=origin)
+
+
 def enqueue_result(
     job: dict[str, Any],
     result: "JobRunResult",
@@ -126,11 +150,11 @@ def enqueue_result(
     run_at_text = run_at.isoformat() if isinstance(run_at, datetime) else str(run_at)
     payload = _payload(job, result, output_path, run_at_text)
 
-    from cron.delivery_targets import DeliveryIdentity, DeliveryTargetError, parse_delivery_targets
+    from cron.delivery_targets import DeliveryIdentity, DeliveryTargetError
 
     origin = DeliveryIdentity.from_job_origin(job.get("origin"))
     try:
-        targets = parse_delivery_targets(job.get("deliver"), origin=origin)
+        targets = _targets_for_job(job)
     except DeliveryTargetError as exc:
         targets = []
         error_text = str(exc)
@@ -142,6 +166,7 @@ def enqueue_result(
         events.append(
             store.enqueue(
                 job_id=str(job.get("id") or ""),
+                run_id=job.get("run_id"),
                 job_name=job.get("name"),
                 run_at=run_at_text,
                 target=str(job.get("deliver") or "origin"),
@@ -171,6 +196,7 @@ def enqueue_result(
             events.append(
                 store.enqueue(
                     job_id=str(job.get("id") or ""),
+                    run_id=job.get("run_id"),
                     job_name=job.get("name"),
                     run_at=run_at_text,
                     target=target.raw,
@@ -191,6 +217,7 @@ def enqueue_result(
         events.append(
             store.enqueue(
                 job_id=str(job.get("id") or ""),
+                run_id=job.get("run_id"),
                 job_name=job.get("name"),
                 run_at=run_at_text,
                 target=target.raw,
@@ -246,6 +273,11 @@ def process_due(
     from cron.state_store import StateStore
 
     registry = default_delivery_registry(webhook_sender=webhook_sender)
-    state_store = StateStore() if store is None else None
+    if store is None:
+        state_store = StateStore()
+    elif hasattr(store, "_store"):
+        state_store = store._store
+    else:
+        state_store = store
     dispatcher = DeliveryDispatcher(store=state_store, registry=registry)
     return dispatcher.dispatch_due(limit=limit)

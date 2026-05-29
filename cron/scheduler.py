@@ -173,14 +173,52 @@ def _process_claimed(
     job_id = str(job["id"])
     job["run_id"] = run["id"]
     try:
-        store.mark_run_started(run["id"])
+        if store.mark_run_started(run["id"]) is None:
+            return JobTickResult(job_id=job_id, success=False, error="run lease expired before start")
         result = job_runner(job)
+        if not store.run_owns_lease(run["id"]):
+            store.complete_run(
+                run["id"],
+                success=False,
+                output_path=None,
+                final_response=None,
+                error="run lease lost before delivery",
+                next_run_at=job.get("next_run_at"),
+                completed=False,
+            )
+            return JobTickResult(job_id=job_id, success=False, error="run lease lost before delivery")
         output_path = save_job_output(job_id, result.output_doc, run_at=run_at)
         from cron.delivery import enqueue_result, process_due
 
-        delivery_events = enqueue_result(job, result, output_path, run_at)
-        process_due(limit=20)
+        delivery_store = DeliveryStore(store.path)
+        delivery_events = enqueue_result(job, result, output_path, run_at, store=delivery_store)
+        if not store.run_owns_lease(run["id"]):
+            events = delivery_events if isinstance(delivery_events, list) else ([delivery_events] if delivery_events else [])
+            delivery_store.delete_events([str(event["id"]) for event in events])
+            store.complete_run(
+                run["id"],
+                success=False,
+                output_path=output_path,
+                final_response=result.final_response,
+                error="run lease lost before dispatch",
+                next_run_at=job.get("next_run_at"),
+                completed=False,
+            )
+            return JobTickResult(job_id=job_id, success=False, output_path=output_path, error="run lease lost before dispatch")
+        process_due(limit=20, store=delivery_store)
         next_run_at, completed = _next_run_after_completion(job, run_at)
+        delivery_error = None
+        if delivery_events:
+            events = delivery_events if isinstance(delivery_events, list) else [delivery_events]
+            for evt in events:
+                try:
+                    evt_data = delivery_store.get(evt["id"])
+                    err = _delivery_error_from_event(evt_data)
+                    if err:
+                        delivery_error = err
+                except KeyError:
+                    pass
+            store.update_run_delivery_status(run["id"])
         store.complete_run(
             run["id"],
             success=result.success,
@@ -189,30 +227,20 @@ def _process_claimed(
             error=result.error,
             next_run_at=next_run_at,
             completed=completed,
+            delivery_error=delivery_error,
         )
-        delivery_error = None
-        if delivery_events:
-            events = delivery_events if isinstance(delivery_events, list) else [delivery_events]
-            for evt in events:
-                try:
-                    evt_data = DeliveryStore().get(evt["id"])
-                    err = _delivery_error_from_event(evt_data)
-                    if err:
-                        delivery_error = err
-                except KeyError:
-                    pass
-        mark_job_run(job_id, success=result.success, error=result.error, run_at=run_at, delivery_error=delivery_error)
         return JobTickResult(job_id=job_id, success=result.success, output_path=output_path, error=result.error or delivery_error)
     except Exception as exc:
         logger.exception("Cron job %s failed during tick.", job_id)
+        next_run_at, completed = _next_run_after_completion(job, run_at)
         store.complete_run(
             run["id"],
             success=False,
             output_path=None,
             final_response=None,
             error=str(exc),
-            next_run_at=job.get("next_run_at"),
-            completed=False,
+            next_run_at=next_run_at,
+            completed=completed,
         )
         return JobTickResult(job_id=job_id, success=False, error=str(exc))
 

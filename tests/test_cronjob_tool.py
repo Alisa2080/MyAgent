@@ -325,7 +325,11 @@ def test_cronjob_update_accepts_supported_deliveries(monkeypatch, deliver):
     else:
         assert updated["updates"]["deliver"] == deliver
     if deliver == "origin":
-        assert updated["updates"]["origin"] == {"thread_id": "thread-1"}
+        assert updated["updates"]["origin"] == {
+            "source_type": "cli",
+            "session_id": "thread-1",
+            "thread_id": "thread-1",
+        }
     elif deliver == "webhook:https://example.invalid/hook":
         assert updated["updates"]["origin"] is None
 

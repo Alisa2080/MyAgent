@@ -95,6 +95,35 @@ def test_create_accepts_webhook_delivery(monkeypatch, tmp_path):
     assert calls[0][2]["deliver"] == "webhook:https://example.invalid/hook"
 
 
+def test_create_multi_target_origin_binds_session_thread(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+    import agent_cli.cron_commands as cron_commands
+
+    calls = []
+
+    def fake_action(action, *, origin_thread_id=None, **kwargs):
+        calls.append((action, origin_thread_id, kwargs))
+        return {
+            "success": True,
+            "job_id": "job-1",
+            "job": {"job_id": "job-1", "name": "report", "schedule": "30m"},
+            "message": "created",
+        }
+
+    monkeypatch.setattr(cron_commands, "run_cronjob_action", fake_action)
+
+    result = cron_commands.create_cron_job(
+        schedule="30m",
+        prompt="write report",
+        deliver="origin,local",
+        session_id="session-1",
+    )
+
+    assert result.exit_code == 0
+    assert calls[0][1] == "session-1"
+    assert calls[0][2]["deliver"] == "origin,local"
+
+
 def test_top_level_origin_delivery_is_rejected():
     import agent_cli.cron_commands as cron_commands
 
@@ -134,7 +163,46 @@ def test_update_origin_delivery_binds_session_thread(monkeypatch):
             {
                 "job_id": "job-1",
                 "deliver": "origin",
-                "origin": {"thread_id": "session-1"},
+                "origin": {
+                    "source_type": "cli",
+                    "session_id": "session-1",
+                    "thread_id": "session-1",
+                },
+            },
+        )
+    ]
+
+
+def test_update_multi_target_origin_binds_session_thread(monkeypatch):
+    import agent_cli.cron_commands as cron_commands
+
+    calls = []
+
+    def fake_action(action, *, origin_thread_id=None, **kwargs):
+        calls.append((action, origin_thread_id, kwargs))
+        return {"success": True, "job": {"job_id": "job-1"}}
+
+    monkeypatch.setattr(cron_commands, "run_cronjob_action", fake_action)
+
+    result = cron_commands.update_cron_job(
+        job_id="job-1",
+        deliver="origin,local",
+        session_id="session-1",
+    )
+
+    assert result.exit_code == 0
+    assert calls == [
+        (
+            "update",
+            "session-1",
+            {
+                "job_id": "job-1",
+                "deliver": "origin,local",
+                "origin": {
+                    "source_type": "cli",
+                    "session_id": "session-1",
+                    "thread_id": "session-1",
+                },
             },
         )
     ]
@@ -168,6 +236,8 @@ def test_status_renders_scheduler_and_paths(monkeypatch, tmp_path):
 
     assert result.exit_code == 0
     assert "Scheduler: running" in result.text
+    assert "Cron sqlite:" in result.text
+    assert "Delivery adapters:" in result.text
     assert "Jobs: 1" in result.text
 
 
@@ -272,6 +342,23 @@ def test_cron_status_includes_delivery_queue(monkeypatch, tmp_path):
     assert "pending=1" in result.text
 
 
+def test_cron_status_includes_sqlite_state_counts_and_adapters(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    from agent_cli import cron_commands
+    from cron.jobs import create_job
+
+    create_job(prompt="write report", schedule="30m", deliver="local")
+    monkeypatch.setattr(cron_commands, "is_cron_scheduler_running", lambda: False)
+
+    result = cron_commands.cron_status()
+
+    assert result.exit_code == 0
+    assert "Cron sqlite:" in result.text
+    assert "Job states: scheduled=1" in result.text
+    assert "Delivery adapters: local, origin, webhook" in result.text
+
+
 def test_cron_doctor_reports_delivery_db(monkeypatch, tmp_path):
     monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
 
@@ -284,6 +371,36 @@ def test_cron_doctor_reports_delivery_db(monkeypatch, tmp_path):
 
     assert "delivery db" in result.text.lower()
     assert result.exit_code in {0, 1}
+
+
+def test_cron_doctor_accepts_multi_target_delivery(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    from agent_cli import cron_commands
+
+    monkeypatch.setattr(cron_commands, "is_cron_scheduler_running", lambda: True)
+    monkeypatch.setattr(
+        cron_commands,
+        "list_jobs",
+        lambda include_disabled=False: [
+            {
+                "id": "job-1",
+                "deliver": "origin,local",
+                "origin": {
+                    "source_type": "cli",
+                    "session_id": "session-1",
+                    "thread_id": "thread-1",
+                },
+                "next_run_at": "2026-05-28T10:00:00+00:00",
+            }
+        ],
+    )
+
+    result = cron_commands.cron_doctor()
+
+    assert "unsupported delivery target" not in result.text
+    assert "delivery invalid" not in result.text
+    assert result.exit_code == 0
 
 
 def test_cron_doctor_checks_subprocess_runner(monkeypatch, tmp_path):
@@ -353,6 +470,18 @@ def test_test_delivery_local(monkeypatch, tmp_path):
     assert result.exit_code == 0
     assert "test-delivery" in result.text
     assert "delivered" in result.text or "pending" in result.text
+
+
+def test_test_delivery_multi_target(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    from agent_cli import cron_commands
+
+    result = cron_commands.test_delivery(target="origin,local", session_id="session-1")
+
+    assert result.exit_code == 0
+    assert "target=origin" in result.text
+    assert "target=local" in result.text
 
 
 def test_test_delivery_dead_target_returns_exit_code_2(monkeypatch, tmp_path):

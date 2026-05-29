@@ -89,6 +89,86 @@ def test_webhook_success(monkeypatch, tmp_path):
     assert DeliveryStore().get(event["id"])["status"] == "delivered"
 
 
+def test_bare_webhook_dispatch_uses_env_url(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+    monkeypatch.setenv("AGENT_CRON_WEBHOOK_URL", "https://example.invalid/env-hook")
+    sent = []
+
+    def fake_post(url, payload, timeout=10):
+        sent.append((url, payload, timeout))
+        return 204, "ok"
+
+    from cron.delivery import JobRunResult, enqueue_result, process_due
+    from cron.delivery_store import DeliveryStore
+
+    event = enqueue_result(
+        {"id": "job-1", "name": "Daily", "deliver": "webhook"},
+        JobRunResult(success=True, output_doc="# out", final_response="done"),
+        "/tmp/out.md",
+        "2026-05-28T10:00:00+00:00",
+    )
+    summary = process_due(limit=10, webhook_sender=fake_post)
+
+    assert summary["delivered"] == 1
+    assert sent[0][0] == "https://example.invalid/env-hook"
+    assert DeliveryStore().get(event["id"])["address"] == "https://example.invalid/env-hook"
+
+
+def test_enqueue_result_uses_stored_delivery_targets(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+    monkeypatch.setenv("AGENT_CRON_WEBHOOK_URL", "https://example.invalid/create-hook")
+    sent = []
+
+    from cron.delivery import JobRunResult, enqueue_result, process_due
+    from cron.delivery_store import DeliveryStore
+    from cron.jobs import create_job
+
+    job = create_job(prompt="write report", schedule="30m", deliver="webhook")
+    monkeypatch.setenv("AGENT_CRON_WEBHOOK_URL", "https://example.invalid/changed-hook")
+
+    event = enqueue_result(
+        job,
+        JobRunResult(success=True, output_doc="# out", final_response="done"),
+        "/tmp/out.md",
+        "2026-05-28T10:00:00+00:00",
+    )
+    summary = process_due(
+        limit=10,
+        webhook_sender=lambda url, payload, timeout=10: sent.append(url) or (204, "ok"),
+    )
+
+    assert summary["delivered"] == 1
+    assert sent == ["https://example.invalid/create-hook"]
+    assert DeliveryStore().get(event["id"])["address"] == "https://example.invalid/create-hook"
+
+
+def test_process_due_uses_supplied_store(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path / "home"))
+    sent = []
+
+    def fake_post(url, payload, timeout=10):
+        sent.append((url, payload, timeout))
+        return 204, "ok"
+
+    from cron.delivery import JobRunResult, enqueue_result, process_due
+    from cron.delivery_store import DeliveryStore
+
+    store = DeliveryStore(tmp_path / "custom.sqlite3")
+    event = enqueue_result(
+        {"id": "job-1", "name": "Daily", "deliver": "webhook:https://example.invalid/hook"},
+        JobRunResult(success=True, output_doc="# out", final_response="done"),
+        "/tmp/out.md",
+        "2026-05-28T10:00:00+00:00",
+        store=store,
+    )
+
+    summary = process_due(limit=10, store=store, webhook_sender=fake_post)
+
+    assert summary["delivered"] == 1
+    assert sent[0][0] == "https://example.invalid/hook"
+    assert store.get(event["id"])["status"] == "delivered"
+
+
 def test_webhook_4xx_marks_dead(monkeypatch, tmp_path):
     monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
 
@@ -234,3 +314,37 @@ def test_enqueue_result_creates_event_per_delivery_target(monkeypatch, tmp_path)
         ("webhook", "webhook", "https://example.invalid/hook"),
         ("local", "local", None),
     ]
+
+
+def test_dispatcher_updates_run_delivery_status(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    from cron.delivery import JobRunResult, enqueue_result, process_due
+    from cron.jobs import create_job, update_job
+    from cron.state_store import StateStore
+
+    job = create_job(
+        prompt="write report",
+        schedule="30m",
+        name="Daily",
+        deliver="webhook:https://example.invalid/hook",
+    )
+    update_job(job["id"], {"next_run_at": "2026-05-28T10:00:00+00:00"})
+    store = StateStore()
+    claimed = store.claim_due_jobs(now_text="2026-05-28T10:00:00+00:00", limit=1)[0]
+    claimed_job = dict(claimed["job"])
+    claimed_job["run_id"] = claimed["run"]["id"]
+
+    enqueue_result(
+        claimed_job,
+        JobRunResult(success=True, output_doc="# out", final_response="done"),
+        "/tmp/out.md",
+        "2026-05-28T10:00:00+00:00",
+    )
+    summary = process_due(
+        limit=10,
+        webhook_sender=lambda url, payload, timeout=10: (204, "ok"),
+    )
+
+    assert summary["delivered"] == 1
+    assert store.get_run(claimed["run"]["id"])["delivery_status"] == "delivered"

@@ -153,6 +153,27 @@ def _normalize_enabled_toolsets(value: Any) -> list[str] | None:
     return normalized or None
 
 
+def _normalize_delivery_config(job: dict[str, Any]) -> dict[str, Any]:
+    from cron.delivery_registry import default_delivery_registry
+    from cron.delivery_targets import DeliveryIdentity
+
+    normalized = dict(job)
+    origin = DeliveryIdentity.from_job_origin(normalized.get("origin"))
+    deliver = normalized.get("deliver") or ("origin" if origin else "local")
+    validation = default_delivery_registry().validate_targets(
+        deliver,
+        origin=origin,
+        job=normalized,
+    )
+    if not validation.ok:
+        raise ValueError(validation.error or f"unsupported delivery target: {deliver}")
+    normalized["deliver"] = deliver
+    normalized["delivery_targets"] = [target.to_json() for target in validation.targets]
+    if all(target.target_type != "origin" for target in validation.targets):
+        normalized["origin"] = None
+    return normalized
+
+
 def _store():
     from cron.state_store import StateStore
 
@@ -164,13 +185,7 @@ def load_jobs() -> list[dict[str, Any]]:
 
 
 def save_jobs(jobs: list[dict[str, Any]]) -> None:
-    store = _store()
-    existing_ids = {job["id"] for job in store.list_jobs(include_disabled=True)}
-    for job in jobs:
-        if job.get("id") in existing_ids:
-            store.update_job(str(job["id"]), job)
-        else:
-            store.create_job(job)
+    _store().replace_jobs(jobs)
 
 
 def list_jobs(include_disabled: bool = False) -> list[dict[str, Any]]:
@@ -341,6 +356,7 @@ def create_job(
         "base_url": base_url or None,
         "created_at": current.isoformat(),
     }
+    job = _normalize_delivery_config(job)
 
     return copy.deepcopy(_store().create_job(job))
 
@@ -350,6 +366,10 @@ def update_job(job_id: str, updates: dict[str, Any]) -> dict[str, Any]:
     if existing is None:
         raise KeyError(f"Cron job not found: {job_id}")
     normalized = _normalize_updates(updates, existing)
+    if "deliver" in normalized or "origin" in normalized:
+        merged = dict(existing)
+        merged.update(normalized)
+        normalized = _normalize_delivery_config(merged)
     return copy.deepcopy(_store().update_job(job_id, normalized))
 
 
@@ -370,20 +390,18 @@ def pause_job(job_id: str, reason: str | None = None) -> dict[str, Any]:
 
 
 def resume_job(job_id: str) -> dict[str, Any]:
-    with _jobs_file_lock:
-        jobs = load_jobs()
-        index = _find_job_index(jobs, job_id)
-        job = jobs[index]
-        schedule = job.get("schedule")
-        return _update_job_locked(
-            jobs,
-            index,
-            {
-                "enabled": True,
-                "state": "scheduled",
-                "next_run_at": compute_next_run(schedule) if schedule else None,
-            },
-        )
+    job = get_job(job_id)
+    if job is None:
+        raise KeyError(f"Cron job not found: {job_id}")
+    schedule = job.get("schedule")
+    return update_job(
+        job_id,
+        {
+            "enabled": True,
+            "state": "scheduled",
+            "next_run_at": compute_next_run(schedule) if schedule else None,
+        },
+    )
 
 
 def trigger_job(job_id: str) -> dict[str, Any]:
@@ -453,26 +471,25 @@ def get_due_jobs(now_dt: datetime | None = None) -> list[dict[str, Any]]:
 
 
 def advance_next_run(job_id: str, run_at: datetime | None = None) -> dict[str, Any]:
-    with _jobs_file_lock:
-        jobs = load_jobs()
-        index = _find_job_index(jobs, job_id)
-        job = jobs[index]
+    job = get_job(job_id)
+    if job is None:
+        raise KeyError(f"Cron job not found: {job_id}")
 
-        schedule = job.get("schedule") or {}
-        effective_run_at = _ensure_aware(run_at or now())
-        kind = schedule.get("kind")
-        if kind == "once":
-            next_run_at = None
-        elif kind == "interval":
-            next_run_at = (
-                effective_run_at + timedelta(minutes=int(schedule["minutes"]))
-            ).isoformat()
-        elif kind == "cron":
-            next_run_at = compute_next_run(schedule, base=effective_run_at)
-        else:
-            raise ValueError(f"Unsupported schedule kind: {kind!r}")
+    schedule = job.get("schedule") or {}
+    effective_run_at = _ensure_aware(run_at or now())
+    kind = schedule.get("kind")
+    if kind == "once":
+        next_run_at = None
+    elif kind == "interval":
+        next_run_at = (
+            effective_run_at + timedelta(minutes=int(schedule["minutes"]))
+        ).isoformat()
+    elif kind == "cron":
+        next_run_at = compute_next_run(schedule, base=effective_run_at)
+    else:
+        raise ValueError(f"Unsupported schedule kind: {kind!r}")
 
-        return _update_job_locked(jobs, index, {"next_run_at": next_run_at})
+    return update_job(job_id, {"next_run_at": next_run_at})
 
 
 def mark_job_run(
@@ -482,36 +499,35 @@ def mark_job_run(
     run_at: datetime | None = None,
     delivery_error: str | None = None,
 ) -> dict[str, Any]:
-    with _jobs_file_lock:
-        jobs = load_jobs()
-        index = _find_job_index(jobs, job_id)
-        job = jobs[index]
+    job = get_job(job_id)
+    if job is None:
+        raise KeyError(f"Cron job not found: {job_id}")
 
-        repeat = _coerce_repeat_state(job.get("repeat"))
-        repeat["completed"] = int(repeat.get("completed") or 0) + 1
-        repeat_times = repeat.get("times")
-        completed = repeat_times is not None and repeat["completed"] >= int(
-            repeat_times
-        )
+    repeat = _coerce_repeat_state(job.get("repeat"))
+    repeat["completed"] = int(repeat.get("completed") or 0) + 1
+    repeat_times = repeat.get("times")
+    completed = repeat_times is not None and repeat["completed"] >= int(
+        repeat_times
+    )
 
-        schedule_kind = (job.get("schedule") or {}).get("kind")
-        if completed:
-            state = "completed"
-        elif success or schedule_kind in {"interval", "cron"}:
-            state = "scheduled"
-        else:
-            state = "error"
+    schedule_kind = (job.get("schedule") or {}).get("kind")
+    if completed:
+        state = "completed"
+    elif success or schedule_kind in {"interval", "cron"}:
+        state = "scheduled"
+    else:
+        state = "error"
 
-        updates = {
-            "last_run_at": _ensure_aware(run_at or now()).isoformat(),
-            "last_status": "ok" if success else "error",
-            "last_error": None if success else error,
-            "last_delivery_error": delivery_error,
-            "repeat": repeat,
-            "state": state,
-            "enabled": False if completed else job.get("enabled", True),
-        }
-        return _update_job_locked(jobs, index, updates)
+    updates = {
+        "last_run_at": _ensure_aware(run_at or now()).isoformat(),
+        "last_status": "ok" if success else "error",
+        "last_error": None if success else error,
+        "last_delivery_error": delivery_error,
+        "repeat": repeat,
+        "state": state,
+        "enabled": False if completed else job.get("enabled", True),
+    }
+    return update_job(job_id, updates)
 
 
 def save_job_output(
