@@ -16,28 +16,6 @@ from cron.delivery_store import DeliveryStore
 from cron.notifications import SILENT_MARKER
 
 
-@dataclass(frozen=True)
-class DeliveryTarget:
-    raw: str
-    target_type: str
-    target_id: str | None
-
-
-def parse_target(job: dict[str, Any]) -> DeliveryTarget:
-    raw = str(job.get("deliver") or "local").strip() or "local"
-    lowered = raw.lower()
-    if lowered == "local":
-        return DeliveryTarget(raw=raw, target_type="local", target_id=None)
-    if lowered == "origin":
-        thread_id = (job.get("origin") or {}).get("thread_id")
-        return DeliveryTarget(raw=raw, target_type="origin", target_id=str(thread_id) if thread_id else None)
-    if lowered == "webhook":
-        return DeliveryTarget(raw=raw, target_type="webhook", target_id=os.getenv("AGENT_CRON_WEBHOOK_URL"))
-    if lowered.startswith("webhook:"):
-        return DeliveryTarget(raw=raw, target_type="webhook", target_id=raw.split(":", 1)[1].strip() or None)
-    return DeliveryTarget(raw=raw, target_type="unsupported", target_id=None)
-
-
 def _private_webhook_error() -> str:
     return "webhook URL must not target private or local addresses unless AGENT_CRON_ALLOW_PRIVATE_WEBHOOKS=1"
 
@@ -109,30 +87,6 @@ def _payload(job: dict[str, Any], result: JobRunResult, output_path: str, run_at
         "error": result.error,
         "output_path": output_path,
     }
-
-
-def _targets_for_job(job: dict[str, Any]):
-    from cron.delivery_targets import DeliveryIdentity, DeliveryTarget, DeliveryTargetError, parse_delivery_targets
-
-    stored_targets = job.get("delivery_targets")
-    if stored_targets is not None:
-        targets = [
-            DeliveryTarget(
-                raw=str(item.get("raw") or item.get("target_type") or ""),
-                target_type=str(item["target_type"]),
-                adapter_key=str(item["adapter_key"]),
-                address=item.get("address"),
-                thread_id=item.get("thread_id"),
-                metadata=dict(item.get("metadata") or {}),
-            )
-            for item in stored_targets
-        ]
-        if not targets:
-            raise DeliveryTargetError("delivery target is required")
-        return targets
-
-    origin = DeliveryIdentity.from_job_origin(job.get("origin"))
-    return parse_delivery_targets(job.get("deliver"), origin=origin)
 
 
 def enqueue_result(
