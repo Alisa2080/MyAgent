@@ -141,6 +141,9 @@ class DeliveryStore:
     def stats(self) -> dict[str, int]:
         return self._store.delivery_stats()
 
+    def origin_pending_count(self) -> int:
+        return self._store.origin_pending_count()
+
     def pending_origin_events(self, thread_id: str, *, limit: int = 10) -> list[dict[str, Any]]:
         return self._store.pending_origin_events(str(thread_id), limit=limit)
 

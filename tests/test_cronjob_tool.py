@@ -680,6 +680,87 @@ def test_cronjob_tool_uses_shared_action_helper(monkeypatch):
     assert "ok" in str(message.content)
 
 
+def test_cronjob_public_tool_preserves_gateway_origin_identity(monkeypatch):
+    cronjob_tool = _cronjob_tool()
+    captured = {}
+
+    def fake_create_job(**kwargs):
+        captured.update(kwargs)
+        return _job(skills=[], prompt=kwargs["prompt"], workdir=None, last_run_at=None, last_status=None)
+
+    runtime = SimpleNamespace(
+        config={
+            "configurable": {
+                "source_type": "gateway",
+                "platform": "slack",
+                "chat_id": "C123",
+                "session_id": "gateway-session-1",
+            }
+        }
+    )
+    monkeypatch.setattr(cronjob_tool, "create_job", fake_create_job)
+
+    result = cronjob_tool.cronjob.func(
+        action="create",
+        runtime=runtime,
+        prompt="write report",
+        schedule="30m",
+        deliver="origin",
+    )
+
+    assert "created" in str(result.content).lower()
+    assert captured["origin"] == {
+        "source_type": "gateway",
+        "platform": "slack",
+        "chat_id": "C123",
+        "session_id": "gateway-session-1",
+    }
+
+
+def test_cronjob_create_accepts_web_origin_without_thread(monkeypatch):
+    cronjob_tool = _cronjob_tool()
+    created = {}
+
+    def fake_create_job(**kwargs):
+        created.update(kwargs)
+        return _job(skills=[], prompt=kwargs["prompt"], workdir=None, last_run_at=None, last_status=None)
+
+    runtime = SimpleNamespace(config={"configurable": {"source_type": "web", "session_id": "web-session-1"}})
+    monkeypatch.setattr(cronjob_tool, "create_job", fake_create_job)
+
+    result = cronjob_tool._cronjob_impl(
+        action="create",
+        prompt="write report",
+        schedule="30m",
+        deliver="origin",
+        runtime=runtime,
+    )
+
+    assert result["success"] is True
+    assert created["origin"] == {
+        "source_type": "web",
+        "session_id": "web-session-1",
+    }
+
+
+def test_cronjob_unsupported_delivery_lists_known_adapters():
+    cronjob_tool = _cronjob_tool()
+
+    result = cronjob_tool._cronjob_impl(
+        action="create",
+        prompt="write report",
+        schedule="30m",
+        deliver="telegram:123",
+        runtime=None,
+    )
+
+    assert result["success"] is False
+    assert result["code"] == "unsupported_delivery"
+    assert "unsupported delivery target: telegram:123" in result["error"]
+    assert "known adapters:" in result["error"]
+    assert "webhook" in result["error"]
+
+
 def test_cronjob_create_captures_gateway_origin_identity(monkeypatch):
     cronjob_tool = _cronjob_tool()
     created = {}

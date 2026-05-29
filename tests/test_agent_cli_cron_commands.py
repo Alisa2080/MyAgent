@@ -241,6 +241,29 @@ def test_status_renders_scheduler_and_paths(monkeypatch, tmp_path):
     assert "Jobs: 1" in result.text
 
 
+def test_delivery_stats_lines_labels_origin_poll_pending(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    import agent_cli.cron_commands as cron_commands
+    from cron.delivery import JobRunResult, enqueue_result
+
+    enqueue_result(
+        {
+            "id": "job-origin",
+            "name": "Origin",
+            "deliver": "origin",
+            "origin": {"source_type": "cli", "session_id": "session-1", "thread_id": "thread-1"},
+        },
+        JobRunResult(success=True, output_doc="# out", final_response="done"),
+        "/tmp/out.md",
+        "2026-05-28T10:00:00+00:00",
+    )
+
+    lines = cron_commands._delivery_stats_lines()
+
+    assert "Origin poll pending: 1" in lines
+
+
 def test_status_includes_subprocess_timeout_when_subprocess_mode(monkeypatch, tmp_path):
     monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
     monkeypatch.setenv("AGENT_CRON_RUNNER_MODE", "subprocess")

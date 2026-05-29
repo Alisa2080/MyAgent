@@ -664,6 +664,16 @@ class StateStore:
             ).fetchall()
         return [dict(row) for row in rows]
 
+    def origin_pending_count(self) -> int:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT COUNT(*) AS count FROM delivery_events
+                WHERE adapter_key = 'origin' AND status = 'pending'
+                """
+            ).fetchone()
+        return int(row["count"])
+
     def claim_due_delivery_events(self, *, limit: int = 20, adapter_keys: set[str] | None = None) -> list[dict[str, Any]]:
         now_text = utc_now().isoformat()
         now_dt = _parse_time(now_text)

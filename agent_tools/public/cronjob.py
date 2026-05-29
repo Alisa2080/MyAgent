@@ -79,12 +79,13 @@ def _runtime_thread_id(runtime: ToolRuntime | None) -> str | None:
 def run_cronjob_action(
     action: str,
     *,
+    runtime: ToolRuntime | None = None,
     origin_thread_id: str | None = None,
     **kwargs: Any,
 ) -> dict[str, Any]:
     return _cronjob_impl(
         action=action,
-        runtime=None,
+        runtime=runtime,
         origin_thread_id=origin_thread_id,
         **kwargs,
     )
@@ -185,7 +186,8 @@ def _validate_delivery(deliver: Any, *, origin: dict[str, Any] | None) -> dict[s
     from cron.delivery_registry import default_delivery_registry
     from cron.delivery_targets import DeliveryIdentity
 
-    validation = default_delivery_registry().validate_targets(
+    registry = default_delivery_registry()
+    validation = registry.validate_targets(
         str(deliver),
         origin=DeliveryIdentity.from_job_origin(origin),
         job={},
@@ -193,10 +195,14 @@ def _validate_delivery(deliver: Any, *, origin: dict[str, Any] | None) -> dict[s
     if validation.ok:
         return None
     code = "invalid_webhook" if validation.error and "webhook URL" in validation.error else "unsupported_delivery"
+    error = validation.error or f"Unsupported delivery target: {deliver}"
+    if code == "unsupported_delivery":
+        known = ", ".join(registry.adapter_keys()) or "-"
+        error = f"{error} (known adapters: {known})"
     return {
         "success": False,
         "code": code,
-        "error": validation.error or f"Unsupported delivery target: {deliver}",
+        "error": error,
     }
 
 
@@ -272,14 +278,13 @@ def _cronjob_impl(
             if script_error:
                 return script_error
 
-            thread_id = origin_thread_id or _runtime_thread_id(runtime)
-            if _deliver_mentions_origin(deliver) and not thread_id:
+            identity = _runtime_origin_identity(runtime, origin_thread_id)
+            if _deliver_mentions_origin(deliver) and identity is None:
                 return {
                     "success": False,
                     "code": "missing_origin_thread",
-                    "error": "deliver='origin' requires an active thread id.",
+                    "error": "deliver='origin' requires an active origin identity.",
                 }
-            identity = _runtime_origin_identity(runtime, origin_thread_id)
             origin = identity if identity is not None and (deliver is None or _deliver_mentions_origin(deliver)) else None
             delivery_error = _validate_delivery(deliver, origin=origin)
             if delivery_error:
@@ -355,14 +360,14 @@ def _cronjob_impl(
                 updates["repeat"] = _normalize_repeat(updates["repeat"])
 
             if _deliver_mentions_origin(updates.get("deliver")):
-                thread_id = origin_thread_id or _runtime_thread_id(runtime)
-                if not thread_id:
+                identity = _runtime_origin_identity(runtime, origin_thread_id)
+                if identity is None:
                     return {
                         "success": False,
                         "code": "missing_origin_thread",
-                        "error": "deliver='origin' requires an active thread id.",
+                        "error": "deliver='origin' requires an active origin identity.",
                     }
-                updates["origin"] = _runtime_origin_identity(runtime, origin_thread_id)
+                updates["origin"] = identity
             elif "deliver" in updates:
                 updates["origin"] = None
             delivery_error = _validate_delivery(updates.get("deliver"), origin=updates.get("origin"))
@@ -400,6 +405,7 @@ def cronjob(
     """Manage unattended scheduled cron jobs with local, origin, or webhook delivery."""
     result = run_cronjob_action(
         action=action,
+        runtime=runtime,
         origin_thread_id=_runtime_thread_id(runtime),
         job_id=job_id,
         prompt=prompt,
