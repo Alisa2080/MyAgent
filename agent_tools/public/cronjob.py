@@ -8,7 +8,7 @@ from langchain.tools import ToolRuntime, tool
 from langchain_core.messages import ToolMessage
 from pydantic import BaseModel, Field
 
-from agent_core.session_context import RuntimeContext
+from agent_core.session_context import RuntimeContext, origin_identity_from_runtime
 from agent_tools.shared.tool_result import tool_failure, tool_success
 from cron.jobs import (
     create_job,
@@ -232,6 +232,19 @@ def _origin_identity_from_thread(thread_id: str | None) -> dict[str, str] | None
     }
 
 
+def _runtime_origin_identity(runtime: ToolRuntime | None, origin_thread_id: str | None = None) -> dict[str, str] | None:
+    identity = origin_identity_from_runtime(runtime)
+    if identity is not None:
+        return identity
+    if origin_thread_id:
+        return {
+            "source_type": "cli",
+            "session_id": str(origin_thread_id),
+            "thread_id": str(origin_thread_id),
+        }
+    return None
+
+
 def _cronjob_impl(
     action: str,
     runtime: ToolRuntime | None = None,
@@ -263,14 +276,15 @@ def _cronjob_impl(
             if script_error:
                 return script_error
 
-            thread_id = origin_thread_id or _runtime_thread_id(runtime)
-            if _deliver_mentions_origin(deliver) and not thread_id:
+            origin = _runtime_origin_identity(runtime, origin_thread_id)
+            if _deliver_mentions_origin(deliver) and origin is None:
                 return {
                     "success": False,
                     "code": "missing_origin_thread",
-                    "error": "deliver='origin' requires an active thread id.",
+                    "error": "deliver='origin' requires an active origin identity.",
                 }
-            origin = _origin_identity_from_thread(thread_id) if thread_id and (deliver is None or _deliver_mentions_origin(deliver)) else None
+            if deliver is not None and not _deliver_mentions_origin(deliver):
+                origin = None
             delivery_error = _validate_delivery(deliver, origin=origin)
             if delivery_error:
                 return delivery_error
@@ -345,14 +359,14 @@ def _cronjob_impl(
                 updates["repeat"] = _normalize_repeat(updates["repeat"])
 
             if _deliver_mentions_origin(updates.get("deliver")):
-                thread_id = origin_thread_id or _runtime_thread_id(runtime)
-                if not thread_id:
+                origin = _runtime_origin_identity(runtime, origin_thread_id)
+                if origin is None:
                     return {
                         "success": False,
                         "code": "missing_origin_thread",
-                        "error": "deliver='origin' requires an active thread id.",
+                        "error": "deliver='origin' requires an active origin identity.",
                     }
-                updates["origin"] = _origin_identity_from_thread(thread_id)
+                updates["origin"] = origin
             elif "deliver" in updates:
                 updates["origin"] = None
             delivery_error = _validate_delivery(updates.get("deliver"), origin=updates.get("origin"))

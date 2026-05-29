@@ -171,3 +171,52 @@ def test_runtime_context_from_thread_id():
     assert ctx.thread_source == "fallback"
     assert ctx.has_thread is True
     assert ctx.is_default_task is False
+
+
+def test_runtime_context_extracts_cli_origin_identity_from_config_thread():
+    from agent_core.session_context import origin_identity_from_runtime
+
+    runtime = SimpleNamespace(config={"configurable": {"thread_id": "thread-1", "session_id": "session-1"}})
+
+    assert origin_identity_from_runtime(runtime) == {
+        "source_type": "cli",
+        "session_id": "session-1",
+        "thread_id": "thread-1",
+    }
+
+
+def test_runtime_context_extracts_gateway_origin_identity_from_config():
+    from agent_core.session_context import origin_identity_from_runtime
+
+    runtime = SimpleNamespace(
+        config={
+            "configurable": {
+                "source_type": "gateway",
+                "platform": "slack",
+                "chat_id": "C123",
+                "thread_id": "T456",
+                "session_id": "gateway-session-1",
+                "display_name": "ops",
+            }
+        }
+    )
+
+    assert origin_identity_from_runtime(runtime) == {
+        "source_type": "gateway",
+        "platform": "slack",
+        "chat_id": "C123",
+        "thread_id": "T456",
+        "session_id": "gateway-session-1",
+        "display_name": "ops",
+    }
+
+
+def test_runtime_context_extracts_web_origin_identity_from_config():
+    from agent_core.session_context import origin_identity_from_runtime
+
+    runtime = SimpleNamespace(config={"configurable": {"source_type": "web", "session_id": "web-session-1"}})
+
+    assert origin_identity_from_runtime(runtime) == {
+        "source_type": "web",
+        "session_id": "web-session-1",
+    }

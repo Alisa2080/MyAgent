@@ -72,7 +72,7 @@ def test_cronjob_create_captures_runtime_thread(monkeypatch):
         created.update(kwargs)
         return _job(skills=[], prompt=kwargs["prompt"], workdir=None, last_run_at=None, last_status=None)
 
-    runtime = SimpleNamespace(config={"configurable": {"thread_id": "thread-1"}})
+    runtime = SimpleNamespace(config={"configurable": {"thread_id": "thread-1", "session_id": "session-1"}})
     monkeypatch.setattr(cronjob_tool, "create_job", fake_create_job)
 
     result = cronjob_tool._cronjob_impl(
@@ -85,10 +85,73 @@ def test_cronjob_create_captures_runtime_thread(monkeypatch):
     assert result["success"] is True
     assert created["origin"] == {
         "source_type": "cli",
-        "session_id": "thread-1",
+        "session_id": "session-1",
         "thread_id": "thread-1",
     }
     assert created["deliver"] is None
+
+
+def test_cronjob_create_captures_gateway_origin_identity(monkeypatch):
+    cronjob_tool = _cronjob_tool()
+    created = {}
+
+    def fake_create_job(**kwargs):
+        created.update(kwargs)
+        return _job(skills=[], prompt=kwargs["prompt"], workdir=None, last_run_at=None, last_status=None)
+
+    runtime = SimpleNamespace(
+        config={
+            "configurable": {
+                "source_type": "gateway",
+                "platform": "slack",
+                "chat_id": "C123",
+                "thread_id": "T456",
+                "session_id": "gateway-session-1",
+            }
+        }
+    )
+    monkeypatch.setattr(cronjob_tool, "create_job", fake_create_job)
+
+    result = cronjob_tool._cronjob_impl(
+        action="create",
+        prompt="write report",
+        schedule="30m",
+        runtime=runtime,
+    )
+
+    assert result["success"] is True
+    assert created["origin"] == {
+        "source_type": "gateway",
+        "platform": "slack",
+        "chat_id": "C123",
+        "thread_id": "T456",
+        "session_id": "gateway-session-1",
+    }
+
+
+def test_cronjob_create_captures_web_origin_identity(monkeypatch):
+    cronjob_tool = _cronjob_tool()
+    created = {}
+
+    def fake_create_job(**kwargs):
+        created.update(kwargs)
+        return _job(skills=[], prompt=kwargs["prompt"], workdir=None, last_run_at=None, last_status=None)
+
+    runtime = SimpleNamespace(config={"configurable": {"source_type": "web", "session_id": "web-session-1"}})
+    monkeypatch.setattr(cronjob_tool, "create_job", fake_create_job)
+
+    result = cronjob_tool._cronjob_impl(
+        action="create",
+        prompt="write report",
+        schedule="30m",
+        runtime=runtime,
+    )
+
+    assert result["success"] is True
+    assert created["origin"] == {
+        "source_type": "web",
+        "session_id": "web-session-1",
+    }
 
 
 def test_cronjob_create_ignores_execution_info_thread_without_config_thread(monkeypatch):
