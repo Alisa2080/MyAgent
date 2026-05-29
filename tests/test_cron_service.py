@@ -36,6 +36,32 @@ def test_service_run_once_ticks_when_leader(monkeypatch, tmp_path):
     assert status["exit_reason"] == "once"
 
 
+def test_service_interval_seconds_accepts_float_and_clamps_minimum(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    from cron.service import CronService
+
+    float_interval = CronService(
+        interval_seconds=2.5,
+        lease_seconds=30,
+        owner_id="host:1:test",
+        pid=1,
+        hostname="host",
+        tick_fn=lambda: None,
+    )
+    clamped_interval = CronService(
+        interval_seconds=0.25,
+        lease_seconds=30,
+        owner_id="host:2:test",
+        pid=2,
+        hostname="host",
+        tick_fn=lambda: None,
+    )
+
+    assert float_interval.interval_seconds == 2.5
+    assert clamped_interval.interval_seconds == 1.0
+
+
 def test_service_run_once_skips_tick_when_follower(monkeypatch, tmp_path):
     monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
 
