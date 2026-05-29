@@ -330,7 +330,9 @@ def test_create_job_accepts_registered_platform_adapter_and_persists_target(jobs
 
     registry = default_delivery_registry()
     registry.register(FakeSlackAdapter())
-    monkeypatch.setattr("cron.delivery_registry.default_delivery_registry", lambda **kwargs: registry)
+    import cron.delivery_registry as delivery_registry
+
+    monkeypatch.setattr(delivery_registry, "default_delivery_registry", lambda **kwargs: registry)
 
     job = jobs_module.create_job(
         prompt="write a report",

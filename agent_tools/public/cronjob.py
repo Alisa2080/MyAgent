@@ -32,7 +32,10 @@ class CronJobInput(BaseModel):
     schedule: str | None = Field(default=None, description="Schedule such as 30m, every 2h, cron, or ISO timestamp.")
     name: str | None = Field(default=None, description="Optional job name.")
     repeat: int | None = Field(default=None, description="Optional repeat count; <=0 means forever.")
-    deliver: str | None = Field(default=None, description="Delivery target(s), comma-separated: local, origin, webhook:<url>.")
+    deliver: str | None = Field(
+        default=None,
+        description="Delivery target(s), comma-separated: local, origin, webhook:<url>, or platform:chat_id[:thread_id].",
+    )
     include_disabled: bool = Field(default=False, description="Include disabled jobs when listing.")
     skills: list[str] | None = Field(default=None, description="Ordered skill names to load before prompt.")
     model: str | None = Field(default=None, description="Stored for compatibility; ignored by first runner.")
