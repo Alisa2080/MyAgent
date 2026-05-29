@@ -452,3 +452,42 @@ def test_dispatcher_updates_run_delivery_status(monkeypatch, tmp_path):
 
     assert summary["delivered"] == 1
     assert store.get_run(claimed["run"]["id"])["delivery_status"] == "delivered"
+
+
+def test_process_due_uses_registry_factory_for_platform_adapter(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    from cron.delivery import JobRunResult, enqueue_result, process_due
+    from cron.delivery_adapters import AdapterValidation, DeliveryResult
+    from cron.delivery_store import DeliveryStore
+    import cron.delivery_registry as delivery_registry
+
+    delivered = []
+
+    class FakeSlackAdapter:
+        key = "slack"
+        active_dispatch = True
+
+        def validate(self, target, job):
+            return AdapterValidation(True)
+
+        def deliver(self, event, job, run):
+            delivered.append(event)
+            return DeliveryResult(True)
+
+    delivery_registry.clear_delivery_adapter_factories()
+    delivery_registry.register_delivery_adapter_factory(lambda **kwargs: FakeSlackAdapter())
+    try:
+        event = enqueue_result(
+            {"id": "job-1", "name": "Daily", "deliver": "slack:C123"},
+            JobRunResult(success=True, output_doc="# out", final_response="done"),
+            "/tmp/out.md",
+            "2026-05-28T10:00:00+00:00",
+        )
+        summary = process_due(limit=10)
+    finally:
+        delivery_registry.clear_delivery_adapter_factories()
+
+    assert summary["delivered"] == 1
+    assert delivered[0]["adapter_key"] == "slack"
+    assert DeliveryStore().get(event["id"])["status"] == "delivered"
