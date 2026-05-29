@@ -1,10 +1,13 @@
 """Origin polling for external delivery targets."""
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from cron.delivery_store import DeliveryStore
+
+logger = logging.getLogger(__name__)
 
 
 class DeliveryPoller:
@@ -71,24 +74,28 @@ def poll_deliveries(
     total_collected = 0
 
     for poller in pollers:
-        poll_state = store.get_poll_state(poller.key)
-        cursor = poll_state["cursor"] if poll_state else None
+        try:
+            poll_state = store.get_poll_state(poller.key)
+            cursor = poll_state["cursor"] if poll_state else None
 
-        result = poller.poll(
-            store.target_for_adapter(poller.key),
-            store.job_for_adapter(poller.key),
-            cursor=cursor,
-            limit=limit,
-        )
+            result = poller.poll(
+                store.target_for_adapter(poller.key),
+                store.job_for_adapter(poller.key),
+                cursor=cursor,
+                limit=limit,
+            )
 
-        events = result.get("events") or []
-        for event in events:
-            store.enqueue_event(poller.key, event, origin=cursor)
+            events = result.get("events") or []
+            for event in events:
+                store.enqueue_event(poller.key, event, origin=cursor)
 
-        next_cursor = result.get("next_cursor")
-        store.save_poll_state(poller.key, next_cursor)
+            next_cursor = result.get("next_cursor")
+            store.save_poll_state(poller.key, next_cursor)
 
-        total_polled += 1
-        total_collected += len(events)
+            total_polled += 1
+            total_collected += len(events)
+        except Exception as e:
+            logger.error("Poller %s failed: %s", poller.key, e)
+            continue
 
     return {"polled": total_polled, "collected": total_collected}
