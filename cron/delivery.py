@@ -142,6 +142,7 @@ def enqueue_result(
     run_at: datetime | str,
     *,
     store: DeliveryStore | None = None,
+    registry: Any | None = None,
 ) -> dict[str, Any] | list[dict[str, Any]] | None:
     if result.success and str(result.final_response or "").lstrip().startswith(SILENT_MARKER):
         return None
@@ -150,69 +151,39 @@ def enqueue_result(
     run_at_text = run_at.isoformat() if isinstance(run_at, datetime) else str(run_at)
     payload = _payload(job, result, output_path, run_at_text)
 
-    from cron.delivery_targets import DeliveryIdentity, DeliveryTargetError
+    from cron.delivery_registry import default_delivery_registry
+    from cron.delivery_targets import DeliveryIdentity
 
     origin = DeliveryIdentity.from_job_origin(job.get("origin"))
-    try:
-        targets = _targets_for_job(job)
-    except DeliveryTargetError as exc:
-        targets = []
-        error_text = str(exc)
-    else:
-        error_text = None
+    registry = registry or default_delivery_registry()
+    validation = registry.validate_targets(job.get("deliver"), origin=origin, job=job)
 
     events = []
-    if error_text:
+    if not validation.ok:
+        fallback_target = None
+        if validation.targets:
+            fallback_target = validation.targets[0]
         events.append(
             store.enqueue(
                 job_id=str(job.get("id") or ""),
                 run_id=job.get("run_id"),
                 job_name=job.get("name"),
                 run_at=run_at_text,
-                target=str(job.get("deliver") or "origin"),
-                target_type="origin",
-                target_id=None,
-                address=origin.session_id if origin else None,
-                thread_id=origin.thread_id if origin else None,
-                origin=origin.to_json() if origin else None,
+                target=fallback_target.raw if fallback_target else str(job.get("deliver") or "local"),
+                target_type=fallback_target.target_type if fallback_target else "unsupported",
+                adapter_key=fallback_target.adapter_key if fallback_target else "unsupported",
+                target_id=fallback_target.address if fallback_target else None,
+                address=fallback_target.address if fallback_target else None,
+                thread_id=fallback_target.thread_id if fallback_target else None,
+                origin=fallback_target.metadata.get("origin") if fallback_target else (origin.to_json() if origin else None),
                 final_response=result.final_response,
                 output_path=output_path,
                 payload=payload,
                 status="dead",
-                last_error=error_text,
+                last_error=validation.error or "delivery target validation failed",
             )
         )
-    for target in targets:
-        target_error = None
-        if target.target_type == "webhook" and not target.address:
-            target_error = validate_webhook_url(None)
-        elif target.target_type == "webhook":
-            target_error = validate_webhook_url(target.address)
-        elif target.target_type == "platform":
-            from cron.delivery_registry import default_delivery_registry
-            if default_delivery_registry().get(target.adapter_key) is None:
-                target_error = f"unsupported delivery target: {target.raw}"
-        if target_error:
-            events.append(
-                store.enqueue(
-                    job_id=str(job.get("id") or ""),
-                    run_id=job.get("run_id"),
-                    job_name=job.get("name"),
-                    run_at=run_at_text,
-                    target=target.raw,
-                    target_type=target.target_type,
-                    target_id=target.address,
-                    address=target.address,
-                    thread_id=target.thread_id,
-                    origin=target.metadata.get("origin"),
-                    final_response=result.final_response,
-                    output_path=output_path,
-                    payload=payload,
-                    status="dead",
-                    last_error=target_error,
-                )
-            )
-            continue
+    for target in validation.targets if validation.ok else []:
         status = "delivered" if target.target_type == "local" else "pending"
         events.append(
             store.enqueue(
@@ -222,6 +193,7 @@ def enqueue_result(
                 run_at=run_at_text,
                 target=target.raw,
                 target_type=target.target_type,
+                adapter_key=target.adapter_key,
                 target_id=target.address,
                 address=target.address,
                 thread_id=target.thread_id,

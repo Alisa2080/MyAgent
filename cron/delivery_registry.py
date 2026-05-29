@@ -27,10 +27,26 @@ class DeliveryRegistry:
         return sorted(self._adapters)
 
     def validate_targets(self, deliver: str | None, *, origin: DeliveryIdentity | None, job: dict[str, Any]) -> DeliveryValidation:
-        try:
-            targets = parse_delivery_targets(deliver, origin=origin)
-        except DeliveryTargetError as exc:
-            return DeliveryValidation(False, [], str(exc))
+        stored_targets = job.get("delivery_targets")
+        if stored_targets is not None:
+            targets = [
+                DeliveryTarget(
+                    raw=str(item.get("raw") or item.get("target_type") or ""),
+                    target_type=str(item["target_type"]),
+                    adapter_key=str(item["adapter_key"]),
+                    address=item.get("address"),
+                    thread_id=item.get("thread_id"),
+                    metadata=dict(item.get("metadata") or {}),
+                )
+                for item in stored_targets
+            ]
+            if not targets:
+                return DeliveryValidation(False, [], "delivery target is required")
+        else:
+            try:
+                targets = parse_delivery_targets(deliver, origin=origin)
+            except DeliveryTargetError as exc:
+                return DeliveryValidation(False, [], str(exc))
         for target in targets:
             adapter = self.get(target.adapter_key)
             if adapter is None:
