@@ -286,6 +286,16 @@ def test_main_cron_serve_dispatches_service(monkeypatch, tmp_path, capsys):
     assert "serve exited" in capsys.readouterr().out
 
 
+def test_main_cron_serve_parser_defaults():
+    import agent_cli.main as main_module
+
+    args = main_module.build_parser().parse_args(["cron", "serve"])
+
+    assert args.interval == 60.0
+    assert args.lease_seconds == 180
+    assert args.once is False
+
+
 def test_main_invalid_profile_returns_code_2(monkeypatch, capsys):
     monkeypatch.delenv("AGENT_CLI_HOME", raising=False)
 

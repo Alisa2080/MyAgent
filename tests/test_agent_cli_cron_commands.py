@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import timedelta
 from types import SimpleNamespace
 
 
@@ -294,6 +295,104 @@ def test_cron_status_includes_service_state(monkeypatch, tmp_path):
     assert "Last tick: due=1 ran=1 succeeded=1 failed=0 skipped=0" in result.text
 
 
+def test_cron_status_includes_service_error_exit_and_lease(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    from agent_cli import cron_commands
+    from cron.jobs import now
+    from cron.leader import SchedulerLeaderLease
+    from cron.service_state import write_service_status
+
+    now_text = now().isoformat()
+    lease_state = SchedulerLeaderLease(lease_seconds=180).try_acquire_or_renew(
+        owner_id="host:1:abc",
+        pid=1,
+        hostname="host",
+        now_text=now_text,
+    )
+    write_service_status(
+        {
+            "process_state": "exited",
+            "leader_state": "leader",
+            "pid": 1,
+            "last_heartbeat_at": now_text,
+            "last_error": "RuntimeError: boom",
+            "exit_reason": "error",
+        }
+    )
+    monkeypatch.setattr(cron_commands, "list_jobs", lambda include_disabled=True: [])
+
+    result = cron_commands.cron_status()
+
+    assert "Last service error: RuntimeError: boom" in result.text
+    assert "Exit reason: error" in result.text
+    assert "Lease owner: host:1:abc" in result.text
+    assert f"Lease expires: {lease_state.expires_at}" in result.text
+
+
+def test_cron_status_handles_missing_and_malformed_status(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    from agent_cli import cron_commands
+    from cron.service_state import service_status_path
+
+    monkeypatch.setattr(cron_commands, "list_jobs", lambda include_disabled=True: [])
+
+    missing_result = cron_commands.cron_status()
+    assert "Scheduler service: unknown" in missing_result.text
+
+    service_status_path().write_text("{invalid", encoding="utf-8")
+    malformed_result = cron_commands.cron_status()
+    assert "Scheduler service: unknown" in malformed_result.text
+
+
+def test_cron_doctor_reports_fresh_service_heartbeat(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    from agent_cli import cron_commands
+    from cron.jobs import now
+    from cron.service_state import write_service_status
+
+    def fail_scheduler_check():
+        raise AssertionError("doctor must not depend on the REPL scheduler")
+
+    monkeypatch.setattr(
+        cron_commands,
+        "is_cron_scheduler_running",
+        fail_scheduler_check,
+        raising=False,
+    )
+    monkeypatch.setattr(cron_commands, "list_jobs", lambda include_disabled=False: [])
+    write_service_status(
+        {
+            "process_state": "running",
+            "leader_state": "leader",
+            "last_heartbeat_at": now().isoformat(),
+        }
+    )
+
+    result = cron_commands.cron_doctor()
+
+    assert "[ok] cron service heartbeat: fresh (leader)" in result.text
+    assert "scheduler is stopped" not in result.text
+
+
+def test_cron_doctor_warns_when_service_status_missing(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    from agent_cli import cron_commands
+
+    monkeypatch.setattr(cron_commands, "list_jobs", lambda include_disabled=False: [])
+
+    result = cron_commands.cron_doctor()
+
+    assert result.exit_code == 1
+    assert (
+        "[warn] cron service heartbeat: missing; start automatic scheduling "
+        "with `agent cron serve`"
+    ) in result.text
+
+
 def test_delivery_stats_lines_labels_origin_poll_pending(monkeypatch, tmp_path):
     monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
 
@@ -323,7 +422,6 @@ def test_status_includes_subprocess_timeout_when_subprocess_mode(monkeypatch, tm
     monkeypatch.setenv("AGENT_CRON_RUNNER_SUBPROCESS_TIMEOUT", "45")
     import agent_cli.cron_commands as cron_commands
 
-    monkeypatch.setattr(cron_commands, "is_cron_scheduler_running", lambda: True)
     monkeypatch.setattr(cron_commands, "display_cron_home", lambda: str(tmp_path))
     monkeypatch.setattr(cron_commands, "get_jobs_file", lambda: tmp_path / "jobs.json")
     monkeypatch.setattr(cron_commands, "list_jobs", lambda include_disabled=True: [])
@@ -408,7 +506,6 @@ def test_cron_status_includes_delivery_queue(monkeypatch, tmp_path):
         payload={"type": "cron_result"},
     )
 
-    monkeypatch.setattr(cron_commands, "is_cron_scheduler_running", lambda: False)
     monkeypatch.setattr(cron_commands, "list_jobs", lambda include_disabled=True: [])
 
     result = cron_commands.cron_status()
@@ -425,7 +522,6 @@ def test_cron_status_includes_sqlite_state_counts_and_adapters(monkeypatch, tmp_
     from cron.jobs import create_job
 
     create_job(prompt="write report", schedule="30m", deliver="local")
-    monkeypatch.setattr(cron_commands, "is_cron_scheduler_running", lambda: False)
 
     result = cron_commands.cron_status()
 
@@ -440,7 +536,6 @@ def test_cron_doctor_reports_delivery_db(monkeypatch, tmp_path):
 
     from agent_cli import cron_commands
 
-    monkeypatch.setattr(cron_commands, "is_cron_scheduler_running", lambda: False)
     monkeypatch.setattr(cron_commands, "list_jobs", lambda include_disabled=False: [])
 
     result = cron_commands.cron_doctor()
@@ -453,8 +548,17 @@ def test_cron_doctor_accepts_multi_target_delivery(monkeypatch, tmp_path):
     monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
 
     from agent_cli import cron_commands
+    from cron.jobs import now
+    from cron.service_state import write_service_status
 
-    monkeypatch.setattr(cron_commands, "is_cron_scheduler_running", lambda: True)
+    write_service_status(
+        {
+            "process_state": "running",
+            "leader_state": "leader",
+            "last_heartbeat_at": now().isoformat(),
+        }
+    )
+
     monkeypatch.setattr(
         cron_commands,
         "list_jobs",
@@ -486,7 +590,6 @@ def test_cron_doctor_checks_subprocess_runner(monkeypatch, tmp_path):
 
     from agent_cli import cron_commands
 
-    monkeypatch.setattr(cron_commands, "is_cron_scheduler_running", lambda: False)
     monkeypatch.setattr(cron_commands, "list_jobs", lambda include_disabled=False: [])
 
     result = cron_commands.cron_doctor()
@@ -509,7 +612,6 @@ def test_cron_doctor_reports_worker_help_failure(monkeypatch, tmp_path):
         stderr = b"worker help failed"
         stdout = b""
 
-    monkeypatch.setattr(cron_commands, "is_cron_scheduler_running", lambda: False)
     monkeypatch.setattr(cron_commands, "list_jobs", lambda include_disabled=False: [])
     monkeypatch.setattr(subprocess, "run", lambda *args, **kwargs: FailedHelp())
 
@@ -528,7 +630,6 @@ def test_cron_doctor_reports_invalid_jobs_json_without_raising(monkeypatch, tmp_
 
     get_jobs_file().parent.mkdir(parents=True, exist_ok=True)
     get_jobs_file().write_text("{invalid", encoding="utf-8")
-    monkeypatch.setattr(cron_commands, "is_cron_scheduler_running", lambda: False)
 
     result = cron_commands.cron_doctor()
 

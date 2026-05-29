@@ -5,7 +5,7 @@ import json
 import sys
 from typing import Any
 
-from agent_core.cron_lifecycle import is_cron_scheduler_running, tick as cron_tick
+from agent_core.cron_lifecycle import tick as cron_tick
 from cron.jobs import get_job, list_jobs
 from cron.paths import display_cron_home, get_jobs_file, get_output_dir, get_scripts_dir
 
@@ -276,6 +276,43 @@ def _check_line(status: str, message: str) -> str:
     return f"[{status}] {message}"
 
 
+def _add_service_heartbeat_check(add) -> None:
+    from cron.jobs import now
+    from cron.service_state import (
+        is_status_fresh,
+        read_service_status,
+        service_status_path,
+    )
+
+    try:
+        path = service_status_path()
+        status = read_service_status(path=path)
+    except Exception as exc:
+        add("warn", f"cron service heartbeat: unreadable ({exc})")
+        return
+
+    if status is None:
+        if path.exists():
+            add("warn", "cron service heartbeat: unreadable")
+        else:
+            add(
+                "warn",
+                "cron service heartbeat: missing; start automatic scheduling "
+                "with `agent cron serve`",
+            )
+        return
+
+    if is_status_fresh(
+        status,
+        now_text=now().isoformat(),
+        stale_after_seconds=180,
+    ):
+        leader_state = status.get("leader_state") or "unknown"
+        add("ok", f"cron service heartbeat: fresh ({leader_state})")
+    else:
+        add("warn", "cron service heartbeat: stale; automatic scheduling may be stopped")
+
+
 def cron_doctor() -> CronCommandResult:
     from cron.delivery import validate_webhook_url
     from cron.delivery_registry import default_delivery_registry
@@ -386,10 +423,7 @@ def cron_doctor() -> CronCommandResult:
     except Exception as exc:
         add("fail", f"delivery db error: {exc}")
 
-    if is_cron_scheduler_running():
-        add("ok", "scheduler is running")
-    else:
-        add("warn", "scheduler is stopped; jobs will only run via manual cron tick")
+    _add_service_heartbeat_check(add)
 
     try:
         active_jobs = list_jobs(include_disabled=False)
