@@ -1,12 +1,11 @@
 from __future__ import annotations
 
 import json
-import os
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from cron.paths import ensure_cron_dirs, get_cron_dir
+from cron.paths import atomic_write_json, ensure_cron_dirs, get_cron_dir
 
 
 def service_status_path() -> Path:
@@ -18,15 +17,7 @@ def write_service_status(status: dict[str, Any], *, path: Path | None = None) ->
     target_path = path or service_status_path()
     ensure_cron_dirs()
     target_path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = target_path.with_suffix(f"{target_path.suffix}.tmp")
-
-    with tmp_path.open("w", encoding="utf-8") as handle:
-        json.dump(status, handle, indent=2, sort_keys=True)
-        handle.write("\n")
-        handle.flush()
-        os.fsync(handle.fileno())
-
-    os.replace(tmp_path, target_path)
+    atomic_write_json(target_path, status)
 
 
 def read_service_status(*, path: Path | None = None) -> dict[str, Any] | None:
