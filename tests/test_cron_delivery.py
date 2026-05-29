@@ -21,6 +21,26 @@ class FakeSlackAdapter:
         return DeliveryResult(True)
 
 
+def test_local_delivery_is_synchronous_audit_event(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    from cron.delivery import JobRunResult, enqueue_result
+    from cron.delivery_store import DeliveryStore
+
+    event = enqueue_result(
+        {"id": "job-local", "name": "Local", "deliver": "local"},
+        JobRunResult(success=True, output_doc="# out", final_response="done"),
+        "/tmp/out.md",
+        "2026-05-28T10:00:00+00:00",
+    )
+
+    stored = DeliveryStore().get(event["id"])
+    assert stored["target_type"] == "local"
+    assert stored["adapter_key"] == "local"
+    assert stored["status"] == "delivered"
+    assert stored["next_attempt_at"] is None
+
+
 def test_enqueue_local_result_marks_delivered(monkeypatch, tmp_path):
     monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
 

@@ -31,19 +31,18 @@ class DeliveryAdapter(Protocol):
 
 class LocalDeliveryAdapter:
     key = "local"
+    active_dispatch = False
 
     def validate(self, target: Any, job: dict[str, Any]) -> AdapterValidation:
         return AdapterValidation(True)
 
     def deliver(self, event: dict[str, Any], job: dict[str, Any] | None, run: dict[str, Any] | None) -> DeliveryResult:
-        output_path = event.get("output_path")
-        if output_path and not Path(str(output_path)).exists():
-            return DeliveryResult(False, retryable=False, error=f"local output path does not exist: {output_path}")
-        return DeliveryResult(True)
+        return DeliveryResult(False, retryable=False, error="local delivery is completed synchronously when output is saved")
 
 
 class OriginDeliveryAdapter:
     key = "origin"
+    active_dispatch = False
 
     def validate(self, target: Any, job: dict[str, Any]) -> AdapterValidation:
         if not target.address:
@@ -51,16 +50,12 @@ class OriginDeliveryAdapter:
         return AdapterValidation(True)
 
     def deliver(self, event: dict[str, Any], job: dict[str, Any] | None, run: dict[str, Any] | None) -> DeliveryResult:
-        origin = json.loads(event["origin_json"]) if event.get("origin_json") else {}
-        if origin.get("source_type", "cli") != "cli":
-            return DeliveryResult(False, retryable=False, error="origin source is not deliverable without a live adapter")
-        if not event.get("address"):
-            return DeliveryResult(False, retryable=False, error="origin delivery requires session_id or thread_id")
-        return DeliveryResult(True)
+        return DeliveryResult(False, retryable=False, error="origin delivery waits for origin poll or host bridge pickup")
 
 
 class WebhookDeliveryAdapter:
     key = "webhook"
+    active_dispatch = True
 
     def __init__(self, sender: Callable[[str, dict[str, Any], int], tuple[int, str]] | None = None) -> None:
         from cron.delivery import default_webhook_sender

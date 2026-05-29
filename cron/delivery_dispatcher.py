@@ -13,7 +13,7 @@ class DeliveryDispatcher:
 
     def dispatch_due(self, *, limit: int = 20, adapter_keys: set[str] | None = None) -> dict[str, int]:
         summary = {"claimed": 0, "delivered": 0, "failed": 0, "dead": 0}
-        dispatch_keys = adapter_keys if adapter_keys is not None else {"local", "webhook"}
+        dispatch_keys = adapter_keys if adapter_keys is not None else set(self.registry.active_adapter_keys())
         self.store.recover_stale_delivery_events()
         if adapter_keys is None:
             for event in self.store.dead_letter_unsupported_delivery_events(
