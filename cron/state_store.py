@@ -152,6 +152,7 @@ class StateStore:
                 )
                 """
             )
+            self._init_poll_state_schema()
             self._migrate_schema(conn)
             conn.execute("CREATE INDEX IF NOT EXISTS idx_jobs_due ON jobs(state, enabled, next_run_at)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_jobs_lease ON jobs(lease_expires_at)")
@@ -1171,3 +1172,53 @@ class StateStore:
         with self._connect() as conn:
             rows = conn.execute("SELECT * FROM runs WHERE job_id = ? ORDER BY created_at", (job_id,)).fetchall()
         return [dict(row) for row in rows]
+
+    # --- Poll State Methods ---
+
+    def _init_poll_state_schema(self) -> None:
+        """Initialize the poll_state table if it doesn't exist."""
+        with self._connect() as conn:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS poll_state (
+                    adapter_key TEXT PRIMARY KEY,
+                    cursor TEXT,
+                    updated_at TEXT
+                )
+                """
+            )
+
+    def get_poll_state(self, adapter_key: str) -> dict[str, Any] | None:
+        """Retrieve the persisted poll state for an adapter.
+
+        Args:
+            adapter_key: The adapter key to look up.
+
+        Returns:
+            dict with adapter_key, cursor, updated_at, or None if not found.
+        """
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM poll_state WHERE adapter_key = ?",
+                (adapter_key,),
+            ).fetchone()
+        if row is None:
+            return None
+        return {
+            "adapter_key": row["adapter_key"],
+            "cursor": row["cursor"],
+            "updated_at": row["updated_at"],
+        }
+
+    def save_poll_state(self, adapter_key: str, cursor: str | None) -> None:
+        """Persist the poll state for an adapter.
+
+        Args:
+            adapter_key: The adapter key.
+            cursor: The next cursor value to save, or None if no more pages.
+        """
+        with self._connect() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO poll_state (adapter_key, cursor, updated_at) VALUES (?, ?, ?)",
+                (adapter_key, cursor, utc_now().isoformat()),
+            )

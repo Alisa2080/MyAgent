@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +18,91 @@ class DeliveryStore:
         self._store = StateStore(path, max_delivery_attempts=max_attempts)
         self.path = self._store.path
         self.max_attempts = max_attempts
+        self._init_poll_state_schema()
+
+    def _init_poll_state_schema(self) -> None:
+        """Initialize the poll_state table if it doesn't exist."""
+        self._store._init_poll_state_schema()
+
+    def enqueue_event(self, adapter_key: str, event: dict[str, Any], *, origin: str | None = None) -> dict[str, Any]:
+        """Enqueue a polled event into the delivery system.
+
+        Args:
+            adapter_key: The adapter that produced this event.
+            event: The event data.
+            origin: The cursor/pagination token when this event was polled.
+
+        Returns:
+            The enqueued delivery event.
+        """
+        import uuid
+
+        event_id = uuid.uuid4().hex
+        now_text = utc_now().isoformat()
+
+        return self._store.enqueue_delivery_event(
+            job_id=None,
+            run_id=None,
+            job_name=None,
+            run_at=now_text,
+            target=adapter_key,
+            target_type="origin",
+            adapter_key=adapter_key,
+            address=None,
+            thread_id=None,
+            origin={"cursor": origin, "event": event} if origin else {"event": event},
+            final_response=None,
+            output_path=None,
+            payload=event,
+            status="pending",
+        )
+
+    def target_for_adapter(self, adapter_key: str) -> Any:
+        """Get the delivery target for an adapter.
+
+        This returns None as poller targets are typically determined
+        from the adapter's configuration rather than from stored targets.
+        """
+        return None
+
+    def job_for_adapter(self, adapter_key: str) -> dict[str, Any]:
+        """Get a dummy job dict for an adapter.
+
+        Poll adapters typically don't need job configuration,
+        so we return an empty dict.
+        """
+        return {}
+
+    def get_poll_state(self, adapter_key: str) -> dict[str, Any] | None:
+        """Retrieve the persisted poll state for an adapter.
+
+        Args:
+            adapter_key: The adapter key to look up.
+
+        Returns:
+            dict with adapter_key, cursor, updated_at, or None if not found.
+        """
+        return self._store.get_poll_state(adapter_key)
+
+    def save_poll_state(self, adapter_key: str, cursor: str | None) -> None:
+        """Persist the poll state for an adapter.
+
+        Args:
+            adapter_key: The adapter key.
+            cursor: The next cursor value to save, or None if no more pages.
+        """
+        self._store.save_poll_state(adapter_key, cursor)
+
+    def register_delivery_adapter(self, adapter: Any) -> None:
+        """Register a delivery adapter with the default registry.
+
+        Args:
+            adapter: The adapter to register.
+        """
+        from cron.delivery_registry import default_delivery_registry
+
+        registry = default_delivery_registry()
+        registry.register(adapter)
 
     def enqueue(self, **kwargs: Any) -> dict[str, Any]:
         return self._store.enqueue_delivery_event(
