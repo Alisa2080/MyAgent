@@ -21,8 +21,8 @@ def write_service_status(status: dict[str, Any], *, path: Path | None = None) ->
 
 
 def read_service_status(*, path: Path | None = None) -> dict[str, Any] | None:
-    target_path = path or service_status_path()
     try:
+        target_path = path or service_status_path()
         payload = json.loads(target_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return None

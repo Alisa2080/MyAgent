@@ -66,6 +66,17 @@ def test_service_status_non_dict_json_returns_none(tmp_path):
     assert read_service_status(path=path) is None
 
 
+def test_service_status_path_error_returns_none(monkeypatch):
+    from cron import service_state
+
+    def raise_os_error():
+        raise OSError("nope")
+
+    monkeypatch.setattr(service_state, "service_status_path", raise_os_error)
+
+    assert service_state.read_service_status() is None
+
+
 def test_service_status_freshness(monkeypatch, tmp_path):
     monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
 
