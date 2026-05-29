@@ -38,7 +38,11 @@ class DeliveryRegistry:
         return sorted(self._adapters)
 
     def active_adapter_keys(self) -> list[str]:
-        return sorted(key for key, adapter in self._adapters.items() if getattr(adapter, "active_dispatch", True))
+        return sorted(
+            key
+            for key, adapter in self._adapters.items()
+            if bool(getattr(adapter, "active_dispatch", True))
+        )
 
     def validate_targets(
         self,

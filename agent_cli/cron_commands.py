@@ -204,6 +204,9 @@ def _delivery_stats_lines() -> list[str]:
         f"dead={stats.get('dead', 0)} "
         f"delivered={stats.get('delivered', 0)}"
     ]
+    origin_pending = store.origin_pending_count()
+    if origin_pending:
+        lines.append(f"Origin poll pending: {origin_pending}")
     errors = store.recent_errors(limit=1)
     if errors:
         error = errors[0]

@@ -79,12 +79,13 @@ def _runtime_thread_id(runtime: ToolRuntime | None) -> str | None:
 def run_cronjob_action(
     action: str,
     *,
+    runtime: ToolRuntime | None = None,
     origin_thread_id: str | None = None,
     **kwargs: Any,
 ) -> dict[str, Any]:
     return _cronjob_impl(
         action=action,
-        runtime=None,
+        runtime=runtime,
         origin_thread_id=origin_thread_id,
         **kwargs,
     )
@@ -404,6 +405,7 @@ def cronjob(
     """Manage unattended scheduled cron jobs with local, origin, or webhook delivery."""
     result = run_cronjob_action(
         action=action,
+        runtime=runtime,
         origin_thread_id=_runtime_thread_id(runtime),
         job_id=job_id,
         prompt=prompt,

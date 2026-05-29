@@ -119,6 +119,44 @@ def test_dispatcher_marks_unsupported_persisted_target_dead_by_default(monkeypat
     assert "unsupported delivery target" in stored["last_error"]
 
 
+def test_default_dispatcher_does_not_claim_local_or_origin_events(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    from cron.delivery import JobRunResult, enqueue_result
+    from cron.delivery_dispatcher import DeliveryDispatcher
+    from cron.delivery_store import DeliveryStore
+
+    local_event = enqueue_result(
+        {"id": "job-local", "name": "Local", "deliver": "local"},
+        JobRunResult(success=True, output_doc="# out", final_response="done"),
+        "/tmp/out.md",
+        "2026-05-28T10:00:00+00:00",
+    )
+    origin_event = enqueue_result(
+        {
+            "id": "job-origin",
+            "name": "Origin",
+            "deliver": "origin",
+            "origin": {"source_type": "cli", "session_id": "session-1", "thread_id": "thread-1"},
+        },
+        JobRunResult(success=True, output_doc="# out", final_response="done"),
+        "/tmp/out.md",
+        "2026-05-28T10:00:00+00:00",
+    )
+
+    summary = DeliveryDispatcher().dispatch_due(limit=10)
+
+    assert summary == {"claimed": 0, "delivered": 0, "failed": 0, "dead": 0}
+    assert DeliveryStore().get(local_event["id"])["status"] == "delivered"
+    assert DeliveryStore().get(origin_event["id"])["status"] == "pending"
+
+
+def test_default_registry_active_dispatch_keys_exclude_local_and_origin():
+    from cron.delivery_registry import default_delivery_registry
+
+    assert default_delivery_registry().active_adapter_keys() == ["webhook"]
+
+
 def test_dispatcher_leaves_origin_events_for_origin_poller(monkeypatch, tmp_path):
     monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
 

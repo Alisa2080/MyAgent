@@ -21,6 +21,26 @@ class FakeSlackAdapter:
         return DeliveryResult(True)
 
 
+def test_local_delivery_is_synchronous_audit_event(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    from cron.delivery import JobRunResult, enqueue_result
+    from cron.delivery_store import DeliveryStore
+
+    event = enqueue_result(
+        {"id": "job-local", "name": "Local", "deliver": "local"},
+        JobRunResult(success=True, output_doc="# out", final_response="done"),
+        "/tmp/out.md",
+        "2026-05-28T10:00:00+00:00",
+    )
+
+    stored = DeliveryStore().get(event["id"])
+    assert stored["target_type"] == "local"
+    assert stored["adapter_key"] == "local"
+    assert stored["status"] == "delivered"
+    assert stored["next_attempt_at"] is None
+
+
 def test_enqueue_local_result_marks_delivered(monkeypatch, tmp_path):
     monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
 
@@ -471,3 +491,55 @@ def test_process_due_uses_registry_factory_for_platform_adapter(monkeypatch, tmp
     assert summary["delivered"] == 1
     assert delivered[0]["adapter_key"] == "slack"
     assert DeliveryStore().get(event["id"])["status"] == "delivered"
+
+
+def test_process_due_does_not_duplicate_origin_events_from_previous_poll(tmp_path, monkeypatch):
+    import cron.origin_poller as origin_poller
+    from cron.delivery_store import DeliveryStore
+    from cron.delivery import process_due
+    from cron.delivery_adapters import DeliveryResult
+    import cron.delivery_registry as delivery_registry
+
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    events = []
+
+    class MockOriginAdapter:
+        key = "test-origin"
+
+        def validate(self, target, job):
+            from cron.delivery_adapters import AdapterValidation
+            return AdapterValidation(True)
+
+        def poll(self, target, job, *, cursor=None, limit=100):
+            if cursor is None:
+                return {
+                    "events": [
+                        {"id": "orig1", "type": "origin_event", "created_at": "2026-05-28T10:00:00Z"},
+                    ],
+                    "next_cursor": "page-1",
+                }
+            return {"events": [], "next_cursor": cursor}
+
+        def deliver(self, event, job, run):
+            events.append(event)
+            return DeliveryResult(False, retryable=False, error="not for me")
+
+    adapter = MockOriginAdapter()
+    delivery_registry.clear_delivery_adapter_factories()
+    delivery_registry.register_delivery_adapter_factory(lambda **kwargs: MockOriginAdapter())
+    try:
+        store = DeliveryStore()
+        store.register_delivery_adapter(adapter)
+
+        origin_poller.poll_deliveries([adapter], store=store, limit=100)
+        assert len(events) == 0
+
+        summary = process_due(limit=10)
+        assert summary["claimed"] == 1
+
+        events.clear()
+        origin_poller.poll_deliveries([adapter], store=store, limit=100)
+        assert len(events) == 0
+    finally:
+        delivery_registry.clear_delivery_adapter_factories()
