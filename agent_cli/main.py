@@ -157,6 +157,11 @@ def build_parser() -> argparse.ArgumentParser:
     cron_subparsers.add_parser("tick", parents=[public_options])
     cron_subparsers.add_parser("doctor", parents=[public_options])
 
+    cron_serve = cron_subparsers.add_parser("serve", parents=[public_options])
+    cron_serve.add_argument("--interval", type=float, default=60.0)
+    cron_serve.add_argument("--lease-seconds", type=int, default=180)
+    cron_serve.add_argument("--once", action="store_true")
+
     cron_test_delivery = cron_subparsers.add_parser("test-delivery", parents=[public_options])
     cron_test_delivery.add_argument("--target", required=True)
     cron_test_delivery.add_argument("--session-id", dest="session_id")
@@ -300,6 +305,12 @@ def _run_cron_command(args: argparse.Namespace):
         return cron_commands.run_tick()
     if subcommand == "doctor":
         return cron_commands.cron_doctor()
+    if subcommand == "serve":
+        return cron_commands.serve_cron(
+            interval_seconds=args.interval,
+            lease_seconds=args.lease_seconds,
+            once=args.once,
+        )
     if subcommand == "test-delivery":
         return cron_commands.test_delivery(
             target=args.target,

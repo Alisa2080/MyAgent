@@ -224,9 +224,7 @@ def test_top_level_update_origin_delivery_is_rejected():
 def test_status_renders_scheduler_and_paths(monkeypatch, tmp_path):
     monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
     import agent_cli.cron_commands as cron_commands
-    from unittest.mock import MagicMock
 
-    monkeypatch.setattr(cron_commands, "is_cron_scheduler_running", lambda: True)
     monkeypatch.setattr(cron_commands, "display_cron_home", lambda: str(tmp_path))
     monkeypatch.setattr(cron_commands, "get_jobs_file", lambda: tmp_path / "jobs.json")
     monkeypatch.setattr(cron_commands, "list_jobs", lambda include_disabled=True: [{"id": "a"}])
@@ -235,10 +233,65 @@ def test_status_renders_scheduler_and_paths(monkeypatch, tmp_path):
     result = cron_commands.cron_status()
 
     assert result.exit_code == 0
-    assert "Scheduler: running" in result.text
+    assert "Scheduler service:" in result.text
+    assert "Service status:" in result.text
     assert "Cron sqlite:" in result.text
     assert "Delivery adapters:" in result.text
     assert "Jobs: 1" in result.text
+
+
+def test_serve_cron_calls_service(monkeypatch):
+    from agent_cli import cron_commands
+
+    calls = []
+
+    monkeypatch.setattr(
+        "cron.service.serve",
+        lambda interval_seconds=60, lease_seconds=180, once=False: calls.append(
+            (interval_seconds, lease_seconds, once)
+        ) or 0,
+    )
+
+    result = cron_commands.serve_cron(interval_seconds=5, lease_seconds=20, once=True)
+
+    assert result.exit_code == 0
+    assert result.text == "Cron service exited."
+    assert calls == [(5, 20, True)]
+
+
+def test_cron_status_includes_service_state(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    from agent_cli import cron_commands
+    from cron.service_state import write_service_status
+
+    write_service_status(
+        {
+            "version": 1,
+            "service": "agent-cron",
+            "owner_id": "host:1:abc",
+            "pid": 1,
+            "hostname": "host",
+            "process_state": "running",
+            "leader_state": "leader",
+            "lease_owner": "host:1:abc",
+            "lease_expires_at": "2026-05-29T10:03:00+00:00",
+            "started_at": "2026-05-29T10:00:00+00:00",
+            "last_heartbeat_at": "2026-05-29T10:01:00+00:00",
+            "last_tick_started_at": "2026-05-29T10:01:00+00:00",
+            "last_tick_finished_at": "2026-05-29T10:01:01+00:00",
+            "last_tick": {"due": 1, "ran": 1, "succeeded": 1, "failed": 0, "skipped": 0},
+            "last_error": None,
+            "exit_reason": None,
+        }
+    )
+    monkeypatch.setattr(cron_commands, "list_jobs", lambda include_disabled=True: [])
+
+    result = cron_commands.cron_status()
+
+    assert "Scheduler service: running" in result.text
+    assert "Leader state: leader" in result.text
+    assert "Last tick: due=1 ran=1 succeeded=1 failed=0 skipped=0" in result.text
 
 
 def test_delivery_stats_lines_labels_origin_poll_pending(monkeypatch, tmp_path):

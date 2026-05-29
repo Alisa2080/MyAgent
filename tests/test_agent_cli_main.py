@@ -263,6 +263,29 @@ def test_main_doctor_reports_invalid_cli_home_without_traceback(
     assert "Traceback" not in captured.err
 
 
+def test_main_cron_serve_dispatches_service(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("AGENT_CLI_HOME", str(tmp_path))
+
+    import agent_cli.main as main_module
+    from agent_cli.cron_commands import CronCommandResult
+
+    calls = []
+
+    monkeypatch.setattr(
+        main_module.cron_commands,
+        "serve_cron",
+        lambda interval_seconds=60, lease_seconds=180, once=False: calls.append(
+            (interval_seconds, lease_seconds, once)
+        ) or CronCommandResult("serve exited", exit_code=0),
+    )
+
+    code = main_module.main(["cron", "serve", "--interval", "5", "--lease-seconds", "20", "--once"])
+
+    assert code == 0
+    assert calls == [(5.0, 20, True)]
+    assert "serve exited" in capsys.readouterr().out
+
+
 def test_main_invalid_profile_returns_code_2(monkeypatch, capsys):
     monkeypatch.delenv("AGENT_CLI_HOME", raising=False)
 

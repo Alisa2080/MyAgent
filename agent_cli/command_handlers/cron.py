@@ -18,7 +18,7 @@ def _usage() -> str:
             "  /cron edit <job_id> [--schedule S] [--prompt P]",
             "  /cron pause|resume|run|remove <job_id>",
             "  /cron status",
-            "  /cron tick",
+            "  /cron tick  # manual diagnostic; automatic scheduling uses agent cron serve",
             "  /cron doctor",
             "  /cron test-delivery --target local|origin [--session-id SESSION]",
         ]

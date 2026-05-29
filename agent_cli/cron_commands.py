@@ -157,6 +157,58 @@ def simple_job_action(action: str, *, job_id: str, reason: str | None = None) ->
     return CronCommandResult(f"{label} cron job {job.get('job_id', job_id)}.")
 
 
+def serve_cron(
+    *,
+    interval_seconds: float = 60,
+    lease_seconds: int = 180,
+    once: bool = False,
+) -> CronCommandResult:
+    from cron.service import serve
+
+    exit_code = serve(
+        interval_seconds=interval_seconds,
+        lease_seconds=lease_seconds,
+        once=once,
+    )
+    return CronCommandResult("Cron service exited.", exit_code=exit_code)
+
+
+def _service_status_lines() -> list[str]:
+    from cron.leader import SchedulerLeaderLease
+    from cron.service_state import read_service_status, service_status_path
+
+    path = service_status_path()
+    status = read_service_status(path=path) or {}
+    lines = [
+        f"Service status: {path}",
+        f"Scheduler service: {status.get('process_state') or 'unknown'}",
+        f"Service PID: {status.get('pid') or '-'}",
+        f"Leader state: {status.get('leader_state') or 'unknown'}",
+        f"Last heartbeat: {status.get('last_heartbeat_at') or '-'}",
+    ]
+
+    last_tick = status.get("last_tick")
+    if isinstance(last_tick, dict):
+        lines.append(
+            "Last tick: "
+            f"due={last_tick.get('due', 0)} "
+            f"ran={last_tick.get('ran', 0)} "
+            f"succeeded={last_tick.get('succeeded', 0)} "
+            f"failed={last_tick.get('failed', 0)} "
+            f"skipped={last_tick.get('skipped', 0)}"
+        )
+    if status.get("last_error"):
+        lines.append(f"Last service error: {status['last_error']}")
+    if status.get("exit_reason"):
+        lines.append(f"Exit reason: {status['exit_reason']}")
+
+    lease = SchedulerLeaderLease().current()
+    if lease is not None:
+        lines.append(f"Lease owner: {lease.owner_id}")
+        lines.append(f"Lease expires: {lease.expires_at}")
+    return lines
+
+
 def cron_status() -> CronCommandResult:
     from cron.delivery_registry import default_delivery_registry
     from cron.runner_client import runner_mode_diagnostic
@@ -169,7 +221,7 @@ def cron_status() -> CronCommandResult:
     counts = state_store.job_counts_by_state()
     count_text = ", ".join(f"{state}={count}" for state, count in sorted(counts.items())) or "-"
     lines = [
-        f"Scheduler: {'running' if is_cron_scheduler_running() else 'stopped'}",
+        *_service_status_lines(),
         f"Cron home: {display_cron_home()}",
         f"Cron sqlite: {state_store.path}",
         f"Runner mode: {mode_label}",
