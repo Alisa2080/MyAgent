@@ -286,6 +286,27 @@ def test_main_cron_serve_dispatches_service(monkeypatch, tmp_path, capsys):
     assert "serve exited" in capsys.readouterr().out
 
 
+def test_main_cron_serve_propagates_service_exit_code(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("AGENT_CLI_HOME", str(tmp_path))
+
+    import agent_cli.main as main_module
+    from agent_cli.cron_commands import CronCommandResult
+
+    monkeypatch.setattr(
+        main_module.cron_commands,
+        "serve_cron",
+        lambda interval_seconds=60, lease_seconds=180, once=False: CronCommandResult(
+            "serve failed",
+            exit_code=7,
+        ),
+    )
+
+    code = main_module.main(["cron", "serve", "--once"])
+
+    assert code == 7
+    assert "serve failed" in capsys.readouterr().out
+
+
 def test_main_cron_serve_parser_defaults():
     import agent_cli.main as main_module
 

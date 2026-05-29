@@ -212,3 +212,35 @@ def test_cron_command_is_registered_and_in_help():
     help_text = render_help()
     assert "/cron" in help_text
     assert "Manage scheduled cron jobs." in help_text
+
+
+def test_cron_chat_help_mentions_agent_cron_serve(monkeypatch):
+    import agent_cli.command_handlers.cron as cron_handler
+
+    monkeypatch.setattr(
+        cron_handler.cron_commands,
+        "list_cron_jobs",
+        lambda: cron_handler.cron_commands.CronCommandResult("No cron jobs."),
+    )
+
+    text = cron_handler.handle_cron(ctx=object(), arg="", command=None)
+
+    assert "agent cron serve" in text
+
+
+def test_cron_chat_serve_is_not_a_chat_command(monkeypatch):
+    import agent_cli.command_handlers.cron as cron_handler
+
+    def fail_serve_cron(**kwargs):
+        raise AssertionError("/cron serve must not start the cron service")
+
+    monkeypatch.setattr(
+        cron_handler.cron_commands,
+        "serve_cron",
+        fail_serve_cron,
+        raising=False,
+    )
+
+    text = cron_handler.handle_cron(ctx=object(), arg="serve", command=None)
+
+    assert "Unknown /cron command: serve" in text

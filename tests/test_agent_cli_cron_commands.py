@@ -260,6 +260,20 @@ def test_serve_cron_calls_service(monkeypatch):
     assert calls == [(5, 20, True)]
 
 
+def test_serve_cron_propagates_service_exit_code(monkeypatch):
+    from agent_cli import cron_commands
+
+    monkeypatch.setattr(
+        "cron.service.serve",
+        lambda interval_seconds=60, lease_seconds=180, once=False: 7,
+    )
+
+    result = cron_commands.serve_cron(interval_seconds=5, lease_seconds=20, once=True)
+
+    assert result.exit_code == 7
+    assert result.text == "Cron service exited."
+
+
 def test_cron_status_includes_service_state(monkeypatch, tmp_path):
     monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
 
