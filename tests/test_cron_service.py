@@ -184,6 +184,34 @@ def test_release_failure_preserves_tick_error(monkeypatch, tmp_path):
     assert "release exploded" not in status["last_error"]
 
 
+def test_release_failure_after_successful_tick_returns_error(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    from cron.service import CronService
+    from cron.service_state import read_service_status
+
+    service = CronService(
+        interval_seconds=1,
+        lease_seconds=30,
+        owner_id="host:1:test",
+        pid=1,
+        hostname="host",
+        tick_fn=lambda: SimpleNamespace(due=1, ran=1, succeeded=1, failed=0, skipped=0),
+        clock=lambda: "2026-05-29T10:00:00+00:00",
+        sleeper=lambda seconds: None,
+    )
+
+    def bad_release(_owner_id):
+        raise RuntimeError("release exploded")
+
+    monkeypatch.setattr(service.lease, "release", bad_release)
+
+    assert service.run(once=True) == 1
+    status = read_service_status()
+    assert status["process_state"] == "exited"
+    assert "release exploded" in status["last_error"]
+
+
 def test_follower_run_once_does_not_release_another_owners_lease(monkeypatch, tmp_path):
     monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
 

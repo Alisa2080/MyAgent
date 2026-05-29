@@ -115,6 +115,7 @@ class CronService:
             try:
                 self.lease.release(self.owner_id)
             except Exception as exc:  # pragma: no cover - best-effort shutdown
+                had_error = True
                 if not self.status["last_error"]:
                     self.status["last_error"] = f"{type(exc).__name__}: {exc}"
 
