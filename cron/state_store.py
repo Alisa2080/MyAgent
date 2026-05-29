@@ -351,6 +351,7 @@ class StateStore:
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             row = conn.execute("SELECT * FROM scheduler_leases WHERE name = ?", (name,)).fetchone()
+            now_dt = _parse_time(now_text)
             if row is None:
                 conn.execute(
                     """
@@ -372,20 +373,22 @@ class StateStore:
                     """,
                     (pid, hostname, now_text, expires_at, name, owner_id),
                 )
-            elif str(row["expires_at"]) <= now_text:
-                conn.execute(
-                    """
-                    UPDATE scheduler_leases
-                    SET owner_id = ?,
-                        pid = ?,
-                        hostname = ?,
-                        acquired_at = ?,
-                        heartbeat_at = ?,
-                        expires_at = ?
-                    WHERE name = ?
-                    """,
-                    (owner_id, pid, hostname, now_text, now_text, expires_at, name),
-                )
+            else:
+                expires_dt = _parse_time(row["expires_at"])
+                if expires_dt is None or (now_dt is not None and expires_dt <= now_dt):
+                    conn.execute(
+                        """
+                        UPDATE scheduler_leases
+                        SET owner_id = ?,
+                            pid = ?,
+                            hostname = ?,
+                            acquired_at = ?,
+                            heartbeat_at = ?,
+                            expires_at = ?
+                        WHERE name = ?
+                        """,
+                        (owner_id, pid, hostname, now_text, now_text, expires_at, name),
+                    )
             return dict(conn.execute("SELECT * FROM scheduler_leases WHERE name = ?", (name,)).fetchone())
 
     def release_scheduler_lease(self, name: str, owner_id: str) -> bool:
