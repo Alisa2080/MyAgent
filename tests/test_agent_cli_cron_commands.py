@@ -493,3 +493,44 @@ def test_test_delivery_dead_target_returns_exit_code_2(monkeypatch, tmp_path):
 
     assert result.exit_code == 2
     assert "status=dead" in result.text
+
+
+def test_cron_status_lists_registered_delivery_adapters(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    from agent_cli.cron_commands import cron_status
+    from cron.delivery_adapters import AdapterValidation, DeliveryResult
+    import cron.delivery_registry as delivery_registry
+
+    class FakeSlackAdapter:
+        key = "slack"
+        active_dispatch = True
+
+        def validate(self, target, job):
+            return AdapterValidation(True)
+
+        def deliver(self, event, job, run):
+            return DeliveryResult(True)
+
+    delivery_registry.clear_delivery_adapter_factories()
+    delivery_registry.register_delivery_adapter_factory(lambda **kwargs: FakeSlackAdapter())
+    try:
+        result = cron_status()
+    finally:
+        delivery_registry.clear_delivery_adapter_factories()
+
+    assert "Delivery adapters:" in result.text
+    assert "slack" in result.text
+
+
+def test_cron_doctor_lists_delivery_adapters(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    from agent_cli.cron_commands import cron_doctor
+
+    result = cron_doctor()
+
+    assert "delivery adapters:" in result.text
+    assert "local" in result.text
+    assert "origin" in result.text
+    assert "webhook" in result.text

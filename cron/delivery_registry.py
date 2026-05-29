@@ -96,3 +96,9 @@ def build_delivery_registry(*, webhook_sender=None, extra_adapters=None) -> Deli
 
 def default_delivery_registry(*, webhook_sender=None) -> DeliveryRegistry:
     return build_delivery_registry(webhook_sender=webhook_sender)
+
+
+def known_adapter_error(registry: DeliveryRegistry, error: str | None) -> str:
+    known = ", ".join(registry.adapter_keys()) or "-"
+    base = error or "unsupported delivery target"
+    return f"{base} (known adapters: {known})"

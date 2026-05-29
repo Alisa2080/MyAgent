@@ -182,10 +182,11 @@ def _deliver_mentions_origin(deliver: Any) -> bool:
 def _validate_delivery(deliver: Any, *, origin: dict[str, Any] | None) -> dict[str, Any] | None:
     if deliver is None:
         return None
-    from cron.delivery_registry import default_delivery_registry
+    from cron.delivery_registry import default_delivery_registry, known_adapter_error
     from cron.delivery_targets import DeliveryIdentity
 
-    validation = default_delivery_registry().validate_targets(
+    registry = default_delivery_registry()
+    validation = registry.validate_targets(
         str(deliver),
         origin=DeliveryIdentity.from_job_origin(origin),
         job={},
@@ -193,10 +194,13 @@ def _validate_delivery(deliver: Any, *, origin: dict[str, Any] | None) -> dict[s
     if validation.ok:
         return None
     code = "invalid_webhook" if validation.error and "webhook URL" in validation.error else "unsupported_delivery"
+    error = validation.error or f"Unsupported delivery target: {deliver}"
+    if code == "unsupported_delivery":
+        error = known_adapter_error(registry, error)
     return {
         "success": False,
         "code": code,
-        "error": validation.error or f"Unsupported delivery target: {deliver}",
+        "error": error,
     }
 
 

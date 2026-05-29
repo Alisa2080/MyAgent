@@ -130,6 +130,24 @@ def test_cronjob_rejects_platform_delivery():
     assert result["code"] == "unsupported_delivery"
 
 
+def test_cronjob_unsupported_delivery_lists_known_adapters():
+    cronjob_tool = _cronjob_tool()
+
+    result = cronjob_tool._cronjob_impl(
+        action="create",
+        prompt="write report",
+        schedule="30m",
+        deliver="telegram:123",
+        runtime=None,
+    )
+
+    assert result["success"] is False
+    assert result["code"] == "unsupported_delivery"
+    assert "unsupported delivery target: telegram:123" in result["error"]
+    assert "known adapters:" in result["error"]
+    assert "webhook" in result["error"]
+
+
 def test_cronjob_create_requires_schedule(monkeypatch):
     cronjob_tool = _cronjob_tool()
     create_called = False
