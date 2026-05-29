@@ -68,3 +68,31 @@ def test_reserved_platform_target_rejected_without_adapter():
 
     assert result.ok is False
     assert "unsupported delivery target" in result.error
+
+
+def test_build_delivery_registry_includes_registered_adapter_factory(monkeypatch):
+    from cron.delivery_adapters import AdapterValidation, DeliveryResult
+    import cron.delivery_registry as delivery_registry
+
+    class FakeSlackAdapter:
+        key = "slack"
+        active_dispatch = True
+
+        def validate(self, target, job):
+            return AdapterValidation(bool(target.address), None if target.address else "slack channel required")
+
+        def deliver(self, event, job, run):
+            return DeliveryResult(True)
+
+    delivery_registry.clear_delivery_adapter_factories()
+    delivery_registry.register_delivery_adapter_factory(lambda **kwargs: FakeSlackAdapter())
+    try:
+        registry = delivery_registry.build_delivery_registry()
+        result = registry.validate_targets("slack:C123", origin=None, job={})
+    finally:
+        delivery_registry.clear_delivery_adapter_factories()
+
+    assert "slack" in registry.adapter_keys()
+    assert "slack" in registry.active_adapter_keys()
+    assert result.ok is True
+    assert result.targets[0].adapter_key == "slack"

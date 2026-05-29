@@ -44,6 +44,7 @@ class LocalDeliveryAdapter:
 
 class OriginDeliveryAdapter:
     key = "origin"
+    active_dispatch = False
 
     def validate(self, target: Any, job: dict[str, Any]) -> AdapterValidation:
         if not target.address:

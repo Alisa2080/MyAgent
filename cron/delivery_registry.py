@@ -5,6 +5,17 @@ from typing import Any
 
 from cron.delivery_targets import DeliveryIdentity, DeliveryTarget, DeliveryTargetError, parse_delivery_targets
 
+DeliveryAdapterFactory = Any
+_ADAPTER_FACTORIES: list[DeliveryAdapterFactory] = []
+
+
+def register_delivery_adapter_factory(factory: DeliveryAdapterFactory) -> None:
+    _ADAPTER_FACTORIES.append(factory)
+
+
+def clear_delivery_adapter_factories() -> None:
+    _ADAPTER_FACTORIES.clear()
+
 
 @dataclass(frozen=True)
 class DeliveryValidation:
@@ -25,6 +36,9 @@ class DeliveryRegistry:
 
     def adapter_keys(self) -> list[str]:
         return sorted(self._adapters)
+
+    def active_adapter_keys(self) -> list[str]:
+        return sorted(key for key, adapter in self._adapters.items() if getattr(adapter, "active_dispatch", True))
 
     def validate_targets(
         self,
@@ -64,11 +78,21 @@ class DeliveryRegistry:
         return DeliveryValidation(True, targets)
 
 
-def default_delivery_registry(*, webhook_sender=None) -> DeliveryRegistry:
+def build_delivery_registry(*, webhook_sender=None, extra_adapters=None) -> DeliveryRegistry:
     from cron.delivery_adapters import LocalDeliveryAdapter, OriginDeliveryAdapter, WebhookDeliveryAdapter
 
     registry = DeliveryRegistry()
     registry.register(LocalDeliveryAdapter())
     registry.register(OriginDeliveryAdapter())
     registry.register(WebhookDeliveryAdapter(sender=webhook_sender))
+    for adapter in extra_adapters or []:
+        registry.register(adapter)
+    for factory in list(_ADAPTER_FACTORIES):
+        adapter = factory(webhook_sender=webhook_sender)
+        if adapter is not None:
+            registry.register(adapter)
     return registry
+
+
+def default_delivery_registry(*, webhook_sender=None) -> DeliveryRegistry:
+    return build_delivery_registry(webhook_sender=webhook_sender)
