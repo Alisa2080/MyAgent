@@ -652,3 +652,38 @@ def test_cron_timeout_returns_failure_result(monkeypatch):
     assert result.success is False
     assert result.error == "Cron job timed out."
     assert "Cron job timed out." in result.output_doc
+
+
+def test_activity_reporter_does_not_raise_on_failure(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    from cron.activity_reporter import activity_reporter
+    from unittest.mock import MagicMock
+
+    mock_store = MagicMock()
+    mock_store.update_run_activity.side_effect = Exception("db error")
+
+    # Should not raise
+    activity_reporter("run-123", mock_store, activity=True, last_activity_desc="test")
+    
+    mock_store.update_run_activity.assert_called_once_with(
+        "run-123",
+        heartbeat=True,
+        activity=True,
+        last_activity_desc="test",
+        current_tool=None,
+    )
+
+
+def test_activity_reporter_respects_disable_flag(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+    monkeypatch.setenv("AGENT_CRON_DISABLE_ACTIVITY_REPORTING", "1")
+
+    from cron.activity_reporter import activity_reporter
+    from unittest.mock import MagicMock
+
+    mock_store = MagicMock()
+
+    activity_reporter("run-123", mock_store, activity=True)
+
+    mock_store.update_run_activity.assert_not_called()

@@ -176,6 +176,11 @@ def _process_claimed(
     try:
         if store.mark_run_started(run_id) is None:
             return JobTickResult(job_id=job_id, success=False, error="run lease expired before start")
+        try:
+            from cron.activity_reporter import activity_reporter
+            activity_reporter(run_id, store, activity=True, last_activity_desc="started")
+        except Exception:
+            logger.debug("Failed to report started activity for run %s", run_id)
         result = job_runner(job)
         if not store.run_owns_lease(run_id):
             store.complete_run(
@@ -230,6 +235,11 @@ def _process_claimed(
             completed=completed,
             delivery_error=delivery_error,
         )
+        try:
+            from cron.activity_reporter import activity_reporter
+            activity_reporter(run["id"], store, activity=True, last_activity_desc="completed")
+        except Exception:
+            logger.debug("Failed to report completed activity for run %s", run["id"])
         return JobTickResult(job_id=job_id, success=result.success, output_path=output_path, error=result.error or delivery_error)
     except Exception as exc:
         logger.exception("Cron job %s failed during tick.", job_id)
