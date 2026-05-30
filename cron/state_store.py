@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 import copy
 import json
 import logging
+import os
 import sqlite3
 import uuid
 from pathlib import Path
@@ -211,6 +212,8 @@ class StateStore:
                 "lease_expires_at": "TEXT",
                 "paused_reason": "TEXT",
                 "paused_at": "TEXT",
+                "idle_timeout_seconds": "INTEGER",
+                "max_runtime_seconds": "INTEGER",
                 "created_at": "TEXT NOT NULL DEFAULT ''",
                 "updated_at": "TEXT NOT NULL DEFAULT ''",
             },
@@ -227,6 +230,8 @@ class StateStore:
                 "final_response": "TEXT",
                 "error": "TEXT",
                 "delivery_status": "TEXT",
+                "heartbeat_at": "TEXT",
+                "last_activity_at": "TEXT",
             },
         )
         self._ensure_columns(
@@ -507,6 +512,8 @@ class StateStore:
             "lease_expires_at": row["lease_expires_at"],
             "paused_reason": row["paused_reason"],
             "paused_at": row["paused_at"],
+            "idle_timeout_seconds": row["idle_timeout_seconds"],
+            "max_runtime_seconds": row["max_runtime_seconds"],
             "created_at": row["created_at"],
             "updated_at": row["updated_at"],
         }
@@ -1322,3 +1329,98 @@ class StateStore:
                 "INSERT OR REPLACE INTO poll_state (adapter_key, cursor, updated_at) VALUES (?, ?, ?)",
                 (adapter_key, cursor, utc_now().isoformat()),
             )
+
+    def resolve_job_timeouts(self, job: dict[str, Any]) -> dict[str, int | None]:
+        def positive_or_zero(value: Any) -> int | None:
+            if value is None or value == "":
+                return None
+            try:
+                parsed = int(value)
+            except (TypeError, ValueError):
+                return None
+            return parsed if parsed >= 0 else None
+
+        idle = positive_or_zero(job.get("idle_timeout_seconds"))
+        if idle is None:
+            raw = os.getenv("AGENT_CRON_TIMEOUT", "600")
+            try:
+                idle = int(raw)
+            except ValueError:
+                idle = 600
+        max_runtime = positive_or_zero(job.get("max_runtime_seconds"))
+        return {
+            "idle_timeout_seconds": idle if idle is not None and idle > 0 else None,
+            "max_runtime_seconds": max_runtime if max_runtime is not None and max_runtime > 0 else None,
+        }
+
+    def list_next_due_jobs(self, *, limit: int = 5) -> list[dict[str, Any]]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM jobs
+                WHERE enabled = 1
+                  AND state = 'scheduled'
+                  AND next_run_at IS NOT NULL
+                ORDER BY next_run_at, created_at, id
+                LIMIT ?
+                """,
+                (max(1, int(limit)),),
+            ).fetchall()
+        return [self._row_to_job(row) for row in rows]
+
+    def list_running_runs(self, *, limit: int = 5) -> list[dict[str, Any]]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT runs.id AS run_id, runs.*, jobs.name AS job_name, jobs.next_run_at,
+                       jobs.id AS job_id, jobs.idle_timeout_seconds, jobs.max_runtime_seconds
+                FROM runs
+                JOIN jobs ON jobs.id = runs.job_id
+                WHERE runs.status IN ('claimed', 'running')
+                ORDER BY COALESCE(runs.started_at, runs.claimed_at), runs.id
+                LIMIT ?
+                """,
+                (max(1, int(limit)),),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def latest_failed_run(self) -> dict[str, Any] | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT runs.id AS run_id, runs.*, jobs.name AS job_name, jobs.id AS job_id
+                FROM runs
+                JOIN jobs ON jobs.id = runs.job_id
+                WHERE runs.status IN ('failed', 'abandoned')
+                ORDER BY COALESCE(runs.finished_at, runs.updated_at) DESC
+                LIMIT 1
+                """
+            ).fetchone()
+        return None if row is None else dict(row)
+
+    def list_stale_running_runs(self, *, now_text: str | None = None, limit: int = 5) -> list[dict[str, Any]]:
+        now_dt = _parse_time(now_text or utc_now().isoformat())
+        if now_dt is None:
+            return []
+        stale: list[dict[str, Any]] = []
+        for row in self.list_running_runs(limit=100):
+            job_timeout = self.resolve_job_timeouts(row)
+            reason = None
+            heartbeat_at = _parse_time(row.get("heartbeat_at"))
+            activity_at = _parse_time(row.get("last_activity_at") or row.get("started_at") or row.get("claimed_at"))
+            lease_expires_at = _parse_time(row.get("lease_expires_at"))
+            if lease_expires_at is not None and lease_expires_at <= now_dt:
+                reason = "lease_expired"
+            elif heartbeat_at is not None and (now_dt - heartbeat_at).total_seconds() > 300:
+                reason = "heartbeat_stale"
+            elif job_timeout["idle_timeout_seconds"] and activity_at is not None:
+                if (now_dt - activity_at).total_seconds() > job_timeout["idle_timeout_seconds"]:
+                    reason = "idle_timeout_exceeded"
+            if reason:
+                enriched = dict(row)
+                enriched["stale_reason"] = reason
+                stale.append(enriched)
+            if len(stale) >= max(1, int(limit)):
+                break
+        return stale
+
