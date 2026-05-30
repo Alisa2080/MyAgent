@@ -601,7 +601,7 @@ def test_processing_exception_marks_error_and_returns_failed_result(monkeypatch,
 def test_tick_records_run_and_advances_after_completion(monkeypatch, tmp_path):
     monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
 
-    from cron.delivery import JobRunResult
+    from cron.contracts import JobRunResult
     from cron.jobs import create_job, update_job
     import cron.scheduler as scheduler
     from cron.state_store import StateStore
