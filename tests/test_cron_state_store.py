@@ -878,3 +878,31 @@ def test_complete_run_cannot_advance_or_count_twice(monkeypatch, tmp_path):
     assert second_job["next_run_at"] == "2026-05-30T10:30:00+00:00"
     assert second_job["state"] == "scheduled"
     assert second["run"]["status"] == "succeeded"
+
+
+def test_imported_job_runs_through_state_machine(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    from cron.jobs import create_job, update_job
+    from cron.state_store import StateStore
+
+    job = create_job(
+        prompt="write report",
+        schedule="30m",
+        deliver="local",
+        state="running",
+        run_id="legacy-abc123",
+    )
+    due_at = "2026-05-30T10:00:00+00:00"
+    update_job(job["id"], {"next_run_at": due_at})
+
+    store = StateStore()
+    recovered = store.recover_expired_leases(now_text="2026-05-30T10:30:00+00:00")
+    recovered_job = store.get_job(job["id"])
+    recovered_run = store.get_run("legacy-abc123")
+
+    assert recovered == 1
+    assert recovered_job["state"] == "scheduled"
+    assert recovered_job["lease_run_id"] is None
+    assert recovered_job["next_run_at"] == due_at
+    assert recovered_run["status"] == "abandoned"

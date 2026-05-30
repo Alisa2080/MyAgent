@@ -520,11 +520,34 @@ class StateStore:
         values = self._job_to_row_values(job)
         columns = list(values)
         placeholders = ", ".join("?" for _ in columns)
+        run_id: str | None = job.get("run_id")
         with self._connect() as conn:
             conn.execute(
                 f"INSERT INTO jobs ({', '.join(columns)}) VALUES ({placeholders})",
                 [values[column] for column in columns],
             )
+            if run_id is not None and conn.execute("SELECT 1 FROM runs WHERE id = ?", (run_id,)).fetchone() is None:
+                due_at = job.get("next_run_at") or utc_now().isoformat()
+                now_text = utc_now().isoformat()
+                due_dt = _parse_time(due_at)
+                if due_dt is not None:
+                    lease_expires_at = (due_dt + timedelta(seconds=self.lease_seconds)).isoformat()
+                else:
+                    lease_expires_at = (utc_now() + timedelta(seconds=self.lease_seconds)).isoformat()
+                conn.execute(
+                    """
+                    INSERT INTO runs (id, job_id, scheduled_for, claimed_at, lease_expires_at,
+                                      started_at, finished_at, attempt, status, exit_reason,
+                                      output_path, final_response, error, delivery_status,
+                                      created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, NULL, NULL, 1, 'claimed', NULL, NULL, NULL, NULL, NULL, ?, ?)
+                    """,
+                    (run_id, str(job["id"]), due_at, now_text, lease_expires_at, now_text, now_text),
+                )
+                conn.execute(
+                    "UPDATE jobs SET lease_run_id = ?, lease_expires_at = ? WHERE id = ?",
+                    (run_id, lease_expires_at, str(job["id"])),
+                )
         return self.get_job(str(job["id"])) or copy.deepcopy(job)
 
     def replace_jobs(self, jobs: list[dict[str, Any]]) -> None:
@@ -625,6 +648,21 @@ class StateStore:
         params = [values[column] for column in values if column != "id"] + [job_id]
         with self._connect() as conn:
             conn.execute(f"UPDATE jobs SET {assignments} WHERE id = ?", params)
+            # If next_run_at changed and job has an active lease, extend the run's lease_expires_at
+            if "next_run_at" in updates and existing.get("lease_run_id") and existing.get("lease_expires_at"):
+                new_next_run = _parse_time(updates["next_run_at"])
+                old_lease_expires = _parse_time(existing["lease_expires_at"])
+                if new_next_run is not None and old_lease_expires is not None:
+                    duration = old_lease_expires - _parse_time(existing["next_run_at"])
+                    new_lease_expires = new_next_run + duration
+                    conn.execute(
+                        "UPDATE runs SET lease_expires_at = ?, updated_at = ? WHERE id = ?",
+                        (new_lease_expires.isoformat(), utc_now().isoformat(), existing["lease_run_id"]),
+                    )
+                    conn.execute(
+                        "UPDATE jobs SET lease_expires_at = ?, updated_at = ? WHERE id = ?",
+                        (new_lease_expires.isoformat(), utc_now().isoformat(), job_id),
+                    )
         updated = self.get_job(job_id)
         if updated is None:
             raise KeyError(f"Cron job not found after update: {job_id}")
