@@ -6,7 +6,7 @@ import logging
 import os
 import threading
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 try:
@@ -181,6 +181,29 @@ def _process_claimed(
             activity_reporter(run_id, store, activity=True, last_activity_desc="started")
         except Exception:
             logger.debug("Failed to report started activity for run %s", run_id)
+        
+        # Track max runtime timeout
+        job_timeout = store.resolve_job_timeouts(job)
+        max_runtime_seconds = job_timeout.get("max_runtime_seconds")
+        max_runtime_deadline = None
+        if max_runtime_seconds:
+            max_runtime_deadline = run_at + timedelta(seconds=max_runtime_seconds)
+        
+        # Check if this run has become stale before starting (race condition protection)
+        stale_runs = store.list_stale_running_runs(limit=10)
+        for stale in stale_runs:
+            if stale["run_id"] == run_id and stale.get("stale_reason") in ("idle_timeout_exceeded", "heartbeat_stale"):
+                store.complete_run(
+                    run_id,
+                    success=False,
+                    output_path=None,
+                    final_response=None,
+                    error=f"Job abandoned: {stale['stale_reason']}",
+                    next_run_at=job.get("next_run_at"),
+                    completed=False,
+                )
+                return JobTickResult(job_id=job_id, success=False, error=f"Job abandoned: {stale['stale_reason']}")
+        
         result = job_runner(job)
         if not store.run_owns_lease(run_id):
             store.complete_run(
@@ -349,6 +372,21 @@ def tick(
     try:
         store = _store()
         store.recover_expired_leases(now_text=run_at.isoformat())
+        
+        # Abandon idle-timed-out runs before processing new jobs
+        stale_runs = store.list_stale_running_runs(limit=10)
+        for stale in stale_runs:
+            if stale.get("stale_reason") in ("idle_timeout_exceeded", "heartbeat_stale"):
+                store.complete_run(
+                    stale["run_id"],
+                    success=False,
+                    output_path=None,
+                    final_response=None,
+                    error=f"Job abandoned: {stale['stale_reason']}",
+                    next_run_at=None,
+                    completed=False,
+                )
+        
         claimed = store.claim_due_jobs(now_text=run_at.isoformat(), limit=100)
         result = TickResult(due=len(claimed))
 
