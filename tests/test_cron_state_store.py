@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import json
+import threading
 
 
 def test_state_store_initializes_schema(monkeypatch, tmp_path):
@@ -877,6 +878,74 @@ def test_complete_run_cannot_advance_or_count_twice(monkeypatch, tmp_path):
     assert second_job["next_run_at"] == "2026-05-30T10:30:00+00:00"
     assert second_job["state"] == "scheduled"
     assert second["run"]["status"] == "succeeded"
+
+
+def test_complete_run_uses_time_after_waiting_for_write_lock(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    from cron.jobs import create_job, update_job
+    import cron.state_store as state_store
+    from cron.state_store import StateStore
+
+    due_dt = datetime(2026, 5, 30, 10, 0, 0, tzinfo=timezone.utc)
+    expired_dt = datetime(2026, 5, 30, 10, 0, 2, tzinfo=timezone.utc)
+    clock_values = [due_dt]
+    monkeypatch.setattr(state_store, "utc_now", lambda: clock_values[0])
+
+    job = create_job(prompt="write report", schedule="30m", deliver="local")
+    due_at = due_dt.isoformat()
+    update_job(job["id"], {"next_run_at": due_at})
+
+    store = StateStore(lease_seconds=1)
+    claimed = store.claim_due_jobs(now_text=due_at, limit=1)[0]
+    run_id = claimed["run"]["id"]
+    assert store.mark_run_started(run_id) is not None
+
+    lock_acquired = threading.Event()
+    release_lock = threading.Event()
+    result_holder: dict[str, dict] = {}
+    error_holder: list[BaseException] = []
+
+    def hold_write_lock() -> None:
+        with store._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            lock_acquired.set()
+            release_lock.wait(timeout=5)
+
+    def complete_after_blocking() -> None:
+        try:
+            result_holder["result"] = store.complete_run(
+                run_id,
+                success=True,
+                output_path="/tmp/out.md",
+                final_response="done",
+                error=None,
+                next_run_at="2026-05-30T10:30:00+00:00",
+                completed=False,
+            )
+        except BaseException as exc:
+            error_holder.append(exc)
+
+    locker = threading.Thread(target=hold_write_lock)
+    locker.start()
+    assert lock_acquired.wait(timeout=5)
+    worker = threading.Thread(target=complete_after_blocking)
+    worker.start()
+    clock_values[0] = expired_dt
+    release_lock.set()
+    locker.join(timeout=5)
+    worker.join(timeout=5)
+
+    assert not locker.is_alive()
+    assert not worker.is_alive()
+    assert error_holder == []
+    result = result_holder["result"]
+    stored_job = store.get_job(job["id"])
+    assert result["run"]["status"] == "abandoned"
+    assert result["run"]["exit_reason"] == "late_completion"
+    assert stored_job["state"] == "scheduled"
+    assert stored_job["next_run_at"] == due_at
+    assert stored_job["repeat"]["completed"] == 0
 
 
 def test_imported_jobs_json_job_runs_through_state_machine(monkeypatch, tmp_path):

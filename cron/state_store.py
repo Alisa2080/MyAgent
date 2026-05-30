@@ -1117,14 +1117,14 @@ class StateStore:
         completed: bool,
         delivery_error: str | None = None,
     ) -> dict[str, Any]:
-        now_text = utc_now().isoformat()
-        now_dt = _parse_time(now_text)
         run_status = "succeeded" if success else "failed"
         job_state = "completed" if completed else "scheduled"
         job_id: str
         terminal_run: dict[str, Any] | None = None
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
+            now_text = utc_now().isoformat()
+            now_dt = _parse_time(now_text)
             run_row = conn.execute("SELECT * FROM runs WHERE id = ?", (run_id,)).fetchone()
             if run_row is None:
                 raise KeyError(run_id)
