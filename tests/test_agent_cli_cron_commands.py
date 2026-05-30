@@ -407,6 +407,29 @@ def test_cron_doctor_warns_when_service_status_missing(monkeypatch, tmp_path):
     ) in result.text
 
 
+def test_cron_doctor_warns_when_service_heartbeat_stale(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    from agent_cli import cron_commands
+    from cron.service_state import write_service_status
+
+    monkeypatch.setattr(cron_commands, "list_jobs", lambda include_disabled=False: [])
+    write_service_status(
+        {
+            "process_state": "running",
+            "leader_state": "leader",
+            "last_heartbeat_at": "2026-05-29T10:00:00+00:00",
+        }
+    )
+
+    result = cron_commands.cron_doctor()
+
+    assert result.exit_code == 1
+    assert (
+        "[warn] cron service heartbeat: stale; automatic scheduling may be stopped"
+    ) in result.text
+
+
 def test_delivery_stats_lines_labels_origin_poll_pending(monkeypatch, tmp_path):
     monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
 
@@ -466,6 +489,36 @@ def test_tick_returns_failure_exit_when_job_fails(monkeypatch):
     assert result.exit_code == 1
     assert "failed=1" in result.text
     assert "job-1" in result.text
+
+
+def test_tick_reports_current_scheduler_lease(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    import agent_cli.cron_commands as cron_commands
+    from cron.leader import SchedulerLeaderLease
+
+    tick_result = SimpleNamespace(
+        due=0,
+        ran=0,
+        succeeded=0,
+        failed=0,
+        skipped=0,
+        results=[],
+    )
+    lease_state = SchedulerLeaderLease(lease_seconds=180).try_acquire_or_renew(
+        owner_id="host:1:abc",
+        pid=1,
+        hostname="host",
+        now_text="2026-05-29T10:00:00+00:00",
+    )
+    monkeypatch.setattr(cron_commands, "cron_tick", lambda: tick_result)
+
+    result = cron_commands.run_tick()
+
+    assert result.exit_code == 0
+    assert (
+        f"Scheduler lease owner: host:1:abc expires={lease_state.expires_at}"
+    ) in result.text
 
 
 def test_remove_reports_missing_job(monkeypatch):

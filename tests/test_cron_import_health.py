@@ -5,6 +5,7 @@ transitively import heavy agent dependencies.
 """
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import sys
 
 
@@ -55,30 +56,27 @@ def test_scheduler_tick_with_fake_runner_does_not_import_heavy_modules(monkeypat
     """Verify that tick() with an injected fake runner does not import heavy modules."""
     import cron.scheduler as scheduler
     from cron.contracts import JobRunResult
+    from cron.jobs import create_job, update_job
 
     # Clear any cached modules
     for mod in list(sys.modules.keys()):
         if mod.startswith("cron.runner") or mod.startswith("langchain."):
             del sys.modules[mod]
 
-    job = {"id": "job-1", "name": "daily", "workdir": None, "deliver": "local"}
-
     monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
-    monkeypatch.setattr(scheduler, "get_due_jobs", lambda now_dt=None: [job])
-    monkeypatch.setattr(scheduler, "advance_next_run", lambda job_id, run_at: job)
     monkeypatch.setattr(
         scheduler,
         "save_job_output",
         lambda job_id, doc, run_at=None: "/tmp/out.md",
     )
-    monkeypatch.setattr(
-        scheduler,
-        "mark_job_run",
-        lambda job_id, success, error=None, run_at=None, delivery_error=None: None,
-    )
+    job = create_job(prompt="daily", schedule="30m", name="daily", deliver="local")
+    update_job(job["id"], {"next_run_at": "2026-05-22T09:00:00+00:00"})
 
     fake_runner = lambda job: JobRunResult(True, "doc", "final", None)
-    result = scheduler.tick(job_runner=fake_runner)
+    result = scheduler.tick(
+        now_dt=datetime(2026, 5, 22, 9, 0, tzinfo=timezone.utc),
+        job_runner=fake_runner,
+    )
 
     assert result.due == 1
     assert result.ran == 1

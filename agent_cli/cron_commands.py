@@ -462,6 +462,8 @@ def cron_doctor() -> CronCommandResult:
 
 
 def run_tick() -> CronCommandResult:
+    from cron.leader import SchedulerLeaderLease
+
     result = _get_cron_tick()()
     lines = [
         (
@@ -470,6 +472,14 @@ def run_tick() -> CronCommandResult:
             f"succeeded={result.succeeded} failed={result.failed} skipped={result.skipped}"
         )
     ]
+    try:
+        lease = SchedulerLeaderLease().current()
+    except Exception:
+        lease = None
+    if lease is not None:
+        lines.append(
+            f"Scheduler lease owner: {lease.owner_id} expires={lease.expires_at}"
+        )
     for item in result.results:
         if not item.success:
             lines.append(f"  failed {item.job_id}: {item.error or '-'}")

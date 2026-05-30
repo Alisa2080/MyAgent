@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sys
 import types
+import importlib.util
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -81,6 +82,17 @@ def _install_langchain_stubs(monkeypatch=None):
         setter("langchain_core.messages", mock_langchain_core.messages)
 
 
+def _install_optional_dep_stubs(monkeypatch=None):
+    setter = monkeypatch.setitem if monkeypatch is not None else sys.modules.setdefault
+    if importlib.util.find_spec("dateutil") is None:
+        if monkeypatch is not None:
+            setter(sys.modules, "dateutil", MagicMock())
+            setter(sys.modules, "dateutil.parser", MagicMock())
+        else:
+            setter("dateutil", MagicMock())
+            setter("dateutil.parser", MagicMock())
+
+
 @pytest.fixture(autouse=True)
 def stub_heavy_deps(monkeypatch):
     import types as types_
@@ -106,8 +118,7 @@ def stub_heavy_deps(monkeypatch):
     monkeypatch.setitem(sys.modules, "tinyfish", MagicMock())
     monkeypatch.setitem(sys.modules, "langchain_anthropic", MagicMock())
     monkeypatch.setitem(sys.modules, "langchain_openai", MagicMock())
-    monkeypatch.setitem(sys.modules, "dateutil", MagicMock())
-    monkeypatch.setitem(sys.modules, "dateutil.parser", MagicMock())
+    _install_optional_dep_stubs(monkeypatch)
 
 
 def pytest_configure(config):
@@ -134,5 +145,4 @@ def pytest_configure(config):
     sys.modules.setdefault("tinyfish", MagicMock())
     sys.modules.setdefault("langchain_anthropic", MagicMock())
     sys.modules.setdefault("langchain_openai", MagicMock())
-    sys.modules.setdefault("dateutil", MagicMock())
-    sys.modules.setdefault("dateutil.parser", MagicMock())
+    _install_optional_dep_stubs()
