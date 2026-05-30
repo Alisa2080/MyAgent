@@ -894,7 +894,6 @@ class StateStore:
         claim_limit = max(0, int(limit))
         if now_dt is None or claim_limit == 0:
             return []
-        lease_expires = (utc_now() + timedelta(seconds=self.lease_seconds)).isoformat()
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             rows = conn.execute(
@@ -927,6 +926,7 @@ class StateStore:
                     "SELECT COUNT(*) AS count FROM runs WHERE job_id = ?",
                     (job["id"],),
                 ).fetchone()["count"]
+                lease_expires_at = (now_dt + timedelta(seconds=self.lease_seconds)).isoformat()
                 conn.execute(
                     """
                     INSERT INTO runs (
@@ -936,7 +936,7 @@ class StateStore:
                         created_at, updated_at
                     ) VALUES (?, ?, ?, ?, ?, NULL, NULL, ?, 'claimed', NULL, NULL, NULL, NULL, NULL, ?, ?)
                     """,
-                    (run_id, job["id"], job["next_run_at"], now_actual, lease_expires, int(previous_attempts) + 1, now_actual, now_actual),
+                    (run_id, job["id"], job["next_run_at"], now_actual, lease_expires_at, int(previous_attempts) + 1, now_actual, now_actual),
                 )
                 conn.execute(
                     """
@@ -947,7 +947,7 @@ class StateStore:
                         updated_at = ?
                     WHERE id = ? AND state = 'scheduled'
                     """,
-                    (run_id, lease_expires, now_actual, job["id"]),
+                    (run_id, lease_expires_at, now_actual, job["id"]),
                 )
                 run = dict(conn.execute("SELECT * FROM runs WHERE id = ?", (run_id,)).fetchone())
                 claimed_job = self._row_to_job(conn.execute("SELECT * FROM jobs WHERE id = ?", (job["id"],)).fetchone())
