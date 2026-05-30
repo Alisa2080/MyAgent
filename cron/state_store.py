@@ -211,6 +211,8 @@ class StateStore:
                 "lease_expires_at": "TEXT",
                 "paused_reason": "TEXT",
                 "paused_at": "TEXT",
+                "idle_timeout_seconds": "INTEGER",
+                "max_runtime_seconds": "INTEGER",
                 "created_at": "TEXT NOT NULL DEFAULT ''",
                 "updated_at": "TEXT NOT NULL DEFAULT ''",
             },
@@ -468,6 +470,8 @@ class StateStore:
             "lease_expires_at": job.get("lease_expires_at"),
             "paused_reason": job.get("paused_reason"),
             "paused_at": job.get("paused_at"),
+            "idle_timeout_seconds": job.get("idle_timeout_seconds"),
+            "max_runtime_seconds": job.get("max_runtime_seconds"),
             "created_at": job.get("created_at") or now_text,
             "updated_at": now_text,
         }
@@ -511,6 +515,8 @@ class StateStore:
             "lease_expires_at": row["lease_expires_at"],
             "paused_reason": row["paused_reason"],
             "paused_at": row["paused_at"],
+            "idle_timeout_seconds": row["idle_timeout_seconds"],
+            "max_runtime_seconds": row["max_runtime_seconds"],
             "created_at": row["created_at"],
             "updated_at": row["updated_at"],
         }

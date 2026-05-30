@@ -193,6 +193,22 @@ def test_cronjob_rejects_platform_delivery():
     assert result["code"] == "unsupported_delivery"
 
 
+def test_cronjob_rejects_negative_max_runtime(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    from agent_tools.public.cronjob import run_cronjob_action
+
+    result = run_cronjob_action(
+        "create",
+        prompt="write report",
+        schedule="30m",
+        max_runtime_seconds=-1,
+    )
+
+    assert result["success"] is False
+    assert result["code"] == "invalid_timeout"
+
+
 def test_cronjob_unsupported_delivery_lists_known_adapters():
     cronjob_tool = _cronjob_tool()
 

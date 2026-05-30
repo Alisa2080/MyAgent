@@ -577,3 +577,35 @@ def test_save_and_latest_job_output(jobs_module, tmp_path):
         assert stat.S_IMODE(second_path.stat().st_mode) == 0o600
     assert jobs.latest_job_output("job-1") == "second"
     assert jobs.latest_job_output("missing") is None
+
+
+def test_create_job_persists_timeout_settings(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    from cron.jobs import create_job, get_job
+
+    job = create_job(
+        prompt="write report",
+        schedule="30m",
+        idle_timeout_seconds=120,
+        max_runtime_seconds=900,
+    )
+
+    stored = get_job(job["id"])
+    assert stored["idle_timeout_seconds"] == 120
+    assert stored["max_runtime_seconds"] == 900
+
+
+def test_update_job_normalizes_timeout_settings(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    from cron.jobs import create_job, update_job
+
+    job = create_job(prompt="write report", schedule="30m")
+    updated = update_job(
+        job["id"],
+        {"idle_timeout_seconds": "0", "max_runtime_seconds": ""},
+    )
+
+    assert updated["idle_timeout_seconds"] == 0
+    assert updated["max_runtime_seconds"] is None
