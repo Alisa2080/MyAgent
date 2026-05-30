@@ -227,6 +227,10 @@ class StateStore:
                 "final_response": "TEXT",
                 "error": "TEXT",
                 "delivery_status": "TEXT",
+                "heartbeat_at": "TEXT",
+                "last_activity_at": "TEXT",
+                "last_activity_desc": "TEXT",
+                "current_tool": "TEXT",
             },
         )
         self._ensure_columns(
@@ -933,10 +937,13 @@ class StateStore:
                         id, job_id, scheduled_for, claimed_at, lease_expires_at,
                         started_at, finished_at, attempt, status, exit_reason,
                         output_path, final_response, error, delivery_status,
+                        heartbeat_at, last_activity_at, last_activity_desc, current_tool,
                         created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, NULL, NULL, ?, 'claimed', NULL, NULL, NULL, NULL, NULL, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, NULL, NULL, ?, 'claimed', NULL, NULL, NULL, NULL, NULL,
+                              ?, ?, 'claimed', NULL,
+                              ?, ?)
                     """,
-                    (run_id, job["id"], job["next_run_at"], now_actual, lease_expires_at, int(previous_attempts) + 1, now_actual, now_actual),
+                    (run_id, job["id"], job["next_run_at"], now_actual, lease_expires_at, int(previous_attempts) + 1, now_actual, now_actual, now_actual, now_actual),
                 )
                 conn.execute(
                     """
@@ -995,11 +1002,13 @@ class StateStore:
                 id, job_id, scheduled_for, claimed_at, lease_expires_at,
                 started_at, finished_at, attempt, status, exit_reason,
                 output_path, final_response, error, delivery_status,
+                heartbeat_at, last_activity_at, last_activity_desc, current_tool,
                 created_at, updated_at
-            ) VALUES (?, ?, ?, ?, NULL, NULL, ?, ?, 'skipped', 'missed_run',
-                      NULL, NULL, NULL, NULL, ?, ?)
+            ) VALUES (?, ?, ?, ?, NULL, NULL, NULL, ?, 'skipped', 'missed_run',
+                      NULL, NULL, NULL, NULL, ?, ?, 'missed_run', NULL,
+                      ?, ?)
             """,
-            (run_id, job["id"], next_run_at, now_actual, now_actual, int(previous_attempts) + 1, now_actual, now_actual),
+            (run_id, job["id"], next_run_at, now_actual, int(previous_attempts) + 1, now_actual, now_actual, now_actual, now_actual),
         )
         conn.execute(
             """
@@ -1060,10 +1069,55 @@ class StateStore:
             cursor = conn.execute(
                 """
                 UPDATE runs
-                SET status = 'running', started_at = ?, updated_at = ?
+                SET status = 'running', started_at = ?,
+                    heartbeat_at = ?, last_activity_at = ?, last_activity_desc = 'started',
+                    current_tool = NULL, updated_at = ?
                 WHERE id = ? AND status = 'claimed'
                 """,
-                (now_text, now_text, run_id),
+                (now_text, now_text, now_text, now_text, run_id),
+            )
+        if not cursor.rowcount:
+            return None
+        return self.get_run(run_id)
+
+    def update_run_activity(
+        self,
+        run_id: str,
+        *,
+        heartbeat: bool = True,
+        activity: bool = False,
+        last_activity_desc: str | None = None,
+        current_tool: str | None = None,
+    ) -> dict[str, Any] | None:
+        now_text = utc_now().isoformat()
+        assignments: list[str] = []
+        values: list[Any] = []
+        if heartbeat or activity:
+            assignments.append("heartbeat_at = ?")
+            values.append(now_text)
+        if activity:
+            assignments.append("last_activity_at = ?")
+            values.append(now_text)
+        if last_activity_desc is not None:
+            assignments.append("last_activity_desc = ?")
+            values.append(last_activity_desc)
+        if current_tool is not None or activity:
+            assignments.append("current_tool = ?")
+            values.append(current_tool)
+        if not assignments:
+            return self.get_run(run_id)
+        assignments.append("updated_at = ?")
+        values.append(now_text)
+        values.append(run_id)
+        with self._connect() as conn:
+            cursor = conn.execute(
+                f"""
+                UPDATE runs
+                SET {", ".join(assignments)}
+                WHERE id = ?
+                  AND status IN ('claimed', 'running')
+                """,
+                values,
             )
         if not cursor.rowcount:
             return None
@@ -1176,10 +1230,11 @@ class StateStore:
                         """
                         UPDATE runs
                         SET status = ?, finished_at = ?, output_path = ?, final_response = ?,
-                            error = ?, updated_at = ?
+                            error = ?, heartbeat_at = ?, last_activity_at = ?,
+                            last_activity_desc = 'completed', current_tool = NULL, updated_at = ?
                         WHERE id = ? AND status IN ('claimed', 'running')
                         """,
-                        (run_status, now_text, output_path, final_response, error, now_text, run_id),
+                        (run_status, now_text, output_path, final_response, error, now_text, now_text, now_text, run_id),
                     )
                     if updated_run.rowcount:
                         conn.execute(
