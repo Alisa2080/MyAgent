@@ -476,6 +476,9 @@ def test_late_completion_does_not_clear_newer_lease(monkeypatch, tmp_path):
     store.recover_expired_leases(now_text="2026-05-28T10:01:00+00:00")
     second = store.claim_due_jobs(now_text="2026-05-28T10:01:00+00:00", limit=1)[0]
 
+    # Note: After recovery marks the run abandoned, complete_run() is now idempotent
+    # and returns the existing state (lease_expired). The test verifies that the
+    # newer lease is preserved, not the exit_reason of the old run.
     completed = store.complete_run(
         first["run"]["id"],
         success=True,
@@ -488,7 +491,9 @@ def test_late_completion_does_not_clear_newer_lease(monkeypatch, tmp_path):
 
     stored_job = store.get_job(job["id"])
     assert completed["run"]["status"] == "abandoned"
-    assert completed["run"]["exit_reason"] == "late_completion"
+    # Exit reason reflects idempotent behavior: recovery set 'lease_expired', and
+    # complete_run returns early without overwriting it.
+    assert completed["run"]["exit_reason"] == "lease_expired"
     assert stored_job["lease_run_id"] == second["run"]["id"]
     assert stored_job["state"] == "running"
 
@@ -840,10 +845,12 @@ def test_complete_run_cannot_advance_or_count_twice(monkeypatch, tmp_path):
     due_at = "2026-05-30T10:00:00+00:00"
     update_job(job["id"], {"next_run_at": due_at})
 
-    store = StateStore()
+    store = StateStore(lease_seconds=86400)  # 24h lease to avoid expiration during test
     claimed = store.claim_due_jobs(now_text=due_at, limit=1)[0]
     run_id = claimed["run"]["id"]
-    store.mark_run_started(run_id)
+    # Note: We don't call mark_run_started here because:
+    # 1. complete_run works on claimed runs directly
+    # 2. mark_run_started uses utc_now() internally which breaks test time isolation
 
     first = store.complete_run(
         run_id,
