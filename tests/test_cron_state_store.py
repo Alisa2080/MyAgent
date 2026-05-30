@@ -796,3 +796,51 @@ def test_second_claim_does_not_duplicate_running_job(monkeypatch, tmp_path):
     assert len(first) == 1
     assert second == []
     assert len(store.runs_for_job(job["id"])) == 1
+
+
+def test_complete_run_cannot_advance_or_count_twice(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    from cron.jobs import create_job, update_job
+    from cron.state_store import StateStore
+
+    job = create_job(
+        prompt="write report",
+        schedule="30m",
+        deliver="local",
+        repeat={"times": 2, "completed": 0},
+    )
+    due_at = "2026-05-30T10:00:00+00:00"
+    update_job(job["id"], {"next_run_at": due_at})
+
+    store = StateStore()
+    claimed = store.claim_due_jobs(now_text=due_at, limit=1)[0]
+    run_id = claimed["run"]["id"]
+    store.mark_run_started(run_id)
+
+    first = store.complete_run(
+        run_id,
+        success=True,
+        output_path="/tmp/out.md",
+        final_response="done",
+        error=None,
+        next_run_at="2026-05-30T10:30:00+00:00",
+        completed=False,
+    )
+    second = store.complete_run(
+        run_id,
+        success=True,
+        output_path="/tmp/out.md",
+        final_response="done again",
+        error=None,
+        next_run_at="2026-05-30T11:00:00+00:00",
+        completed=True,
+    )
+
+    first_job = first["job"]
+    second_job = second["job"]
+    assert first_job["repeat"]["completed"] == 1
+    assert second_job["repeat"]["completed"] == 1
+    assert second_job["next_run_at"] == "2026-05-30T10:30:00+00:00"
+    assert second_job["state"] == "scheduled"
+    assert second["run"]["status"] == "succeeded"

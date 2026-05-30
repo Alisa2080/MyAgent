@@ -1118,6 +1118,8 @@ class StateStore:
         delivery_error: str | None = None,
     ) -> dict[str, Any]:
         run = self.get_run(run_id)
+        if run.get("status") in {"succeeded", "failed", "skipped", "abandoned"}:
+            return {"run": run, "job": self.get_job(str(run["job_id"]))}
         now_text = utc_now().isoformat()
         now_dt = _parse_time(now_text)
         run_status = "succeeded" if success else "failed"
