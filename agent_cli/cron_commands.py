@@ -240,6 +240,32 @@ def cron_status() -> CronCommandResult:
         f"Job states: {count_text}",
         f"Delivery adapters: {', '.join(default_delivery_registry().adapter_keys())}",
     ]
+    
+    # Add running runs info
+    running_runs = state_store.list_running_runs(limit=10)
+    if running_runs:
+        lines.append(f"Running jobs: {len(running_runs)}")
+        for run in running_runs:
+            activity_desc = run.get("last_activity_desc") or "unknown"
+            current_tool = run.get("current_tool") or "-"
+            heartbeat = run.get("heartbeat_at") or "-"
+            lines.append(
+                f"  run={run['run_id']} job={run['job_name'] or run['job_id']} "
+                f"activity={activity_desc} tool={current_tool} heartbeat={heartbeat}"
+            )
+    else:
+        lines.append("Running jobs: 0")
+    
+    # Add stale runs info
+    stale_runs = state_store.list_stale_running_runs(limit=10)
+    if stale_runs:
+        lines.append(f"Stale runs (will be abandoned): {len(stale_runs)}")
+        for run in stale_runs:
+            lines.append(
+                f"  run={run['run_id']} job={run['job_name'] or run['job_id']} "
+                f"reason={run.get('stale_reason')}"
+            )
+    
     if mode == "subprocess":
         from cron.runner_subprocess import subprocess_timeout_diagnostic
 
