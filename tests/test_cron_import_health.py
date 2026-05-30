@@ -57,6 +57,7 @@ def test_scheduler_tick_with_fake_runner_does_not_import_heavy_modules(monkeypat
     import cron.scheduler as scheduler
     from cron.contracts import JobRunResult
     from cron.jobs import create_job, update_job
+    import cron.state_store as state_store
 
     # Clear any cached modules
     for mod in list(sys.modules.keys()):
@@ -64,6 +65,8 @@ def test_scheduler_tick_with_fake_runner_does_not_import_heavy_modules(monkeypat
             del sys.modules[mod]
 
     monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+    test_now = datetime(2026, 5, 22, 9, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(state_store, "utc_now", lambda: test_now)
     monkeypatch.setattr(
         scheduler,
         "save_job_output",
@@ -74,7 +77,7 @@ def test_scheduler_tick_with_fake_runner_does_not_import_heavy_modules(monkeypat
 
     fake_runner = lambda job: JobRunResult(True, "doc", "final", None)
     result = scheduler.tick(
-        now_dt=datetime(2026, 5, 22, 9, 0, tzinfo=timezone.utc),
+        now_dt=test_now,
         job_runner=fake_runner,
     )
 

@@ -178,7 +178,7 @@ def _process_claimed(
         if store.mark_run_started(run_id) is None:
             return JobTickResult(job_id=job_id, success=False, error="run lease expired before start")
         result = job_runner(job)
-        if not store.run_owns_lease(run_id):
+        if not store.run_owns_lease(run_id, now_text=now_text):
             store.complete_run(
                 run["id"],
                 success=False,
@@ -194,7 +194,7 @@ def _process_claimed(
 
         delivery_store = DeliveryStore(store.path)
         delivery_events = enqueue_result(job, result, output_path, run_at, store=delivery_store)
-        if not store.run_owns_lease(run["id"]):
+        if not store.run_owns_lease(run["id"], now_text=now_text):
             events = delivery_events if isinstance(delivery_events, list) else ([delivery_events] if delivery_events else [])
             delivery_store.delete_events([str(event["id"]) for event in events])
             store.complete_run(
