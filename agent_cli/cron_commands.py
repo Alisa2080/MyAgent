@@ -5,11 +5,11 @@ import json
 import sys
 from typing import Any
 
-from agent_core.cron_lifecycle import tick as cron_tick
 from cron.jobs import get_job, list_jobs
 from cron.paths import display_cron_home, get_jobs_file, get_output_dir, get_scripts_dir
 
 run_cronjob_action = None
+cron_tick = None
 
 
 def _get_run_cronjob_action():
@@ -18,6 +18,14 @@ def _get_run_cronjob_action():
         from agent_tools.public.cronjob import run_cronjob_action as _fn
         run_cronjob_action = _fn
     return run_cronjob_action
+
+
+def _get_cron_tick():
+    global cron_tick
+    if cron_tick is None:
+        from agent_core.cron_lifecycle import tick as _tick
+        cron_tick = _tick
+    return cron_tick
 
 
 @dataclass(frozen=True)
@@ -454,7 +462,7 @@ def cron_doctor() -> CronCommandResult:
 
 
 def run_tick() -> CronCommandResult:
-    result = cron_tick()
+    result = _get_cron_tick()()
     lines = [
         (
             "Tick: "

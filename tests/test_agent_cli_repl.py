@@ -1,3 +1,5 @@
+import importlib
+import sys
 from types import SimpleNamespace
 
 from agent_cli.repl import AgentCLI
@@ -1436,6 +1438,46 @@ def test_repl_does_not_start_cron_scheduler(monkeypatch, tmp_path):
 
     assert cli is not None
     assert calls == []
+
+
+def test_repl_import_does_not_import_cron_lifecycle():
+    import agent_cli
+
+    module_names = (
+        "agent_cli.repl",
+        "agent_cli.command_handlers",
+        "agent_cli.command_handlers.cron",
+        "agent_cli.cron_commands",
+        "agent_core.cron_lifecycle",
+    )
+    attr_names = ("repl", "command_handlers", "cron_commands")
+    saved_modules = {name: sys.modules.get(name) for name in module_names}
+    saved_attrs = {
+        name: getattr(agent_cli, name)
+        for name in attr_names
+        if hasattr(agent_cli, name)
+    }
+    try:
+        for module_name in module_names:
+            sys.modules.pop(module_name, None)
+        for attr_name in attr_names:
+            if hasattr(agent_cli, attr_name):
+                delattr(agent_cli, attr_name)
+
+        importlib.import_module("agent_cli.repl")
+
+        assert "agent_core.cron_lifecycle" not in sys.modules
+    finally:
+        for module_name in module_names:
+            if saved_modules[module_name] is None:
+                sys.modules.pop(module_name, None)
+            else:
+                sys.modules[module_name] = saved_modules[module_name]
+        for attr_name in attr_names:
+            if attr_name in saved_attrs:
+                setattr(agent_cli, attr_name, saved_attrs[attr_name])
+            elif hasattr(agent_cli, attr_name):
+                delattr(agent_cli, attr_name)
 
 
 def test_run_repl_does_not_start_or_stop_cron_scheduler(monkeypatch):
