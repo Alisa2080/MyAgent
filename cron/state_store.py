@@ -473,6 +473,8 @@ class StateStore:
             "paused_at": job.get("paused_at"),
             "created_at": job.get("created_at") or now_text,
             "updated_at": now_text,
+            "idle_timeout_seconds": job.get("idle_timeout_seconds"),
+            "max_runtime_seconds": job.get("max_runtime_seconds"),
         }
 
     def _can_preserve_legacy_delivery(self, existing: dict[str, Any] | None, job: dict[str, Any]) -> bool:
@@ -1125,8 +1127,9 @@ class StateStore:
         next_run_at: str | None,
         completed: bool,
         delivery_error: str | None = None,
+        run_status: str | None = None,
     ) -> dict[str, Any]:
-        run_status = "succeeded" if success else "failed"
+        computed_status = run_status or ("succeeded" if success else "failed")
         job_state = "completed" if completed else "scheduled"
         job_id: str
         terminal_run: dict[str, Any] | None = None
@@ -1188,7 +1191,7 @@ class StateStore:
                             error = ?, updated_at = ?
                         WHERE id = ? AND status IN ('claimed', 'running')
                         """,
-                        (run_status, now_text, output_path, final_response, error, now_text, run_id),
+                        (computed_status, now_text, output_path, final_response, error, now_text, run_id),
                     )
                     if updated_run.rowcount:
                         conn.execute(

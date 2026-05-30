@@ -678,3 +678,118 @@ def test_tick_records_run_and_advances_after_completion(monkeypatch, tmp_path):
     assert job_after["state"] == "scheduled"
     assert job_after["next_run_at"] != due_at
     assert job_after["lease_run_id"] is None
+
+
+def test_tick_abandons_stale_idle_timed_out_run(monkeypatch, tmp_path):
+    """tick() should abandon running jobs that have exceeded their idle timeout."""
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    from datetime import timedelta
+    from cron.contracts import JobRunResult
+    from cron.jobs import create_job, update_job
+    import cron.scheduler as scheduler
+    import cron.state_store as state_store_module
+    from cron.state_store import StateStore
+
+    time_after_idle = RUN_AT + timedelta(seconds=2)
+
+    # Mutable clock: return RUN_AT for initial work, then time_after_idle for tick
+    current_time = [RUN_AT]
+
+    def fake_utc_now():
+        return current_time[0]
+
+    monkeypatch.setattr(state_store_module, "utc_now", fake_utc_now)
+
+    job = create_job(
+        prompt="slow job",
+        schedule="30m",
+        name="idle-test",
+        idle_timeout_seconds=1,  # 1 second
+        deliver="local",
+    )
+    update_job(job["id"], {"next_run_at": RUN_AT.isoformat()})
+    store = StateStore()
+
+    # Claim and start the job (internal timestamps will be at RUN_AT)
+    claimed = store.claim_due_jobs(now_text=RUN_AT.isoformat(), limit=1)
+    assert len(claimed) == 1
+    run_id = claimed[0]["run"]["id"]
+    started = store.mark_run_started(run_id)
+    assert started is not None, "mark_run_started should succeed with consistent timestamps"
+
+    # Advance clock for tick/stale detection
+    current_time[0] = time_after_idle
+
+    # Verify stale detection
+    stale = store.list_stale_running_runs(now_text=time_after_idle.isoformat(), limit=10)
+    stale_ids = [s["run_id"] for s in stale]
+    assert run_id in stale_ids, f"run {run_id} should be stale but stale={stale}"
+
+    # Tick at time_after_idle should abandon the stale run
+    result = scheduler.tick(now_dt=time_after_idle)
+
+    runs = store.runs_for_job(job["id"])
+    # Should have exactly 1 run: the abandoned one (no replacement since next_run was advanced)
+    assert len(runs) == 1, f"expected 1 run, got {len(runs)}: {runs}"
+    assert runs[0]["status"] == "abandoned"
+    assert "idle_timeout_exceeded" in runs[0]["error"]
+
+
+def test_process_claimed_abandons_run_marked_stale_before_runner(monkeypatch, tmp_path):
+    """If a run is stale when _process_claimed checks, the job_runner should not be called."""
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    from datetime import timedelta
+    from cron.contracts import JobRunResult
+    from cron.jobs import create_job, update_job
+    import cron.scheduler as scheduler
+    import cron.state_store as state_store_module
+    from cron.state_store import StateStore
+
+    time_after_idle = RUN_AT + timedelta(seconds=2)
+
+    # Mutable clock: return RUN_AT for initial work, then time_after_idle for tick
+    current_time = [RUN_AT]
+
+    def fake_utc_now():
+        return current_time[0]
+
+    monkeypatch.setattr(state_store_module, "utc_now", fake_utc_now)
+
+    job = create_job(
+        prompt="slow job",
+        schedule="30m",
+        name="idle-test",
+        idle_timeout_seconds=1,
+        deliver="local",
+    )
+    update_job(job["id"], {"next_run_at": RUN_AT.isoformat()})
+    store = StateStore()
+
+    # Claim and start the job (internal timestamps will be at RUN_AT)
+    claimed = store.claim_due_jobs(now_text=RUN_AT.isoformat(), limit=1)
+    assert len(claimed) == 1
+    run_id = claimed[0]["run"]["id"]
+    started = store.mark_run_started(run_id)
+    assert started is not None
+
+    # Verify run is running
+    run = store.get_run(run_id)
+    assert run["status"] == "running"
+
+    # Advance clock for tick/stale detection
+    current_time[0] = time_after_idle
+
+    # Track whether runner was called
+    runner_called = []
+    fake_runner = lambda claimed_job: (runner_called.append(True) or JobRunResult(True, "doc", "final", None))
+
+    # Tick at time_after_idle should abandon the stale run before calling runner
+    result = scheduler.tick(now_dt=time_after_idle, job_runner=fake_runner)
+
+    runs = store.runs_for_job(job["id"])
+    assert len(runs) == 1, f"expected 1 run, got {len(runs)}: {runs}"
+    assert runs[0]["status"] == "abandoned"
+    assert "idle" in runs[0]["error"].lower()
+    assert runner_called == [], f"job_runner should not have been called for stale run, got: {runner_called}"

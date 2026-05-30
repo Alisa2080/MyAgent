@@ -6,7 +6,7 @@ import logging
 import os
 import threading
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 try:
@@ -189,6 +189,29 @@ def _process_claimed(
         except Exception:
             pass
 
+        # Track max runtime timeout
+        job_timeout = store.resolve_job_timeouts(job)
+        max_runtime_seconds = job_timeout.get("max_runtime_seconds")
+        max_runtime_deadline = None
+        if max_runtime_seconds:
+            max_runtime_deadline = run_at + timedelta(seconds=max_runtime_seconds)
+
+        # Check for stale runs that may need to be abandoned
+        stale_runs = store.list_stale_running_runs(now_text=run_at.isoformat(), limit=5)
+        for stale in stale_runs:
+            if stale["run_id"] == run_id:
+                store.complete_run(
+                    run_id,
+                    success=False,
+                    output_path=None,
+                    final_response=None,
+                    error="Job abandoned due to idle timeout or stale heartbeat.",
+                    next_run_at=job.get("next_run_at"),
+                    completed=False,
+                    run_status="abandoned",
+                )
+                return JobTickResult(job_id=job_id, success=False, error="Job abandoned: idle timeout exceeded")
+
         result = job_runner(job)
 
         try:
@@ -364,6 +387,31 @@ def tick(
         store = _store()
         store.recover_expired_leases(now_text=run_at.isoformat())
         claimed = store.claim_due_jobs(now_text=run_at.isoformat(), limit=100)
+
+        # Abandon any running jobs that have exceeded idle timeout
+        stale_runs = store.list_stale_running_runs(now_text=run_at.isoformat(), limit=10)
+        for stale in stale_runs:
+            if stale.get("stale_reason") in ("idle_timeout_exceeded", "heartbeat_stale"):
+                # Compute next run so job isn't immediately re-claimed in the same tick
+                job_record = store.get_job(stale["job_id"])
+                schedule = job_record.get("schedule") or {}
+                kind = schedule.get("kind")
+                if kind == "once":
+                    next_run = None
+                elif kind in {"interval", "cron"}:
+                    next_run = compute_next_run(schedule, base=run_at)
+                else:
+                    next_run = None
+                store.complete_run(
+                    stale["run_id"],
+                    success=False,
+                    output_path=None,
+                    final_response=None,
+                    error=f"Job abandoned: {stale['stale_reason']}",
+                    next_run_at=next_run,
+                    completed=kind == "once",
+                    run_status="abandoned",
+                )
         result = TickResult(due=len(claimed))
 
         if not claimed:
