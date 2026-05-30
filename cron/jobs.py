@@ -434,6 +434,11 @@ def _recurring_grace_seconds(schedule: dict[str, Any], run_at: datetime) -> int:
 
 
 def get_due_jobs(now_dt: datetime | None = None) -> list[dict[str, Any]]:
+    """Compatibility helper for manual inspection.
+
+    Automatic scheduling must use StateStore.claim_due_jobs() so a run record
+    exists before execution and next_run_at is not advanced at claim time.
+    """
     current = _ensure_aware(now_dt or now())
     due_jobs: list[dict[str, Any]] = []
 
@@ -471,6 +476,10 @@ def get_due_jobs(now_dt: datetime | None = None) -> list[dict[str, Any]]:
 
 
 def advance_next_run(job_id: str, run_at: datetime | None = None) -> dict[str, Any]:
+    """Compatibility helper for manual schedule edits.
+
+    Automatic scheduling must advance next_run_at through StateStore.complete_run().
+    """
     job = get_job(job_id)
     if job is None:
         raise KeyError(f"Cron job not found: {job_id}")

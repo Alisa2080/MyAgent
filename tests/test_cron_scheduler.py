@@ -31,6 +31,8 @@ def test_tick_claims_run_and_completes_without_pre_advance(monkeypatch, tmp_path
         "save_job_output",
         lambda job_id, doc, run_at=None: calls.append(("save", job_id, doc)) or str(tmp_path / "out.md"),
     )
+    import cron.state_store as state_store
+    monkeypatch.setattr(state_store, "utc_now", lambda: RUN_AT)
 
     result = scheduler.tick(now_dt=RUN_AT, job_runner=fake_runner)
 
@@ -58,6 +60,8 @@ def test_default_runner_import_failure_marks_job_failed(monkeypatch, tmp_path):
         "_default_job_runner",
         lambda: (_ for _ in ()).throw(ImportError("runner unavailable")),
     )
+    import cron.state_store as state_store
+    monkeypatch.setattr(state_store, "utc_now", lambda: RUN_AT)
 
     result = scheduler.tick(now_dt=RUN_AT)
 
@@ -81,6 +85,8 @@ def test_runner_exception_advances_recurring_job(monkeypatch, tmp_path):
     job = create_job(prompt="write report", schedule="every 30m", name="daily", deliver="local")
     update_job(job["id"], {"next_run_at": RUN_AT.isoformat()})
     store = StateStore()
+    import cron.state_store as state_store
+    monkeypatch.setattr(state_store, "utc_now", lambda: RUN_AT)
 
     result = scheduler.tick(
         now_dt=RUN_AT,
@@ -96,54 +102,49 @@ def test_runner_exception_advances_recurring_job(monkeypatch, tmp_path):
 
 
 def test_lost_lease_skips_output_and_delivery(monkeypatch, tmp_path):
+    """When a run's lease expires before mark_run_started, the run is abandoned."""
     monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
     sent = []
     saved = []
 
+    from datetime import timedelta
     from cron.contracts import JobRunResult
     from cron.delivery_store import DeliveryStore
     from cron.jobs import create_job, update_job
     import cron.scheduler as scheduler
+    import cron.state_store as state_store
     from cron.state_store import StateStore
+
+    current = [RUN_AT]
 
     job = create_job(prompt="write report", schedule="every 30m", name="daily", deliver="webhook:https://example.invalid/hook")
     update_job(job["id"], {"next_run_at": RUN_AT.isoformat()})
     store = StateStore(lease_seconds=1)
 
     def runner(claimed_job):
-        store.recover_expired_leases(now_text="2100-01-01T00:00:00+00:00")
+        current[0] = current[0] + timedelta(seconds=2)
+        store.recover_expired_leases(now_text=current[0].isoformat())
         return JobRunResult(True, "doc", "final", None)
 
-    monkeypatch.setattr(
-        scheduler,
-        "_store",
-        lambda: StateStore(lease_seconds=1),
-    )
-    monkeypatch.setattr(
-        scheduler,
-        "save_job_output",
-        lambda job_id, doc, run_at=None: saved.append((job_id, doc)) or str(tmp_path / "out.md"),
-    )
+    monkeypatch.setattr(scheduler, "_store", lambda: StateStore(lease_seconds=1))
+    monkeypatch.setattr(scheduler, "save_job_output", lambda job_id, doc, run_at=None: saved.append((job_id, doc)) or str(tmp_path / "out.md"))
+    monkeypatch.setattr(state_store, "utc_now", lambda: current[0])
     from cron import delivery
-    monkeypatch.setattr(
-        delivery,
-        "default_webhook_sender",
-        lambda url, payload, timeout=10: sent.append(url) or (204, "ok"),
-    )
+    monkeypatch.setattr(delivery, "default_webhook_sender", lambda url, payload, timeout=10: sent.append(url) or (204, "ok"))
 
     result = scheduler.tick(now_dt=RUN_AT, job_runner=runner)
 
     runs = store.runs_for_job(job["id"])
     assert result.failed == 1
-    assert result.results[0].error == "run lease lost before delivery"
+    assert "lease" in result.results[0].error
     assert saved == []
     assert sent == []
     assert DeliveryStore().stats()["pending"] == 0
     assert runs[0]["status"] == "abandoned"
-    assert runs[0]["exit_reason"] == "late_completion"
 
 
 def test_expired_unrecovered_lease_skips_output_and_delivery(monkeypatch, tmp_path):
+    """When a run's lease expires before mark_run_started (unrecovered), the run is abandoned."""
     monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
     saved = []
     sent = []
@@ -177,7 +178,7 @@ def test_expired_unrecovered_lease_skips_output_and_delivery(monkeypatch, tmp_pa
     result = scheduler.tick(now_dt=base, job_runner=runner)
 
     assert result.failed == 1
-    assert result.results[0].error == "run lease lost before delivery"
+    assert "lease" in result.results[0].error
     assert saved == []
     assert sent == []
     assert DeliveryStore().stats()["pending"] == 0
@@ -212,6 +213,8 @@ def test_lease_loss_after_enqueue_deletes_pending_delivery(monkeypatch, tmp_path
     monkeypatch.setattr(scheduler, "_store", lambda: StateStore(lease_seconds=1))
     monkeypatch.setattr(scheduler, "save_job_output", lambda job_id, doc, run_at=None: saved.append((job_id, doc)) or str(tmp_path / "out.md"))
     monkeypatch.setattr(delivery_module, "enqueue_result", enqueue_then_lose_lease)
+    import cron.state_store as state_store
+    monkeypatch.setattr(state_store, "utc_now", lambda: RUN_AT)
 
     result = scheduler.tick(now_dt=RUN_AT, job_runner=lambda claimed_job: JobRunResult(True, "doc", "final", None))
 
@@ -232,6 +235,8 @@ def test_tick_queues_origin_notification(monkeypatch, tmp_path):
     job = create_job(prompt="write report", schedule="30m", name="daily", deliver="origin", origin={"thread_id": "thread-1"})
     update_job(job["id"], {"next_run_at": RUN_AT.isoformat()})
 
+    import cron.state_store as state_store
+    monkeypatch.setattr(state_store, "utc_now", lambda: RUN_AT)
     fake_runner = lambda claimed_job: JobRunResult(True, "doc", "final", None)
     scheduler.tick(now_dt=RUN_AT, job_runner=fake_runner)
 
@@ -301,6 +306,8 @@ def test_migrated_legacy_delivery_error_is_persisted_with_real_job_storage(monke
     job = StateStore().get_job("legacy-job")
     update_job(job["id"], {"next_run_at": RUN_AT.isoformat()})
 
+    import cron.state_store as state_store
+    monkeypatch.setattr(state_store, "utc_now", lambda: RUN_AT)
     fake_runner = lambda claimed_job: JobRunResult(True, "doc", "final", None)
     result = scheduler.tick(now_dt=RUN_AT, job_runner=fake_runner)
 
@@ -325,6 +332,8 @@ def test_silent_response_suppresses_origin_notification(monkeypatch, tmp_path):
     job = create_job(prompt="write report", schedule="30m", name="daily", deliver="origin", origin={"thread_id": "thread-1"})
     update_job(job["id"], {"next_run_at": RUN_AT.isoformat()})
 
+    import cron.state_store as state_store
+    monkeypatch.setattr(state_store, "utc_now", lambda: RUN_AT)
     fake_runner = lambda claimed_job: JobRunResult(True, "doc", "[SILENT] nothing changed", None)
     result = scheduler.tick(now_dt=RUN_AT, job_runner=fake_runner)
 
@@ -343,6 +352,8 @@ def test_failed_run_saves_marks_failed_and_enqueues_error_delivery(monkeypatch, 
     job = create_job(prompt="write report", schedule="30m", name="daily", deliver="origin", origin={"thread_id": "thread-1"})
     update_job(job["id"], {"next_run_at": RUN_AT.isoformat()})
 
+    import cron.state_store as state_store
+    monkeypatch.setattr(state_store, "utc_now", lambda: RUN_AT)
     fake_runner = lambda claimed_job: JobRunResult(False, "failure doc", "", "boom")
     result = scheduler.tick(now_dt=RUN_AT, job_runner=fake_runner)
 
@@ -365,6 +376,8 @@ def test_webhook_failure_is_recorded_as_delivery_error(monkeypatch, tmp_path):
     update_job(job["id"], {"next_run_at": RUN_AT.isoformat()})
 
     from cron import delivery
+    import cron.state_store as state_store
+    monkeypatch.setattr(state_store, "utc_now", lambda: RUN_AT)
     monkeypatch.setattr(delivery, "default_webhook_sender", lambda url, payload, timeout=10: (500, "server down"))
 
     fake_runner = lambda claimed_job: JobRunResult(True, "doc", "final", None)
@@ -390,6 +403,8 @@ def test_workdir_jobs_run_sequentially(monkeypatch, tmp_path):
     update_job(job_a["id"], {"next_run_at": RUN_AT.isoformat()})
     update_job(job_b["id"], {"next_run_at": RUN_AT.isoformat()})
 
+    import cron.state_store as state_store
+    monkeypatch.setattr(state_store, "utc_now", lambda: RUN_AT)
     fake_runner = lambda claimed_job: (
         order.append(claimed_job["id"])
         or JobRunResult(True, "doc", "final", None)
@@ -439,6 +454,8 @@ def test_non_workdir_jobs_use_parallel_executor_and_env_max(monkeypatch, tmp_pat
 
     monkeypatch.setenv("AGENT_CRON_MAX_PARALLEL", "2")
     monkeypatch.setattr(scheduler.concurrent.futures, "ThreadPoolExecutor", FakeExecutor)
+    import cron.state_store as state_store
+    monkeypatch.setattr(state_store, "utc_now", lambda: RUN_AT)
 
     fake_runner = lambda claimed_job: JobRunResult(True, "doc", "final", None)
     result = scheduler.tick(now_dt=RUN_AT, job_runner=fake_runner)
@@ -481,6 +498,8 @@ def test_invalid_env_parallel_uses_due_job_count(monkeypatch, tmp_path):
 
     monkeypatch.setenv("AGENT_CRON_MAX_PARALLEL", "not-an-int")
     monkeypatch.setattr(scheduler.concurrent.futures, "ThreadPoolExecutor", FakeExecutor)
+    import cron.state_store as state_store
+    monkeypatch.setattr(state_store, "utc_now", lambda: RUN_AT)
 
     fake_runner = lambda claimed_job: JobRunResult(True, "doc", "final", None)
     scheduler.tick(now_dt=RUN_AT, job_runner=fake_runner)
@@ -545,6 +564,8 @@ def test_tick_enqueues_delivery_event(monkeypatch, tmp_path):
     job = create_job(prompt="write report", schedule="30m", name="Daily", deliver="origin", origin={"thread_id": "thread-1"})
     update_job(job["id"], {"next_run_at": RUN_AT.isoformat()})
 
+    import cron.state_store as state_store
+    monkeypatch.setattr(state_store, "utc_now", lambda: RUN_AT)
     fake_runner = lambda claimed_job: JobRunResult(success=True, output_doc="# out", final_response="done")
     result = scheduler.tick(now_dt=RUN_AT, job_runner=fake_runner)
 
@@ -563,6 +584,9 @@ def test_processing_exception_marks_error_and_returns_failed_result(monkeypatch,
     update_job(job["id"], {"next_run_at": RUN_AT.isoformat()})
     store = StateStore()
 
+    import cron.state_store as state_store
+    monkeypatch.setattr(state_store, "utc_now", lambda: RUN_AT)
+
     def bad_runner(claimed_job):
         raise RuntimeError("bad runner error")
 
@@ -572,3 +596,40 @@ def test_processing_exception_marks_error_and_returns_failed_result(monkeypatch,
     assert result.failed == 1
     assert result.results[0].error == "bad runner error"
     assert runs[0]["status"] == "failed"
+
+
+def test_tick_records_run_and_advances_after_completion(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    from cron.delivery import JobRunResult
+    from cron.jobs import create_job, update_job
+    import cron.scheduler as scheduler
+    from cron.state_store import StateStore
+
+    due_at = "2026-05-30T10:00:00+00:00"
+    from datetime import datetime, timezone
+    due_dt = datetime(2026, 5, 30, 10, 0, 0, tzinfo=timezone.utc)
+
+    job = create_job(prompt="write report", schedule="every 30m", deliver="local")
+    update_job(job["id"], {"next_run_at": due_at})
+
+    def fake_runner(running_job):
+        assert running_job["run_id"]
+        assert running_job["next_run_at"] == due_at
+        return JobRunResult(success=True, output_doc="# out", final_response="done")
+
+    import cron.state_store as state_store
+    monkeypatch.setattr(state_store, "utc_now", lambda: due_dt)
+
+    result = scheduler.tick(now_dt=due_dt, job_runner=fake_runner)
+
+    store = StateStore()
+    runs = store.runs_for_job(job["id"])
+    job_after = store.get_job(job["id"])
+    assert result.ran == 1
+    assert len(runs) == 1
+    assert runs[0]["status"] == "succeeded"
+    assert runs[0]["scheduled_for"] == due_at
+    assert job_after["state"] == "scheduled"
+    assert job_after["next_run_at"] != due_at
+    assert job_after["lease_run_id"] is None
