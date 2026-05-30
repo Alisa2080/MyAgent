@@ -520,34 +520,11 @@ class StateStore:
         values = self._job_to_row_values(job)
         columns = list(values)
         placeholders = ", ".join("?" for _ in columns)
-        run_id: str | None = job.get("run_id")
         with self._connect() as conn:
             conn.execute(
                 f"INSERT INTO jobs ({', '.join(columns)}) VALUES ({placeholders})",
                 [values[column] for column in columns],
             )
-            if run_id is not None and conn.execute("SELECT 1 FROM runs WHERE id = ?", (run_id,)).fetchone() is None:
-                due_at = job.get("next_run_at") or utc_now().isoformat()
-                now_text = utc_now().isoformat()
-                due_dt = _parse_time(due_at)
-                if due_dt is not None:
-                    lease_expires_at = (due_dt + timedelta(seconds=self.lease_seconds)).isoformat()
-                else:
-                    lease_expires_at = (utc_now() + timedelta(seconds=self.lease_seconds)).isoformat()
-                conn.execute(
-                    """
-                    INSERT INTO runs (id, job_id, scheduled_for, claimed_at, lease_expires_at,
-                                      started_at, finished_at, attempt, status, exit_reason,
-                                      output_path, final_response, error, delivery_status,
-                                      created_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?, NULL, NULL, 1, 'claimed', NULL, NULL, NULL, NULL, NULL, ?, ?)
-                    """,
-                    (run_id, str(job["id"]), due_at, now_text, lease_expires_at, now_text, now_text),
-                )
-                conn.execute(
-                    "UPDATE jobs SET lease_run_id = ?, lease_expires_at = ? WHERE id = ?",
-                    (run_id, lease_expires_at, str(job["id"])),
-                )
         return self.get_job(str(job["id"])) or copy.deepcopy(job)
 
     def replace_jobs(self, jobs: list[dict[str, Any]]) -> None:
@@ -648,21 +625,6 @@ class StateStore:
         params = [values[column] for column in values if column != "id"] + [job_id]
         with self._connect() as conn:
             conn.execute(f"UPDATE jobs SET {assignments} WHERE id = ?", params)
-            # If next_run_at changed and job has an active lease, extend the run's lease_expires_at
-            if "next_run_at" in updates and existing.get("lease_run_id") and existing.get("lease_expires_at"):
-                new_next_run = _parse_time(updates["next_run_at"])
-                old_lease_expires = _parse_time(existing["lease_expires_at"])
-                if new_next_run is not None and old_lease_expires is not None:
-                    duration = old_lease_expires - _parse_time(existing["next_run_at"])
-                    new_lease_expires = new_next_run + duration
-                    conn.execute(
-                        "UPDATE runs SET lease_expires_at = ?, updated_at = ? WHERE id = ?",
-                        (new_lease_expires.isoformat(), utc_now().isoformat(), existing["lease_run_id"]),
-                    )
-                    conn.execute(
-                        "UPDATE jobs SET lease_expires_at = ?, updated_at = ? WHERE id = ?",
-                        (new_lease_expires.isoformat(), utc_now().isoformat(), job_id),
-                    )
         updated = self.get_job(job_id)
         if updated is None:
             raise KeyError(f"Cron job not found after update: {job_id}")
@@ -1155,84 +1117,97 @@ class StateStore:
         completed: bool,
         delivery_error: str | None = None,
     ) -> dict[str, Any]:
-        run = self.get_run(run_id)
-        if run.get("status") in {"succeeded", "failed", "skipped", "abandoned"}:
-            return {"run": run, "job": self.get_job(str(run["job_id"]))}
         now_text = utc_now().isoformat()
         now_dt = _parse_time(now_text)
         run_status = "succeeded" if success else "failed"
         job_state = "completed" if completed else "scheduled"
-        late_completion = False
+        job_id: str
+        terminal_run: dict[str, Any] | None = None
         with self._connect() as conn:
-            owner = conn.execute(
-                "SELECT lease_run_id, lease_expires_at, state FROM jobs WHERE id = ?",
-                (run["job_id"],),
-            ).fetchone()
-            if (
-                owner is None
-                or owner["state"] != "running"
-                or owner["lease_run_id"] != run_id
-                or owner["lease_expires_at"] is None
-                or now_dt is None
-                or (_parse_time(owner["lease_expires_at"]) or datetime.min.replace(tzinfo=timezone.utc)) <= now_dt
-            ):
-                conn.execute(
-                    """
-                    UPDATE runs
-                    SET status = 'abandoned', finished_at = ?, output_path = ?,
-                        final_response = ?, error = ?, exit_reason = 'late_completion',
-                        updated_at = ?
-                    WHERE id = ?
-                    """,
-                    (now_text, output_path, final_response, error, now_text, run_id),
-                )
-                if owner is not None and owner["lease_run_id"] == run_id:
+            conn.execute("BEGIN IMMEDIATE")
+            run_row = conn.execute("SELECT * FROM runs WHERE id = ?", (run_id,)).fetchone()
+            if run_row is None:
+                raise KeyError(run_id)
+            run = dict(run_row)
+            job_id = str(run["job_id"])
+            if run.get("status") in {"succeeded", "failed", "skipped", "abandoned"}:
+                terminal_run = run
+            else:
+                owner = conn.execute(
+                    "SELECT lease_run_id, lease_expires_at, state FROM jobs WHERE id = ?",
+                    (job_id,),
+                ).fetchone()
+                if (
+                    owner is None
+                    or owner["state"] != "running"
+                    or owner["lease_run_id"] != run_id
+                    or owner["lease_expires_at"] is None
+                    or now_dt is None
+                    or (_parse_time(owner["lease_expires_at"]) or datetime.min.replace(tzinfo=timezone.utc)) <= now_dt
+                ):
                     conn.execute(
                         """
-                        UPDATE jobs
-                        SET state = 'scheduled', lease_run_id = NULL,
-                            lease_expires_at = NULL, updated_at = ?
-                        WHERE id = ? AND lease_run_id = ?
+                        UPDATE runs
+                        SET status = 'abandoned', finished_at = ?, output_path = ?,
+                            final_response = ?, error = ?, exit_reason = 'late_completion',
+                            updated_at = ?
+                        WHERE id = ?
                         """,
-                        (now_text, run["job_id"], run_id),
+                        (now_text, output_path, final_response, error, now_text, run_id),
                     )
-                late_completion = True
-            if not late_completion:
-                job_row = conn.execute("SELECT repeat_json FROM jobs WHERE id = ?", (run["job_id"],)).fetchone()
-                repeat = _json_loads(job_row["repeat_json"], {"times": None, "completed": 0}) if job_row else {"times": None, "completed": 0}
-                repeat["completed"] = int(repeat.get("completed") or 0) + 1
-                conn.execute(
-                    """
-                    UPDATE runs
-                    SET status = ?, finished_at = ?, output_path = ?, final_response = ?,
-                        error = ?, updated_at = ?
-                    WHERE id = ?
-                    """,
-                    (run_status, now_text, output_path, final_response, error, now_text, run_id),
-                )
-                conn.execute(
-                    """
-                    UPDATE jobs
-                    SET state = ?, enabled = ?, next_run_at = ?, repeat_json = ?,
-                        lease_run_id = NULL,
-                        lease_expires_at = NULL, last_run_at = ?, last_status = ?,
-                        last_error = ?, last_delivery_error = ?, updated_at = ?
-                    WHERE id = ?
-                    """,
-                    (
-                        job_state,
-                        0 if completed else 1,
-                        next_run_at,
-                        _json_dumps(repeat),
-                        now_text,
-                        "ok" if success else "error",
-                        None if success else error,
-                        delivery_error,
-                        now_text,
-                        run["job_id"],
-                    ),
-                )
-        return {"run": self.get_run(run_id), "job": self.get_job(run["job_id"])}
+                    if owner is not None and owner["lease_run_id"] == run_id:
+                        conn.execute(
+                            """
+                            UPDATE jobs
+                            SET state = 'scheduled', lease_run_id = NULL,
+                                lease_expires_at = NULL, updated_at = ?
+                            WHERE id = ? AND lease_run_id = ?
+                            """,
+                            (now_text, job_id, run_id),
+                        )
+                else:
+                    job_row = conn.execute(
+                        "SELECT repeat_json FROM jobs WHERE id = ? AND lease_run_id = ? AND state = 'running'",
+                        (job_id, run_id),
+                    ).fetchone()
+                    repeat = _json_loads(job_row["repeat_json"], {"times": None, "completed": 0}) if job_row else {"times": None, "completed": 0}
+                    repeat["completed"] = int(repeat.get("completed") or 0) + 1
+                    updated_run = conn.execute(
+                        """
+                        UPDATE runs
+                        SET status = ?, finished_at = ?, output_path = ?, final_response = ?,
+                            error = ?, updated_at = ?
+                        WHERE id = ? AND status IN ('claimed', 'running')
+                        """,
+                        (run_status, now_text, output_path, final_response, error, now_text, run_id),
+                    )
+                    if updated_run.rowcount:
+                        conn.execute(
+                            """
+                            UPDATE jobs
+                            SET state = ?, enabled = ?, next_run_at = ?, repeat_json = ?,
+                                lease_run_id = NULL,
+                                lease_expires_at = NULL, last_run_at = ?, last_status = ?,
+                                last_error = ?, last_delivery_error = ?, updated_at = ?
+                            WHERE id = ? AND lease_run_id = ? AND state = 'running'
+                            """,
+                            (
+                                job_state,
+                                0 if completed else 1,
+                                next_run_at,
+                                _json_dumps(repeat),
+                                now_text,
+                                "ok" if success else "error",
+                                None if success else error,
+                                delivery_error,
+                                now_text,
+                                job_id,
+                                run_id,
+                            ),
+                        )
+        if terminal_run is not None:
+            return {"run": terminal_run, "job": self.get_job(job_id)}
+        return {"run": self.get_run(run_id), "job": self.get_job(job_id)}
 
     def update_run_delivery_status(self, run_id: str) -> str | None:
         with self._connect() as conn:

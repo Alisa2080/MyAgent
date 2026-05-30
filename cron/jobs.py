@@ -322,8 +322,6 @@ def create_job(
     context_from: str | list[str] | None = None,
     enabled_toolsets: list[str] | str | None = None,
     workdir: str | None = None,
-    state: str = "scheduled",
-    run_id: str | None = None,
 ) -> dict[str, Any]:
     parsed_schedule = parse_schedule(schedule)
     repeat_times = repeat
@@ -339,7 +337,7 @@ def create_job(
         "schedule": parsed_schedule,
         "schedule_display": parsed_schedule.get("display", schedule),
         "enabled": True,
-        "state": state,
+        "state": "scheduled",
         "next_run_at": compute_next_run(parsed_schedule, base=current),
         "last_run_at": None,
         "last_status": None,
@@ -357,7 +355,6 @@ def create_job(
         "provider": provider or None,
         "base_url": base_url or None,
         "created_at": current.isoformat(),
-        "run_id": run_id,
     }
     job = _normalize_delivery_config(job)
 

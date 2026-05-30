@@ -3,7 +3,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 import json
 import sys
-import uuid
 from typing import Any
 
 from cron.jobs import get_job, list_jobs
@@ -548,32 +547,3 @@ def test_delivery(
     if "dead" in statuses:
         return CronCommandResult(text, exit_code=2)
     return CronCommandResult(text, exit_code=1)
-
-
-def import_job(
-    *,
-    name: str,
-    prompt: str,
-    schedule: str,
-    deliver: str,
-    next_run_at: str,
-    metadata: dict[str, Any] | None = None,
-) -> CronCommandResult:
-    from cron.jobs import create_job, update_job
-
-    job = create_job(
-        name=name,
-        prompt=prompt,
-        schedule=schedule,
-        deliver=deliver,
-        state="running",
-        run_id=str(uuid.uuid4()),
-        enabled=True,
-    )
-    job = update_job(job["id"], {"next_run_at": next_run_at})
-    job_id = job.get("id") or (job.get("job_id"))
-    run_id = job.get("run_id")
-    lines = [f"Imported job {job_id}."]
-    if run_id:
-        lines.append(f"Run ID: {run_id}")
-    return CronCommandResult("\n".join(lines))

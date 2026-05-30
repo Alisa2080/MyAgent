@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import json
 
 
@@ -783,9 +784,6 @@ def test_claim_due_delivery_events_treats_malformed_next_attempt_as_due(monkeypa
     assert [item["id"] for item in claimed] == [event["id"]]
 
 
-from datetime import datetime, timezone
-
-
 def test_claim_due_jobs_creates_run_without_advancing_next_run(monkeypatch, tmp_path):
     monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
 
@@ -834,23 +832,24 @@ def test_complete_run_cannot_advance_or_count_twice(monkeypatch, tmp_path):
     monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
 
     from cron.jobs import create_job, update_job
+    import cron.state_store as state_store
     from cron.state_store import StateStore
 
+    due_dt = datetime(2026, 5, 30, 10, 0, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(state_store, "utc_now", lambda: due_dt)
     job = create_job(
         prompt="write report",
         schedule="30m",
         deliver="local",
-        repeat={"times": 2, "completed": 0},
+        repeat=2,
     )
-    due_at = "2026-05-30T10:00:00+00:00"
+    due_at = due_dt.isoformat()
     update_job(job["id"], {"next_run_at": due_at})
 
-    store = StateStore(lease_seconds=86400)  # 24h lease to avoid expiration during test
+    store = StateStore(lease_seconds=86400)
     claimed = store.claim_due_jobs(now_text=due_at, limit=1)[0]
     run_id = claimed["run"]["id"]
-    # Note: We don't call mark_run_started here because:
-    # 1. complete_run works on claimed runs directly
-    # 2. mark_run_started uses utc_now() internally which breaks test time isolation
+    assert store.mark_run_started(run_id) is not None
 
     first = store.complete_run(
         run_id,
@@ -880,29 +879,54 @@ def test_complete_run_cannot_advance_or_count_twice(monkeypatch, tmp_path):
     assert second["run"]["status"] == "succeeded"
 
 
-def test_imported_job_runs_through_state_machine(monkeypatch, tmp_path):
+def test_imported_jobs_json_job_runs_through_state_machine(monkeypatch, tmp_path):
     monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
 
-    from cron.jobs import create_job, update_job
+    from cron.contracts import JobRunResult
+    import cron.scheduler as scheduler
+    import cron.state_store as state_store
     from cron.state_store import StateStore
 
-    job = create_job(
-        prompt="write report",
-        schedule="30m",
-        deliver="local",
-        state="running",
-        run_id="legacy-abc123",
+    due_dt = datetime(2026, 5, 30, 10, 0, 0, tzinfo=timezone.utc)
+    due_at = due_dt.isoformat()
+    cron_dir = tmp_path / "cron"
+    cron_dir.mkdir(parents=True)
+    (cron_dir / "jobs.json").write_text(
+        json.dumps(
+            {
+                "jobs": [
+                    {
+                        "id": "legacy-job",
+                        "name": "Legacy Job",
+                        "prompt": "write report",
+                        "schedule": {"kind": "interval", "minutes": 30},
+                        "schedule_display": "30m",
+                        "enabled": True,
+                        "state": "scheduled",
+                        "next_run_at": due_at,
+                        "repeat": {"times": None, "completed": 0},
+                        "deliver": "local",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
     )
-    due_at = "2026-05-30T10:00:00+00:00"
-    update_job(job["id"], {"next_run_at": due_at})
+    monkeypatch.setattr(state_store, "utc_now", lambda: due_dt)
+    monkeypatch.setattr(scheduler, "save_job_output", lambda job_id, doc, run_at=None: str(tmp_path / "out.md"))
 
+    result = scheduler.tick(
+        now_dt=due_dt,
+        job_runner=lambda claimed_job: JobRunResult(True, "# out", "done", None),
+    )
     store = StateStore()
-    recovered = store.recover_expired_leases(now_text="2026-05-30T10:30:00+00:00")
-    recovered_job = store.get_job(job["id"])
-    recovered_run = store.get_run("legacy-abc123")
+    runs = store.runs_for_job("legacy-job")
+    imported_job = store.get_job("legacy-job")
 
-    assert recovered == 1
-    assert recovered_job["state"] == "scheduled"
-    assert recovered_job["lease_run_id"] is None
-    assert recovered_job["next_run_at"] == due_at
-    assert recovered_run["status"] == "abandoned"
+    assert result.ran == 1
+    assert len(runs) == 1
+    assert runs[0]["status"] == "succeeded"
+    assert runs[0]["scheduled_for"] == due_at
+    assert imported_job["state"] == "scheduled"
+    assert imported_job["lease_run_id"] is None
+    assert imported_job["next_run_at"] != due_at

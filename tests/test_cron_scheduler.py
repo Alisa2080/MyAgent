@@ -189,6 +189,51 @@ def test_expired_unrecovered_lease_skips_output_and_delivery(monkeypatch, tmp_pa
     assert stored_job["lease_expires_at"] is None
 
 
+def test_lease_expiring_after_runner_skips_output_and_delivery(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+    saved = []
+    sent = []
+
+    from datetime import timedelta
+
+    from cron.contracts import JobRunResult
+    from cron.delivery_store import DeliveryStore
+    from cron.jobs import create_job, update_job
+    import cron.scheduler as scheduler
+    import cron.state_store as state_store
+    from cron.state_store import StateStore
+
+    current = [RUN_AT]
+    job = create_job(prompt="write report", schedule="every 30m", name="daily", deliver="webhook:https://example.invalid/hook")
+    update_job(job["id"], {"next_run_at": RUN_AT.isoformat()})
+    store = StateStore(lease_seconds=1)
+
+    monkeypatch.setattr(scheduler, "_store", lambda: StateStore(lease_seconds=1))
+    monkeypatch.setattr(scheduler, "save_job_output", lambda job_id, doc, run_at=None: saved.append((job_id, doc)) or str(tmp_path / "out.md"))
+    monkeypatch.setattr(state_store, "utc_now", lambda: current[0])
+    from cron import delivery
+    monkeypatch.setattr(delivery, "default_webhook_sender", lambda url, payload, timeout=10: sent.append(url) or (204, "ok"))
+
+    def runner(claimed_job):
+        current[0] = RUN_AT + timedelta(seconds=2)
+        return JobRunResult(True, "doc", "final", None)
+
+    result = scheduler.tick(now_dt=RUN_AT, job_runner=runner)
+
+    runs = store.runs_for_job(job["id"])
+    stored_job = store.get_job(job["id"])
+    assert result.failed == 1
+    assert result.results[0].error == "run lease lost before delivery"
+    assert saved == []
+    assert sent == []
+    assert DeliveryStore().stats()["pending"] == 0
+    assert runs[0]["status"] == "abandoned"
+    assert runs[0]["exit_reason"] == "late_completion"
+    assert stored_job["state"] == "scheduled"
+    assert stored_job["lease_run_id"] is None
+    assert stored_job["next_run_at"] == RUN_AT.isoformat()
+
+
 def test_lease_loss_after_enqueue_deletes_pending_delivery(monkeypatch, tmp_path):
     monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
     saved = []
