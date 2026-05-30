@@ -652,3 +652,88 @@ def test_cron_timeout_returns_failure_result(monkeypatch):
     assert result.success is False
     assert result.error == "Cron job timed out."
     assert "Cron job timed out." in result.output_doc
+
+
+def test_activity_reporter_does_not_raise_on_failure(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    from unittest.mock import MagicMock
+
+    from cron.activity_reporter import activity_reporter
+
+    mock_store = MagicMock()
+    mock_store.update_run_activity.side_effect = Exception("db error")
+
+    # Should not raise
+    activity_reporter("run-123", mock_store, activity=True, last_activity_desc="test")
+
+    mock_store.update_run_activity.assert_called_once_with(
+        "run-123",
+        heartbeat=True,
+        activity=True,
+        last_activity_desc="test",
+        current_tool=None,
+    )
+
+
+def test_activity_reporter_respects_disable_flag(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+    monkeypatch.setenv("AGENT_CRON_DISABLE_ACTIVITY_REPORTING", "1")
+
+    from unittest.mock import MagicMock
+
+    from cron.activity_reporter import activity_reporter
+
+    mock_store = MagicMock()
+
+    activity_reporter("run-123", mock_store, activity=True)
+
+    mock_store.update_run_activity.assert_not_called()
+
+
+def test_activity_reporter_heartbeat_only(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+    monkeypatch.delenv("AGENT_CRON_DISABLE_ACTIVITY_REPORTING", raising=False)
+
+    from unittest.mock import MagicMock
+
+    from cron.activity_reporter import activity_reporter
+
+    mock_store = MagicMock()
+
+    activity_reporter("run-456", mock_store, activity=False)
+
+    mock_store.update_run_activity.assert_called_once_with(
+        "run-456",
+        heartbeat=True,
+        activity=False,
+        last_activity_desc=None,
+        current_tool=None,
+    )
+
+
+def test_activity_reporter_with_current_tool(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+    monkeypatch.delenv("AGENT_CRON_DISABLE_ACTIVITY_REPORTING", raising=False)
+
+    from unittest.mock import MagicMock
+
+    from cron.activity_reporter import activity_reporter
+
+    mock_store = MagicMock()
+
+    activity_reporter(
+        "run-789",
+        mock_store,
+        activity=True,
+        last_activity_desc="tool_call",
+        current_tool="read_file",
+    )
+
+    mock_store.update_run_activity.assert_called_once_with(
+        "run-789",
+        heartbeat=True,
+        activity=True,
+        last_activity_desc="tool_call",
+        current_tool="read_file",
+    )

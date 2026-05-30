@@ -232,6 +232,8 @@ class StateStore:
                 "delivery_status": "TEXT",
                 "heartbeat_at": "TEXT",
                 "last_activity_at": "TEXT",
+                "last_activity_desc": "TEXT",
+                "current_tool": "TEXT",
             },
         )
         self._ensure_columns(
@@ -1241,6 +1243,42 @@ class StateStore:
                 (delivery_status, utc_now().isoformat(), run_id),
             )
         return delivery_status
+
+    def update_run_activity(
+        self,
+        run_id: str,
+        *,
+        heartbeat: bool = False,
+        activity: bool = False,
+        last_activity_desc: str | None = None,
+        current_tool: str | None = None,
+    ) -> None:
+        """Update activity heartbeat and state for a run.
+
+        Args:
+            run_id: The run ID to update.
+            heartbeat: If True, update heartbeat_at timestamp.
+            activity: If True, update last_activity_at and last_activity_desc.
+            last_activity_desc: Human-readable description of the activity.
+            current_tool: Name of the tool currently being executed.
+        """
+        updates: dict[str, Any] = {"updated_at": utc_now().isoformat()}
+        if heartbeat:
+            updates["heartbeat_at"] = utc_now().isoformat()
+        if activity:
+            updates["last_activity_at"] = utc_now().isoformat()
+            if last_activity_desc is not None:
+                updates["last_activity_desc"] = last_activity_desc
+            if current_tool is not None:
+                updates["current_tool"] = current_tool
+
+        if len(updates) <= 1:
+            return
+
+        assignments = ", ".join(f"{key} = ?" for key in updates)
+        values = list(updates.values()) + [run_id]
+        with self._connect() as conn:
+            conn.execute(f"UPDATE runs SET {assignments} WHERE id = ?", values)
 
     def recover_expired_leases(self, *, now_text: str) -> int:
         now_actual = utc_now().isoformat()

@@ -174,9 +174,33 @@ def _process_claimed(
     run_id = run["id"]
     job["run_id"] = run_id
     try:
+        from cron.activity_reporter import activity_reporter
+
         if store.mark_run_started(run_id) is None:
             return JobTickResult(job_id=job_id, success=False, error="run lease expired before start")
+
+        try:
+            activity_reporter(
+                run_id,
+                store,
+                activity=True,
+                last_activity_desc="started",
+            )
+        except Exception:
+            pass
+
         result = job_runner(job)
+
+        try:
+            activity_reporter(
+                run_id,
+                store,
+                activity=True,
+                last_activity_desc="completed",
+            )
+        except Exception:
+            pass
+
         if not store.run_owns_lease(run_id):
             store.complete_run(
                 run["id"],
