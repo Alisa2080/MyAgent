@@ -84,7 +84,11 @@ def _install_langchain_stubs(monkeypatch=None):
 
 def _install_optional_dep_stubs(monkeypatch=None):
     setter = monkeypatch.setitem if monkeypatch is not None else sys.modules.setdefault
-    if importlib.util.find_spec("dateutil") is None:
+    try:
+        dateutil_spec = importlib.util.find_spec("dateutil")
+    except ValueError:
+        dateutil_spec = None
+    if dateutil_spec is None:
         if monkeypatch is not None:
             setter(sys.modules, "dateutil", MagicMock())
             setter(sys.modules, "dateutil.parser", MagicMock())
