@@ -302,3 +302,62 @@ def test_job_delivery_error_aggregates_run_events(monkeypatch, tmp_path):
 
     assert store.get_run(run_id)["delivery_status"] == "failed"
     assert store.get_job(job["id"])["last_delivery_error"] == "HTTP 401: unauthorized"
+
+
+def test_delivery_events_from_cron_output_keep_run_id(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    from cron.delivery import JobRunResult, enqueue_result
+    from cron.jobs import create_job, update_job
+    from cron.state_store import StateStore
+
+    job = create_job(prompt="write report", schedule="30m", deliver="local")
+    update_job(job["id"], {"next_run_at": "2026-05-30T10:00:00+00:00"})
+    store = StateStore()
+    claimed = store.claim_due_jobs(now_text="2026-05-30T10:00:00+00:00", limit=1)[0]
+    claimed_job = dict(claimed["job"])
+    claimed_job["run_id"] = claimed["run"]["id"]
+
+    event = enqueue_result(
+        claimed_job,
+        JobRunResult(success=True, output_doc="# out", final_response="done"),
+        "/tmp/out.md",
+        "2026-05-30T10:00:00+00:00",
+    )
+
+    stored = store.get_delivery_event(event["id"])
+    assert stored["job_id"] == job["id"]
+    assert stored["run_id"] == claimed["run"]["id"]
+    assert stored["status"] == "delivered"
+
+
+def test_webhook_failure_updates_run_delivery_status(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    from cron.delivery import JobRunResult, enqueue_result
+    from cron.delivery_dispatcher import DeliveryDispatcher
+    from cron.delivery_registry import default_delivery_registry
+    from cron.jobs import create_job, update_job
+    from cron.state_store import StateStore
+
+    job = create_job(prompt="write report", schedule="30m", deliver="webhook:https://example.invalid/hook")
+    update_job(job["id"], {"next_run_at": "2026-05-30T10:00:00+00:00"})
+    store = StateStore()
+    claimed = store.claim_due_jobs(now_text="2026-05-30T10:00:00+00:00", limit=1)[0]
+    claimed_job = dict(claimed["job"])
+    claimed_job["run_id"] = claimed["run"]["id"]
+    enqueue_result(
+        claimed_job,
+        JobRunResult(success=True, output_doc="# out", final_response="done"),
+        "/tmp/out.md",
+        "2026-05-30T10:00:00+00:00",
+    )
+
+    registry = default_delivery_registry(webhook_sender=lambda url, payload, timeout=10: (500, "down"))
+    summary = DeliveryDispatcher(store=store, registry=registry).dispatch_due(limit=10)
+    run = store.get_run(claimed["run"]["id"])
+    job_after = store.get_job(job["id"])
+
+    assert summary["failed"] == 1
+    assert run["delivery_status"] == "retrying"
+    assert "HTTP 500" in job_after["last_delivery_error"]
