@@ -24,7 +24,6 @@ from agent_cli.text_input import (
     prepare_user_message,
     sanitize_terminal_input,
 )
-from agent_core.cron_lifecycle import start_cron_scheduler, stop_cron_scheduler
 from cron.notifications import (
     drain_cron_notifications_for_thread_id,
     format_cron_notification_message,
@@ -96,7 +95,6 @@ class AgentCLI:
         self.show_banner = show_banner
         self.cron_enabled = cron_enabled
         self.cron_interval_seconds = cron_interval_seconds
-        self._started_cron_scheduler = False
         self.pending_cron_events: list[dict[str, Any]] = []
         self._agent: Any | None = None
         self._last_result: Any = None
@@ -440,28 +438,6 @@ class AgentCLI:
         if touched:
             print("Inspect background task history with /tasks all")
 
-    def _start_cron_scheduler_for_repl(self) -> None:
-        if not self.cron_enabled:
-            return
-        try:
-            self._started_cron_scheduler = start_cron_scheduler(
-                interval_seconds=self.cron_interval_seconds
-            )
-        except Exception as exc:
-            logger.exception("Failed to start cron scheduler.")
-            print(f"Warning: failed to start cron scheduler: {exc}", file=sys.stderr)
-            self._started_cron_scheduler = False
-
-    def _stop_cron_scheduler_on_exit(self) -> None:
-        if not self._started_cron_scheduler:
-            return
-        try:
-            stop_cron_scheduler(timeout=2.0)
-        except Exception as exc:
-            print(f"Warning: failed to stop cron scheduler: {exc}", file=sys.stderr)
-        finally:
-            self._started_cron_scheduler = False
-
     def _print_banner(self) -> None:
         from shutil import get_terminal_size
 
@@ -486,44 +462,40 @@ class AgentCLI:
 
     def run_repl(self) -> int:
         self.ensure_session()
-        self._start_cron_scheduler_for_repl()
-        try:
-            if self.show_banner:
-                self._print_banner()
-            else:
-                print(f"Session: {self.session_id}")
-                print("Type /help for commands. Ctrl-D exits.")
-            while True:
-                try:
-                    self._drain_cron_notifications()
-                    self._drain_background_notifications()
-                    text = sanitize_terminal_input(self._prompt("> ")).strip()
-                except EOFError:
-                    print()
-                    self._stop_active_background_tasks_on_exit()
-                    return 0
-                except KeyboardInterrupt:
-                    print()
-                    continue
-                if not text:
-                    continue
-                try:
-                    if text.startswith("/"):
-                        output = self.handle_command(text)
-                    else:
-                        output = self.submit_message(text)
-                    if output:
-                        print(output)
-                    self._drain_cron_notifications()
-                    self._drain_background_notifications()
-                except EOFError:
-                    self._stop_active_background_tasks_on_exit()
-                    return 0
-                except Exception as exc:
-                    print(f"Error: {exc}", file=sys.stderr)
-                    continue
-        finally:
-            self._stop_cron_scheduler_on_exit()
+        if self.show_banner:
+            self._print_banner()
+        else:
+            print(f"Session: {self.session_id}")
+            print("Type /help for commands. Ctrl-D exits.")
+        while True:
+            try:
+                self._drain_cron_notifications()
+                self._drain_background_notifications()
+                text = sanitize_terminal_input(self._prompt("> ")).strip()
+            except EOFError:
+                print()
+                self._stop_active_background_tasks_on_exit()
+                return 0
+            except KeyboardInterrupt:
+                print()
+                continue
+            if not text:
+                continue
+            try:
+                if text.startswith("/"):
+                    output = self.handle_command(text)
+                else:
+                    output = self.submit_message(text)
+                if output:
+                    print(output)
+                self._drain_cron_notifications()
+                self._drain_background_notifications()
+            except EOFError:
+                self._stop_active_background_tasks_on_exit()
+                return 0
+            except Exception as exc:
+                print(f"Error: {exc}", file=sys.stderr)
+                continue
 
     def _prompt(self, prompt_text: str) -> str:
         if self.prompt_session is None:

@@ -940,6 +940,10 @@ def test_handle_interrupts_uses_collected_decisions(monkeypatch, tmp_path):
     class FakeAgent:
         pass
 
+    class FakeCommand:
+        def __init__(self, *, resume):
+            self.resume = resume
+
     def runner(agent, input_data, config):
         calls.append(input_data)
         if len(calls) == 1:
@@ -959,6 +963,7 @@ def test_handle_interrupts_uses_collected_decisions(monkeypatch, tmp_path):
         "agent_cli.repl.collect_approval_decisions",
         lambda requests: {"decisions": [{"type": "reject", "message": "no"}]},
     )
+    monkeypatch.setattr("agent_cli.repl.Command", FakeCommand)
 
     cli = AgentCLI(
         session_store=SessionStore(tmp_path / "cli.sqlite"),
@@ -1408,66 +1413,74 @@ def make_cli(**kwargs):
     return AgentCLI(**params)
 
 
-def test_run_repl_starts_and_stops_cron_scheduler(monkeypatch):
+def test_repl_does_not_start_cron_scheduler(monkeypatch, tmp_path):
+    import agent_cli.repl as repl_module
+
+    calls = []
+    monkeypatch.setattr(
+        repl_module,
+        "start_cron_scheduler",
+        lambda *args, **kwargs: calls.append((args, kwargs)),
+        raising=False,
+    )
+
+    cli = repl_module.AgentCLI(
+        session_store=FakeStore(),
+        checkpointer=object(),
+        agent_factory=lambda config: object(),
+        runner=lambda agent, messages, config: {"messages": []},
+        workdir=str(tmp_path),
+        model_name=None,
+        cron_enabled=True,
+    )
+
+    assert cli is not None
+    assert calls == []
+
+
+def test_run_repl_does_not_start_or_stop_cron_scheduler(monkeypatch):
     import agent_cli.repl as repl
 
     calls = []
     monkeypatch.setattr(
         repl,
         "start_cron_scheduler",
-        lambda interval_seconds: calls.append(("start", interval_seconds)) or True,
+        lambda *args, **kwargs: calls.append(("start", args, kwargs)) or True,
+        raising=False,
     )
     monkeypatch.setattr(
         repl,
         "stop_cron_scheduler",
-        lambda timeout=None: calls.append(("stop", timeout)) or True,
+        lambda *args, **kwargs: calls.append(("stop", args, kwargs)) or True,
+        raising=False,
     )
 
     cli = make_cli(cron_enabled=True, cron_interval_seconds=7)
     monkeypatch.setattr(cli, "_prompt", lambda prompt: (_ for _ in ()).throw(EOFError()))
 
     assert cli.run_repl() == 0
-    assert calls == [("start", 7), ("stop", 2.0)]
+    assert calls == []
 
 
-def test_run_repl_does_not_stop_scheduler_it_did_not_start(monkeypatch):
+def test_run_repl_accepts_disabled_cron_compatibility_arg(monkeypatch):
     import agent_cli.repl as repl
 
     calls = []
     monkeypatch.setattr(
         repl,
         "start_cron_scheduler",
-        lambda interval_seconds: calls.append(("start", interval_seconds)) or False,
-    )
-    monkeypatch.setattr(
-        repl,
-        "stop_cron_scheduler",
-        lambda timeout=None: calls.append(("stop", timeout)) or True,
-    )
-
-    cli = make_cli(cron_enabled=True, cron_interval_seconds=7)
-    monkeypatch.setattr(cli, "_prompt", lambda prompt: (_ for _ in ()).throw(EOFError()))
-
-    assert cli.run_repl() == 0
-    assert calls == [("start", 7)]
-
-
-def test_run_repl_skips_cron_scheduler_when_disabled(monkeypatch):
-    import agent_cli.repl as repl
-
-    monkeypatch.setattr(
-        repl,
-        "start_cron_scheduler",
-        lambda interval_seconds: (_ for _ in ()).throw(AssertionError("no start")),
+        lambda *args, **kwargs: calls.append(("start", args, kwargs)) or True,
+        raising=False,
     )
 
     cli = make_cli(cron_enabled=False)
     monkeypatch.setattr(cli, "_prompt", lambda prompt: (_ for _ in ()).throw(EOFError()))
 
     assert cli.run_repl() == 0
+    assert calls == []
 
 
-def test_run_repl_logs_cron_scheduler_start_failure(monkeypatch, caplog):
+def test_run_repl_does_not_log_cron_scheduler_start_failure(monkeypatch, caplog):
     import logging
 
     import agent_cli.repl as repl
@@ -1475,7 +1488,8 @@ def test_run_repl_logs_cron_scheduler_start_failure(monkeypatch, caplog):
     monkeypatch.setattr(
         repl,
         "start_cron_scheduler",
-        lambda interval_seconds: (_ for _ in ()).throw(RuntimeError("cron boom")),
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("cron boom")),
+        raising=False,
     )
 
     cli = make_cli(cron_enabled=True)
@@ -1484,7 +1498,7 @@ def test_run_repl_logs_cron_scheduler_start_failure(monkeypatch, caplog):
     with caplog.at_level(logging.ERROR, logger="agent_cli.repl"):
         assert cli.run_repl() == 0
 
-    assert "Failed to start cron scheduler." in caplog.text
+    assert "Failed to start cron scheduler." not in caplog.text
 
 
 def test_cron_notifications_print_then_inject_next_turn(monkeypatch, capsys):
