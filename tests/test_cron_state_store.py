@@ -749,3 +749,50 @@ def test_claim_due_delivery_events_treats_malformed_next_attempt_as_due(monkeypa
     claimed = store.claim_due_delivery_events(limit=1, adapter_keys={"webhook"})
 
     assert [item["id"] for item in claimed] == [event["id"]]
+
+
+from datetime import datetime, timezone
+
+
+def test_claim_due_jobs_creates_run_without_advancing_next_run(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    from cron.jobs import create_job, update_job
+    from cron.state_store import StateStore
+
+    job = create_job(prompt="write report", schedule="30m", deliver="local")
+    due_at = "2026-05-30T10:00:00+00:00"
+    update_job(job["id"], {"next_run_at": due_at})
+
+    store = StateStore()
+    claimed = store.claim_due_jobs(now_text=due_at, limit=1)
+
+    assert len(claimed) == 1
+    claimed_job = claimed[0]["job"]
+    run = claimed[0]["run"]
+    assert run["job_id"] == job["id"]
+    assert run["scheduled_for"] == due_at
+    assert run["status"] == "claimed"
+    assert claimed_job["state"] == "running"
+    assert claimed_job["lease_run_id"] == run["id"]
+    assert claimed_job["next_run_at"] == due_at
+    assert store.get_job(job["id"])["next_run_at"] == due_at
+
+
+def test_second_claim_does_not_duplicate_running_job(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    from cron.jobs import create_job, update_job
+    from cron.state_store import StateStore
+
+    job = create_job(prompt="write report", schedule="30m", deliver="local")
+    due_at = "2026-05-30T10:00:00+00:00"
+    update_job(job["id"], {"next_run_at": due_at})
+
+    store = StateStore()
+    first = store.claim_due_jobs(now_text=due_at, limit=1)
+    second = store.claim_due_jobs(now_text=due_at, limit=1)
+
+    assert len(first) == 1
+    assert second == []
+    assert len(store.runs_for_job(job["id"])) == 1
