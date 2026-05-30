@@ -1060,3 +1060,46 @@ def test_terminal_run_ignores_late_activity(monkeypatch, tmp_path):
 
     assert store.update_run_activity(run_id, activity=True, last_activity_desc="agent_running") is None
     assert store.get_run(run_id)["last_activity_desc"] == "completed"
+
+
+def test_resolve_job_timeouts_uses_job_then_env(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+    monkeypatch.setenv("AGENT_CRON_TIMEOUT", "77")
+
+    from cron.state_store import StateStore
+
+    store = StateStore()
+    assert store.resolve_job_timeouts({}) == {
+        "idle_timeout_seconds": 77,
+        "max_runtime_seconds": None,
+    }
+    assert store.resolve_job_timeouts({"idle_timeout_seconds": 12, "max_runtime_seconds": 30}) == {
+        "idle_timeout_seconds": 12,
+        "max_runtime_seconds": 30,
+    }
+
+
+def test_status_query_helpers_return_next_running_and_failed(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    from cron.jobs import create_job
+    from cron.state_store import StateStore
+
+    job = create_job(prompt="write report", schedule="30m", name="daily", deliver="local")
+    store = StateStore()
+    assert store.list_next_due_jobs(limit=1)[0]["id"] == job["id"]
+
+    run_id = store.claim_due_jobs(now_text=job["next_run_at"], limit=1)[0]["run"]["id"]
+    store.mark_run_started(run_id)
+    assert store.list_running_runs(limit=1)[0]["run_id"] == run_id
+
+    store.complete_run(
+        run_id,
+        success=False,
+        output_path=None,
+        final_response=None,
+        error="boom",
+        next_run_at=None,
+        completed=True,
+    )
+    assert store.latest_failed_run()["run_id"] == run_id
