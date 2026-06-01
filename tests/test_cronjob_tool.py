@@ -19,6 +19,8 @@ REQUIRED_SUMMARY_FIELDS = {
     "enabled",
     "state",
     "workdir",
+    "concurrency_key",
+    "concurrency_policy",
 }
 
 
@@ -152,6 +154,24 @@ def test_cronjob_create_captures_web_origin_identity(monkeypatch):
         "source_type": "web",
         "session_id": "web-session-1",
     }
+
+
+def test_cronjob_tool_create_accepts_concurrency_fields(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    from agent_tools.public.cronjob import run_cronjob_action
+
+    result = run_cronjob_action(
+        "create",
+        schedule="every 5m",
+        prompt="hello",
+        concurrency_key="account:alpha",
+        concurrency_policy="queue_all",
+    )
+
+    assert result["success"] is True
+    assert result["job"]["concurrency_key"] == "account:alpha"
+    assert result["job"]["concurrency_policy"] == "queue_all"
 
 
 def test_cronjob_create_ignores_execution_info_thread_without_config_thread(monkeypatch):
@@ -840,6 +860,24 @@ def test_cronjob_create_accepts_web_origin_without_thread(monkeypatch):
     }
 
 
+def test_cronjob_tool_create_accepts_concurrency_fields(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    from agent_tools.public.cronjob import run_cronjob_action
+
+    result = run_cronjob_action(
+        "create",
+        schedule="every 5m",
+        prompt="hello",
+        concurrency_key="account:alpha",
+        concurrency_policy="queue_all",
+    )
+
+    assert result["success"] is True
+    assert result["job"]["concurrency_key"] == "account:alpha"
+    assert result["job"]["concurrency_policy"] == "queue_all"
+
+
 def test_cronjob_unsupported_delivery_lists_known_adapters():
     cronjob_tool = _cronjob_tool()
 
@@ -919,3 +957,21 @@ def test_cronjob_create_captures_web_origin_identity(monkeypatch):
         "source_type": "web",
         "session_id": "web-session-1",
     }
+
+
+def test_cronjob_tool_create_accepts_concurrency_fields(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    from agent_tools.public.cronjob import run_cronjob_action
+
+    result = run_cronjob_action(
+        "create",
+        schedule="every 5m",
+        prompt="hello",
+        concurrency_key="account:alpha",
+        concurrency_policy="queue_all",
+    )
+
+    assert result["success"] is True
+    assert result["job"]["concurrency_key"] == "account:alpha"
+    assert result["job"]["concurrency_policy"] == "queue_all"

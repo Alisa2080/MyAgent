@@ -28,6 +28,14 @@ MIN_RECURRING_GRACE_SECONDS = 120
 MAX_RECURRING_GRACE_SECONDS = 7200
 JOBS_FILE = get_jobs_file()
 
+CONCURRENCY_POLICIES = {
+    "queue_one",
+    "queue_all",
+    "replace_running",
+    "skip_if_running",
+}
+DEFAULT_CONCURRENCY_POLICY = "queue_one"
+
 _jobs_file_lock = threading.Lock()
 
 
@@ -167,6 +175,20 @@ def _normalize_timeout_seconds(value: Any, *, allow_zero: bool = True) -> int | 
     return seconds
 
 
+def normalize_concurrency_policy(value: Any) -> str:
+    if value is None or str(value).strip() == "":
+        return DEFAULT_CONCURRENCY_POLICY
+    normalized = str(value).strip()
+    if normalized not in CONCURRENCY_POLICIES:
+        raise ValueError(f"Unsupported concurrency_policy: {normalized}")
+    return normalized
+
+
+def normalize_concurrency_key(value: Any, job_id: str) -> str:
+    normalized = str(value).strip() if value is not None else ""
+    return normalized or f"job:{job_id}"
+
+
 def _normalize_delivery_config(job: dict[str, Any]) -> dict[str, Any]:
     from cron.delivery_registry import default_delivery_registry
     from cron.delivery_targets import DeliveryIdentity
@@ -299,6 +321,15 @@ def _normalize_updates(
     for key in ("idle_timeout_seconds", "max_runtime_seconds"):
         if key in normalized_updates:
             normalized_updates[key] = _normalize_timeout_seconds(normalized_updates[key])
+    if "concurrency_policy" in normalized_updates:
+        normalized_updates["concurrency_policy"] = normalize_concurrency_policy(
+            normalized_updates["concurrency_policy"]
+        )
+    if "concurrency_key" in normalized_updates:
+        job_id = (existing_job or {}).get("id", "")
+        normalized_updates["concurrency_key"] = normalize_concurrency_key(
+            normalized_updates["concurrency_key"], job_id
+        )
     return normalized_updates
 
 
@@ -358,6 +389,8 @@ def create_job(
     workdir: str | None = None,
     idle_timeout_seconds: int | str | None = None,
     max_runtime_seconds: int | str | None = None,
+    concurrency_key: str | None = None,
+    concurrency_policy: str | None = None,
 ) -> dict[str, Any]:
     parsed_schedule = parse_schedule(schedule)
     repeat_times = repeat
@@ -366,8 +399,9 @@ def create_job(
 
     normalized_skills = _normalize_skills(skill, skills)
     current = now()
+    job_id = uuid.uuid4().hex[:12]
     job = {
-        "id": uuid.uuid4().hex[:12],
+        "id": job_id,
         "name": (name or prompt or "cron job")[:50].strip() or "cron job",
         "prompt": prompt or "",
         "schedule": parsed_schedule,
@@ -392,6 +426,8 @@ def create_job(
         "base_url": base_url or None,
         "idle_timeout_seconds": _normalize_timeout_seconds(idle_timeout_seconds),
         "max_runtime_seconds": _normalize_timeout_seconds(max_runtime_seconds),
+        "concurrency_key": normalize_concurrency_key(concurrency_key, job_id),
+        "concurrency_policy": normalize_concurrency_policy(concurrency_policy),
         "created_at": current.isoformat(),
     }
     job = _normalize_delivery_config(job)
