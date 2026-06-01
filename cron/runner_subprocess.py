@@ -109,11 +109,13 @@ def _create_temp_run_dir() -> Path:
     return run_dir
 
 
-def _cleanup_temp_dir(tmp_dir: Path) -> None:
+def _cleanup_temp_dir(tmp_dir: Path) -> str | None:
     try:
         shutil.rmtree(tmp_dir)
     except OSError as exc:
         logger.debug("Failed to clean up temp dir %s: %s", tmp_dir, exc)
+        return str(exc)
+    return None
 
 
 # ----------------------------------------------------------------------
@@ -439,6 +441,8 @@ def worker_protocol_smoke(
     secure_dir(smoke_dir)
     input_path = smoke_dir / "input.json"
     output_path = smoke_dir / "result.json"
+    result = WorkerSmokeResult(True)
+    cleanup_error: str | None = None
     try:
         input_path.write_text(
             json.dumps({"version": _RESULT_VERSION, "smoke": True}),
@@ -463,23 +467,40 @@ def worker_protocol_smoke(
         if proc.returncode != 0:
             detail = (proc.stderr or proc.stdout or "").strip()
             suffix = f": {detail}" if detail else ""
-            return WorkerSmokeResult(
+            result = WorkerSmokeResult(
                 False,
                 f"runner_worker smoke exited with code {proc.returncode}{suffix}",
             )
-        parsed = _parse_result_file(output_path)
-        if not parsed.success:
-            return WorkerSmokeResult(False, parsed.error or "runner_worker smoke failed")
-        return WorkerSmokeResult(True)
+        else:
+            parsed = _parse_result_file(output_path)
+            if not parsed.success:
+                result = WorkerSmokeResult(
+                    False,
+                    parsed.error or "runner_worker smoke failed",
+                )
+            else:
+                result = WorkerSmokeResult(True)
     except subprocess.TimeoutExpired:
-        return WorkerSmokeResult(
+        result = WorkerSmokeResult(
             False,
             f"runner_worker smoke timed out after {timeout_seconds}s",
         )
     except Exception as exc:
-        return WorkerSmokeResult(False, str(exc))
+        result = WorkerSmokeResult(False, str(exc))
     finally:
-        _cleanup_temp_dir(smoke_dir)
+        cleanup_error = _cleanup_temp_dir(smoke_dir)
+    if cleanup_error is not None:
+        cleanup_result = WorkerSmokeResult(
+            False,
+            f"runner_worker smoke cleanup failed: {cleanup_error}",
+        )
+        if not result.ok and result.error:
+            cleanup_result = replace(
+                cleanup_result,
+                error=f"{result.error}; {cleanup_result.error}",
+            )
+        return cleanup_result
+    return result
 
 
 # ----------------------------------------------------------------------

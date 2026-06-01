@@ -26,6 +26,22 @@ def test_worker_protocol_smoke_succeeds_and_cleans_tmp(monkeypatch, tmp_path):
     assert list(get_runner_tmp_dir().iterdir()) == []
 
 
+def test_worker_protocol_smoke_reports_cleanup_failure(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    from cron.runner_subprocess import worker_protocol_smoke
+
+    with patch(
+        "cron.runner_subprocess.shutil.rmtree",
+        side_effect=OSError("cleanup denied"),
+    ):
+        result = worker_protocol_smoke(timeout_seconds=10)
+
+    assert result.ok is False
+    assert result.error is not None
+    assert "cleanup" in result.error.lower()
+
+
 def test_runner_tmp_residuals_report_old_directory(monkeypatch, tmp_path):
     import time
 
