@@ -1246,6 +1246,25 @@ def test_claim_due_jobs_queue_one_idempotent_when_already_queued(monkeypatch, tm
     assert len(queued) == 1, "Should only have one queued run"
 
 
+def test_plan_job_claim_reports_queue_decision_without_writing(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    from cron.state_store import StateStore
+
+    store = StateStore()
+    job = _due_job(store, job_id="first", key="repo:a", policy="queue_one")
+    store.claim_due_jobs(now_text="2026-05-29T10:00:00+00:00", limit=10)
+
+    plan = store.plan_job_claim(
+        str(job["id"]),
+        now_text="2026-05-29T10:05:00+00:00",
+    )
+
+    assert plan["decision"] == "would_queue"
+    assert plan["concurrency_key"] == "repo:a"
+    assert len(store.list_runs(job_id=job["id"])) == 1
+
+
 def test_claim_due_jobs_replace_running_abandons_active_run(monkeypatch, tmp_path):
     monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
 

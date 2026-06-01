@@ -165,6 +165,34 @@ def simple_job_action(action: str, *, job_id: str, reason: str | None = None) ->
     return CronCommandResult(f"{label} cron job {job.get('job_id', job_id)}.")
 
 
+def run_cron_job(
+    *,
+    job_id: str,
+    dry_run: bool = False,
+    now_text: str | None = None,
+) -> CronCommandResult:
+    if not dry_run:
+        return simple_job_action("run", job_id=job_id)
+    from cron.state_store import StateStore, utc_now
+
+    store = StateStore()
+    try:
+        plan = store.plan_job_claim(job_id, now_text=now_text or utc_now().isoformat())
+    except KeyError:
+        return CronCommandResult(f"Cron job not found: {job_id}.", exit_code=2)
+
+    job = plan.get("job") or {}
+    lines = [
+        f"Dry run for cron job {job_id}",
+        f"Decision: {plan['decision']}",
+        f"Enabled: {job.get('enabled', '-')}",
+        f"Next run: {plan.get('next_run_at') or '-'}",
+        f"Concurrency: {plan.get('concurrency_key') or '-'} ({plan.get('concurrency_policy') or '-'})",
+        f"Active same-key runs: {plan.get('active_run_count', 0)}",
+    ]
+    return CronCommandResult("\n".join(lines))
+
+
 def serve_cron(
     *,
     interval_seconds: float = 60,

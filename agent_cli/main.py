@@ -142,9 +142,13 @@ def build_parser() -> argparse.ArgumentParser:
     cron_edit.add_argument("job_id")
     _add_cron_edit_flags(cron_edit)
 
-    for name in ("pause", "resume", "run"):
+    for name in ("pause", "resume"):
         parser_for_action = cron_subparsers.add_parser(name, parents=[public_options])
         parser_for_action.add_argument("job_id")
+
+    cron_run = cron_subparsers.add_parser("run", parents=[public_options])
+    cron_run.add_argument("job_id")
+    cron_run.add_argument("--dry-run", action="store_true")
 
     cron_remove = cron_subparsers.add_parser(
         "remove",
@@ -295,8 +299,13 @@ def _run_cron_command(args: argparse.Namespace):
             top_level=True,
             **updates,
         )
-    if subcommand in {"pause", "resume", "run"}:
+    if subcommand in {"pause", "resume"}:
         return cron_commands.simple_job_action(subcommand, job_id=args.job_id)
+    if subcommand == "run":
+        return cron_commands.run_cron_job(
+            job_id=args.job_id,
+            dry_run=bool(getattr(args, "dry_run", False)),
+        )
     if subcommand in {"remove", "rm", "delete"}:
         return cron_commands.simple_job_action("remove", job_id=args.job_id)
     if subcommand == "status":

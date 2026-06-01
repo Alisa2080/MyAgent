@@ -820,3 +820,20 @@ def test_cron_doctor_lists_delivery_adapters(monkeypatch, tmp_path):
     assert "local" in result.text
     assert "origin" in result.text
     assert "webhook" in result.text
+
+
+def test_cron_run_dry_run_does_not_create_run(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    from cron.jobs import create_job, update_job
+    from cron.state_store import StateStore
+    from agent_cli.cron_commands import run_cron_job
+
+    job = create_job(prompt="hello", schedule="every 5m")
+    update_job(job["id"], {"next_run_at": "2026-05-29T10:00:00+00:00"})
+
+    result = run_cron_job(job_id=job["id"], dry_run=True, now_text="2026-05-29T10:00:00+00:00")
+
+    assert result.exit_code == 0
+    assert "would_claim" in result.text
+    assert StateStore().list_runs(job_id=job["id"]) == []

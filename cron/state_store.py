@@ -1777,3 +1777,48 @@ class StateStore:
             if len(stale) >= max(1, int(limit)):
                 break
         return stale
+
+    def plan_job_claim(self, job_id: str, *, now_text: str) -> dict[str, Any]:
+        from cron.jobs import normalize_concurrency_key, normalize_concurrency_policy
+
+        now_dt = _parse_time(now_text)
+        job = self.get_job(job_id)
+        if now_dt is None:
+            return {"job_id": job_id, "decision": "invalid_now", "error": f"Invalid now_text: {now_text}"}
+        if not job.get("enabled", True):
+            return {"job_id": job_id, "decision": "disabled", "job": job}
+        due_at = _parse_time(job.get("next_run_at"))
+        if due_at is None or due_at > now_dt:
+            return {
+                "job_id": job_id,
+                "job": job,
+                "decision": "not_due",
+                "next_run_at": job.get("next_run_at"),
+                "concurrency_key": job.get("concurrency_key"),
+                "concurrency_policy": job.get("concurrency_policy"),
+            }
+        with self._connect() as conn:
+            key = normalize_concurrency_key(job.get("concurrency_key"), str(job["id"]))
+            active = self._active_runs_for_key(conn, key)
+        policy = normalize_concurrency_policy(job.get("concurrency_policy"))
+        occupying = [run for run in active if run["status"] in self.OCCUPYING_RUN_STATUSES]
+        queued = [run for run in active if run["status"] == "queued"]
+        decision = "would_claim"
+        if policy == "queue_one" and occupying:
+            decision = "would_skip_duplicate_queue" if queued else "would_queue"
+        elif policy == "queue_all" and occupying:
+            decision = "would_queue"
+        elif policy == "skip_if_running" and active:
+            decision = "would_skip"
+        elif policy == "replace_running" and active:
+            decision = "would_replace"
+        return {
+            "job_id": job_id,
+            "job": job,
+            "decision": decision,
+            "next_run_at": job.get("next_run_at"),
+            "concurrency_key": key,
+            "concurrency_policy": policy,
+            "active_run_count": len(active),
+            "active_runs": active[:5],
+        }
