@@ -1223,6 +1223,29 @@ def test_claim_due_jobs_skip_if_running_records_skipped_run(monkeypatch, tmp_pat
     assert skipped[0]["exit_reason"] == "concurrency_skip"
 
 
+def test_claim_due_jobs_queue_one_idempotent_when_already_queued(monkeypatch, tmp_path):
+    """Third+ claim should not create additional queued runs."""
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    from cron.state_store import StateStore
+
+    store = StateStore()
+    _due_job(store, job_id="first", key="repo:a", policy="queue_one")
+    _due_job(store, job_id="second", key="repo:a", policy="queue_one")
+
+    # First claim: claimed + queued
+    store.claim_due_jobs(now_text="2026-05-29T10:00:00+00:00", limit=10)
+
+    # Second claim: already occupied, skip (no new queued)
+    store.claim_due_jobs(now_text="2026-05-29T10:05:00+00:00", limit=10)
+
+    # Third claim: still occupied and already queued, should not create another queued
+    store.claim_due_jobs(now_text="2026-05-29T10:10:00+00:00", limit=10)
+
+    queued = [run for run in store.list_runs(limit=20) if run["status"] == "queued"]
+    assert len(queued) == 1, "Should only have one queued run"
+
+
 def test_claim_due_jobs_replace_running_abandons_active_run(monkeypatch, tmp_path):
     monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
 

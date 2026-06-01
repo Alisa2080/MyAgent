@@ -1060,13 +1060,13 @@ class StateStore:
                     job.get("concurrency_policy")
                 )
 
-                now_actual = utc_now().isoformat()
+                now_text = utc_now().isoformat()
                 run_id = uuid.uuid4().hex
                 lease_expires_at = (now_dt + timedelta(seconds=self.lease_seconds)).isoformat()
 
                 # Apply concurrency policy
                 active_runs = self._active_runs_for_key(conn, job["concurrency_key"])
-                occupying = [run for run in active_runs if run["status"] in {"claimed", "running"}]
+                occupying = [run for run in active_runs if run["status"] in self.OCCUPYING_RUN_STATUSES]
                 queued = [run for run in active_runs if run["status"] == "queued"]
                 policy = job["concurrency_policy"]
 
@@ -1077,10 +1077,10 @@ class StateStore:
                             run_id=run_id,
                             job=job,
                             status="queued",
-                            now_text=now_actual,
+                            now_text=now_text,
                             lease_expires_at=None,
                         )
-                    self._advance_job_after_claim(conn, job, now_actual)
+                    self._advance_job_after_claim(conn, job, now_text)
                     continue
 
                 if policy == "queue_all" and occupying:
@@ -1089,10 +1089,10 @@ class StateStore:
                         run_id=run_id,
                         job=job,
                         status="queued",
-                        now_text=now_actual,
+                        now_text=now_text,
                         lease_expires_at=None,
                     )
-                    self._advance_job_after_claim(conn, job, now_actual)
+                    self._advance_job_after_claim(conn, job, now_text)
                     continue
 
                 if policy == "skip_if_running" and active_runs:
@@ -1101,11 +1101,11 @@ class StateStore:
                         run_id=run_id,
                         job=job,
                         status="skipped",
-                        now_text=now_actual,
+                        now_text=now_text,
                         lease_expires_at=None,
                         exit_reason="concurrency_skip",
                     )
-                    self._advance_job_after_claim(conn, job, now_actual)
+                    self._advance_job_after_claim(conn, job, now_text)
                     continue
 
                 if policy == "replace_running" and active_runs:
@@ -1120,41 +1120,17 @@ class StateStore:
                                 updated_at = ?
                             WHERE id = ? AND status IN ('queued', 'claimed', 'running')
                             """,
-                            (now_actual, run_id, now_actual, active["id"]),
+                            (now_text, run_id, now_text, active["id"]),
                         )
 
                 # Default: claim the run normally
-                previous_attempts = conn.execute(
-                    "SELECT COUNT(*) AS count FROM runs WHERE job_id = ?",
-                    (job["id"],),
-                ).fetchone()["count"]
-                conn.execute(
-                    """
-                    INSERT INTO runs (
-                        id, job_id, scheduled_for, claimed_at, lease_expires_at,
-                        started_at, finished_at, attempt, status, exit_reason,
-                        output_path, final_response, error, delivery_status,
-                        heartbeat_at, last_activity_at, last_activity_desc, current_tool,
-                        concurrency_key, concurrency_policy, replaced_by_run_id,
-                        created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, NULL, NULL, ?, 'claimed', NULL, NULL, NULL, NULL, NULL,
-                              ?, ?, 'claimed', NULL, ?, ?, NULL,
-                              ?, ?)
-                    """,
-                    (
-                        run_id,
-                        job["id"],
-                        job["next_run_at"],
-                        now_actual,
-                        lease_expires_at,
-                        int(previous_attempts) + 1,
-                        now_actual,
-                        now_actual,
-                        job["concurrency_key"],
-                        job["concurrency_policy"],
-                        now_actual,
-                        now_actual,
-                    ),
+                self._insert_run(
+                    conn,
+                    run_id=run_id,
+                    job=job,
+                    status="claimed",
+                    now_text=now_text,
+                    lease_expires_at=lease_expires_at,
                 )
                 conn.execute(
                     """
@@ -1165,7 +1141,7 @@ class StateStore:
                         updated_at = ?
                     WHERE id = ? AND state = 'scheduled'
                     """,
-                    (run_id, lease_expires_at, now_actual, job["id"]),
+                    (run_id, lease_expires_at, now_text, job["id"]),
                 )
                 run = dict(conn.execute("SELECT * FROM runs WHERE id = ?", (run_id,)).fetchone())
                 claimed_job = self._row_to_job(conn.execute("SELECT * FROM jobs WHERE id = ?", (job["id"],)).fetchone())
@@ -1178,6 +1154,10 @@ class StateStore:
         job: dict[str, Any],
         now_text: str,
     ) -> None:
+        """Advance job's next_run_at after a non-claimed outcome (queued/skipped/replaced).
+
+        Does NOT update job state or last_run_at — those are handled by the claim path.
+        """
         from cron.jobs import compute_next_run
 
         next_run_at = compute_next_run(job["schedule"], job.get("next_run_at"))
