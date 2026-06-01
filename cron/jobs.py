@@ -41,7 +41,7 @@ def normalize_concurrency_policy(value: Any) -> str:
     """Normalize and validate concurrency policy."""
     if value is None or str(value).strip() == "":
         return DEFAULT_CONCURRENCY_POLICY
-    normalized = str(value).strip()
+    normalized = str(value).strip().lower()
     if normalized not in CONCURRENCY_POLICIES:
         raise ValueError(f"Unsupported concurrency_policy: {normalized}")
     return normalized
