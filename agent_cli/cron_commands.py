@@ -182,12 +182,28 @@ def run_cron_job(
         return CronCommandResult(f"Cron job not found: {job_id}.", exit_code=2)
 
     job = plan.get("job") or {}
+    timeouts = plan.get("timeouts") or {}
+    idle_timeout = timeouts.get("idle_timeout_seconds")
+    max_runtime = timeouts.get("max_runtime_seconds")
+    targets = plan.get("delivery_targets") or []
+    target_labels = []
+    for target in targets:
+        if isinstance(target, dict):
+            target_labels.append(str(target.get("target") or target.get("target_type") or target))
+        else:
+            target_labels.append(str(target))
     lines = [
         f"Dry run for cron job {job_id}",
         f"Decision: {plan['decision']}",
+        f"Due: {'yes' if plan.get('due') else 'no'}",
         f"Enabled: {job.get('enabled', '-')}",
         f"Next run: {plan.get('next_run_at') or '-'}",
+        f"Next scheduled: {plan.get('next_scheduled_at') or '-'}",
         f"Concurrency: {plan.get('concurrency_key') or '-'} ({plan.get('concurrency_policy') or '-'})",
+        "Timeouts: "
+        f"idle={str(idle_timeout) + 's' if idle_timeout is not None else '-'} "
+        f"max_runtime={str(max_runtime) + 's' if max_runtime is not None else '-'}",
+        f"Delivery targets: {', '.join(target_labels) if target_labels else '-'}",
         f"Active same-key runs: {plan.get('active_run_count', 0)}",
     ]
     return CronCommandResult("\n".join(lines))

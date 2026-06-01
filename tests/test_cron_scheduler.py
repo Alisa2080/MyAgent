@@ -874,3 +874,53 @@ def test_tick_promotes_queued_before_claiming_due_jobs(monkeypatch, tmp_path):
     assert len(results) == 2
     runs = StateStore().list_runs(statuses={"succeeded"}, limit=10)
     assert len(runs) == 2
+
+
+def test_tick_does_not_serialize_independent_workdir_jobs(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    import threading
+
+    from cron.contracts import JobRunResult
+    from cron.jobs import create_job, update_job
+    from cron.scheduler import tick
+    import cron.state_store as state_store_module
+
+    workdir = tmp_path / "repo"
+    workdir.mkdir()
+    first = create_job(
+        prompt="first",
+        schedule="every 5m",
+        workdir=str(workdir),
+        concurrency_key="job:first",
+    )
+    second = create_job(
+        prompt="second",
+        schedule="every 5m",
+        workdir=str(workdir),
+        concurrency_key="job:second",
+    )
+    update_job(first["id"], {"next_run_at": "2026-05-29T10:00:00+00:00"})
+    update_job(second["id"], {"next_run_at": "2026-05-29T10:00:00+00:00"})
+
+    due_dt = datetime(2026, 5, 29, 10, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(state_store_module, "utc_now", lambda: due_dt)
+    started = []
+    lock = threading.Lock()
+    both_started = threading.Event()
+    overlap_count = 0
+
+    def runner(job):
+        nonlocal overlap_count
+        with lock:
+            started.append(job["id"])
+            if len(started) == 2:
+                both_started.set()
+        if both_started.wait(timeout=0.5):
+            overlap_count += 1
+        return JobRunResult(success=True, output_doc="ok", final_response="ok")
+
+    tick(now_text="2026-05-29T10:00:00+00:00", job_runner=runner)
+
+    assert set(started) == {first["id"], second["id"]}
+    assert overlap_count == 2

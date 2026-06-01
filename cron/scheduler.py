@@ -423,12 +423,7 @@ def tick(
             return result
 
         resolved_runner: JobRunner = job_runner if job_runner is not None else _run_default_job
-        workdir_claimed = [item for item in claimed if item["job"].get("workdir")]
-        parallel_claimed = [item for item in claimed if not item["job"].get("workdir")]
-
-        for item in workdir_claimed:
-            result.results.append(_process_claimed(item, run_at, resolved_runner))
-        result.results.extend(_run_parallel_claimed(parallel_claimed, run_at, resolved_runner))
+        result.results.extend(_run_parallel_claimed(claimed, run_at, resolved_runner))
 
         result.ran = len(result.results)
         result.succeeded = sum(1 for item in result.results if item.success)

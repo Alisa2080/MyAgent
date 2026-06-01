@@ -179,6 +179,11 @@ def _add_cron_create_flags(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--repeat", type=int)
     parser.add_argument("--skill", dest="skills", action="append")
     parser.add_argument("--script")
+    parser.add_argument("--concurrency-key")
+    parser.add_argument(
+        "--concurrency-policy",
+        choices=["queue_one", "queue_all", "replace_running", "skip_if_running"],
+    )
     # --workdir is inherited from parent parser
 
 
@@ -193,6 +198,11 @@ def _add_cron_edit_flags(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--remove-skill", dest="remove_skills", action="append")
     parser.add_argument("--clear-skills", action="store_true")
     parser.add_argument("--script")
+    parser.add_argument("--concurrency-key")
+    parser.add_argument(
+        "--concurrency-policy",
+        choices=["queue_one", "queue_all", "replace_running", "skip_if_running"],
+    )
     # --workdir is inherited from parent parser
 
 
@@ -271,6 +281,8 @@ def _run_cron_command(args: argparse.Namespace):
             skills=getattr(args, "skills", None),
             script=getattr(args, "script", None),
             workdir=getattr(args, "workdir", None),
+            concurrency_key=getattr(args, "concurrency_key", None),
+            concurrency_policy=getattr(args, "concurrency_policy", None),
         )
     if subcommand == "edit":
         updates = {
@@ -282,6 +294,8 @@ def _run_cron_command(args: argparse.Namespace):
             "skills": getattr(args, "skills", None),
             "script": getattr(args, "script", None),
             "workdir": getattr(args, "workdir", None),
+            "concurrency_key": getattr(args, "concurrency_key", None),
+            "concurrency_policy": getattr(args, "concurrency_policy", None),
         }
         updates = {key: value for key, value in updates.items() if value is not None}
         if getattr(args, "clear_skills", False):
