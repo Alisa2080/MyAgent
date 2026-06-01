@@ -8,6 +8,18 @@ from typing import Any
 from cron.jobs import get_job, list_jobs
 from cron.paths import display_cron_home, get_jobs_file, get_output_dir, get_scripts_dir
 
+
+def _short(value: Any, length: int = 8) -> str:
+    text = str(value or "-")
+    return text[:length] if text != "-" else "-"
+
+
+def _preview(value: Any, limit: int = 120) -> str:
+    text = " ".join(str(value or "").split())
+    if len(text) <= limit:
+        return text or "-"
+    return text[: limit - 3] + "..."
+
 run_cronjob_action = None
 cron_tick = None
 
@@ -539,6 +551,120 @@ def existing_job_skills(job_id: str) -> list[str]:
     if skill and skill not in skills:
         skills.append(skill)
     return skills
+
+
+def list_cron_runs(job_id: str | None = None, *, limit: int = 20) -> CronCommandResult:
+    from cron.state_store import StateStore
+
+    store = StateStore()
+    rows = store.list_runs(job_id=job_id, limit=limit)
+    if not rows:
+        return CronCommandResult("No cron runs.")
+    lines = ["Cron Runs:"]
+    for run in rows:
+        lines.append(
+            "  "
+            f"{_short(run['id'])} "
+            f"job={_short(run['job_id'])} "
+            f"status={run['status']} "
+            f"scheduled={run.get('scheduled_for') or '-'} "
+            f"exit={run.get('exit_reason') or '-'} "
+            f"delivery={run.get('delivery_status') or '-'}"
+        )
+        activity = run.get("last_activity_desc") or run.get("current_tool")
+        if run["status"] in {"queued", "claimed", "running"} and activity:
+            lines.append(f"    activity={activity} heartbeat={run.get('heartbeat_at') or '-'}")
+    return CronCommandResult("\n".join(lines))
+
+
+def cron_logs(job_id: str, *, limit: int = 10) -> CronCommandResult:
+    from cron.state_store import StateStore
+
+    store = StateStore()
+    try:
+        job = store.get_job(job_id)
+    except KeyError:
+        return CronCommandResult(f"Cron job not found: {job_id}.", exit_code=2)
+    runs = store.list_runs(job_id=job_id, limit=limit)
+    lines = [
+        f"Cron Logs: {job.get('name') or job_id}",
+        f"Job: {job_id}",
+        f"Next run: {job.get('next_run_at') or '-'}",
+    ]
+    if not runs:
+        lines.append("No runs.")
+        return CronCommandResult("\n".join(lines))
+    lines.append("Recent runs:")
+    for run in runs:
+        lines.append(
+            f"  {_short(run['id'])} status={run['status']} "
+            f"scheduled={run.get('scheduled_for') or '-'} "
+            f"output={run.get('output_path') or '-'}"
+        )
+        if run.get("error"):
+            lines.append(f"    error={_preview(run['error'])}")
+        elif run.get("final_response"):
+            lines.append(f"    final={_preview(run['final_response'])}")
+    return CronCommandResult("\n".join(lines))
+
+
+def list_deliveries(selector: str | None = None, *, limit: int = 20) -> CronCommandResult:
+    from cron.state_store import StateStore
+
+    store = StateStore()
+    job_id = None
+    run_id = None
+    filter_label = "all"
+    if selector:
+        try:
+            store.get_job(selector)
+            job_id = selector
+            filter_label = f"job={selector}"
+        except KeyError:
+            try:
+                store.get_run(selector)
+                run_id = selector
+                filter_label = f"run={selector}"
+            except KeyError:
+                return CronCommandResult(f"No cron job or run found for: {selector}.", exit_code=2)
+    events = store.list_delivery_events(job_id=job_id, run_id=run_id, limit=limit)
+    if not events:
+        return CronCommandResult(f"No delivery events ({filter_label}).")
+    lines = [f"Delivery Events ({filter_label}):"]
+    for event in events:
+        lines.append(
+            "  "
+            f"{_short(event['id'])} "
+            f"job={_short(event.get('job_id'))} "
+            f"run={_short(event.get('run_id'))} "
+            f"target={event.get('target') or '-'} "
+            f"adapter={event.get('adapter_key') or '-'} "
+            f"status={event.get('status') or '-'} "
+            f"attempts={event.get('attempt_count') or 0} "
+            f"next={event.get('next_attempt_at') or '-'}"
+        )
+        if event.get("last_error"):
+            lines.append(f"    error={_preview(event['last_error'])}")
+    return CronCommandResult("\n".join(lines))
+
+
+def retry_delivery(event_id: str) -> CronCommandResult:
+    from cron.delivery_store import DeliveryStore
+
+    store = DeliveryStore()
+    try:
+        before = store.get(event_id)
+    except KeyError:
+        return CronCommandResult(f"Delivery event not found: {event_id}.", exit_code=2)
+    try:
+        after = store.retry(event_id)
+    except ValueError as exc:
+        return CronCommandResult(str(exc), exit_code=2)
+    except Exception as exc:
+        return CronCommandResult(f"Failed to retry delivery event: {exc}", exit_code=1)
+    return CronCommandResult(
+        f"Delivery event {event_id} reset: {before['status']} -> {after['status']}."
+    )
 
 
 def test_delivery(

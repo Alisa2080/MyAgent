@@ -166,6 +166,21 @@ def build_parser() -> argparse.ArgumentParser:
     cron_test_delivery.add_argument("--target", required=True)
     cron_test_delivery.add_argument("--session-id", dest="session_id")
 
+    cron_runs = cron_subparsers.add_parser("runs", parents=[public_options])
+    cron_runs.add_argument("job_id", nargs="?")
+    cron_runs.add_argument("--limit", type=int, default=20)
+
+    cron_logs = cron_subparsers.add_parser("logs", parents=[public_options])
+    cron_logs.add_argument("job_id")
+    cron_logs.add_argument("--limit", type=int, default=10)
+
+    cron_deliveries = cron_subparsers.add_parser("deliveries", parents=[public_options])
+    cron_deliveries.add_argument("selector", nargs="?")
+    cron_deliveries.add_argument("--limit", type=int, default=20)
+
+    cron_retry_delivery = cron_subparsers.add_parser("retry-delivery", parents=[public_options])
+    cron_retry_delivery.add_argument("event_id")
+
     return parser
 
 
@@ -316,6 +331,23 @@ def _run_cron_command(args: argparse.Namespace):
             target=args.target,
             session_id=getattr(args, "session_id", None),
         )
+    if subcommand == "runs":
+        return cron_commands.list_cron_runs(
+            job_id=getattr(args, "job_id", None),
+            limit=getattr(args, "limit", 20),
+        )
+    if subcommand == "logs":
+        return cron_commands.cron_logs(
+            job_id=args.job_id,
+            limit=getattr(args, "limit", 10),
+        )
+    if subcommand == "deliveries":
+        return cron_commands.list_deliveries(
+            selector=getattr(args, "selector", None),
+            limit=getattr(args, "limit", 20),
+        )
+    if subcommand == "retry-delivery":
+        return cron_commands.retry_delivery(args.event_id)
     return cron_commands.CronCommandResult(f"Unknown cron command: {subcommand}", exit_code=2)
 
 

@@ -820,3 +820,113 @@ def test_cron_doctor_lists_delivery_adapters(monkeypatch, tmp_path):
     assert "local" in result.text
     assert "origin" in result.text
     assert "webhook" in result.text
+
+
+def test_cron_run_dry_run_does_not_create_run(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    from cron.jobs import create_job, update_job
+    from cron.state_store import StateStore
+    from agent_cli.cron_commands import run_cron_job
+
+    job = create_job(prompt="hello", schedule="every 5m")
+    update_job(job["id"], {"next_run_at": "2026-05-29T10:00:00+00:00"})
+
+    result = run_cron_job(job_id=job["id"], dry_run=True, now_text="2026-05-29T10:00:00+00:00")
+
+    assert result.exit_code == 0
+    assert "would_claim" in result.text
+    assert StateStore().list_runs(job_id=job["id"]) == []
+
+
+def test_cron_runs_lists_recent_runs(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    from datetime import datetime, timezone
+    from cron.jobs import create_job, update_job
+    from cron.state_store import StateStore, utc_now
+    from agent_cli.cron_commands import list_cron_runs
+
+    fixed_now = datetime(2026, 5, 29, 10, 0, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr("cron.state_store.utc_now", lambda: fixed_now)
+
+    job = create_job(prompt="hello", schedule="every 5m")
+    update_job(job["id"], {"next_run_at": "2026-05-29T10:00:00+00:00"})
+    store = StateStore()
+    claimed = store.claim_due_jobs(now_text="2026-05-29T10:00:00+00:00", limit=1)[0]
+    store.mark_run_started(claimed["run"]["id"])
+    store.complete_run(
+        claimed["run"]["id"],
+        success=True,
+        output_path="/tmp/out.md",
+        final_response="done",
+        error=None,
+        next_run_at=None,
+        completed=False,
+    )
+
+    result = list_cron_runs(job_id=job["id"], limit=10)
+
+    assert result.exit_code == 0
+    assert claimed["run"]["id"][:8] in result.text
+    assert "succeeded" in result.text
+
+
+def test_cron_logs_shows_latest_error_and_output(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    from cron.jobs import create_job, update_job
+    from cron.state_store import StateStore
+    from agent_cli.cron_commands import cron_logs
+
+    job = create_job(prompt="hello", schedule="every 5m", name="Daily")
+    update_job(job["id"], {"next_run_at": "2026-05-29T10:00:00+00:00"})
+    store = StateStore()
+    claimed = store.claim_due_jobs(now_text="2026-05-29T10:00:00+00:00", limit=1)[0]
+    store.complete_run(
+        claimed["run"]["id"],
+        success=False,
+        output_path="/tmp/out.md",
+        final_response="",
+        error="boom",
+        next_run_at=None,
+        completed=False,
+        run_status="failed",
+    )
+
+    result = cron_logs(job_id=job["id"], limit=5)
+
+    assert result.exit_code == 0
+    assert "Daily" in result.text
+    assert "boom" in result.text
+    assert "/tmp/out.md" in result.text
+
+
+def test_retry_delivery_resets_failed_event(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    from cron.delivery_store import DeliveryStore
+    from agent_cli.cron_commands import retry_delivery
+
+    store = DeliveryStore()
+    event = store.enqueue(
+        job_id="job-1",
+        run_id="run-1",
+        job_name="Job",
+        run_at="2026-05-29T10:00:00+00:00",
+        target="webhook:https://example.invalid",
+        target_type="webhook",
+        adapter_key="webhook",
+        payload={"ok": True},
+        status="failed",
+        final_response="done",
+        output_path="/tmp/out.md",
+    )
+    store.update_event(event["id"], status="failed", last_error="HTTP 500")
+
+    result = retry_delivery(event["id"])
+    updated = store.get(event["id"])
+
+    assert result.exit_code == 0
+    assert updated["status"] == "pending"
+    assert updated["last_error"] is None

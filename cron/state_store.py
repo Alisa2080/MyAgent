@@ -885,6 +885,35 @@ class StateStore:
                 deleted += int(cursor.rowcount or 0)
         return deleted
 
+    def list_delivery_events(
+        self,
+        *,
+        job_id: str | None = None,
+        run_id: str | None = None,
+        limit: int = 20,
+    ) -> list[dict[str, Any]]:
+        clauses: list[str] = []
+        params: list[Any] = []
+        if job_id is not None:
+            clauses.append("job_id = ?")
+            params.append(job_id)
+        if run_id is not None:
+            clauses.append("run_id = ?")
+            params.append(run_id)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        params.append(max(1, int(limit)))
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT * FROM delivery_events
+                {where}
+                ORDER BY created_at DESC, id DESC
+                LIMIT ?
+                """,
+                params,
+            ).fetchall()
+        return [dict(row) for row in rows]
+
     def recover_stale_delivery_events(self, *, max_age_seconds: int = 600) -> int:
         cutoff = (utc_now() - timedelta(seconds=max_age_seconds)).isoformat()
         with self._connect() as conn:

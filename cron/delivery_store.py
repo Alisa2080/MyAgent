@@ -169,3 +169,18 @@ class DeliveryStore:
                 (cutoff,),
             ).fetchall()
         return [dict(row) for row in rows]
+
+    def list_events(
+        self,
+        *,
+        job_id: str | None = None,
+        run_id: str | None = None,
+        limit: int = 20,
+    ) -> list[dict[str, Any]]:
+        return self._store.list_delivery_events(job_id=job_id, run_id=run_id, limit=limit)
+
+    def retry(self, event_id: str) -> dict[str, Any]:
+        event = self.get(event_id)
+        if event["status"] not in {"failed", "dead"}:
+            raise ValueError(f"delivery event is not retryable: {event['status']}")
+        return self.update_event(event_id, status="pending", last_error=None)
