@@ -253,48 +253,24 @@ def cron_status() -> CronCommandResult:
         f"Delivery adapters: {', '.join(default_delivery_registry().adapter_keys())}",
     ]
 
-    next_due = state_store.list_next_due_jobs(limit=5)
-    if next_due:
-        lines.append("Next due:")
-        for job in next_due:
-            lines.append(
-                f"  {job.get('id')} {job.get('name') or '-'} at {job.get('next_run_at')}"
-            )
-    
-    # Add running runs info
-    running_runs = state_store.list_running_runs(limit=10)
-    if running_runs:
-        lines.append(f"Running jobs: {len(running_runs)}")
-        for run in running_runs:
-            activity_desc = run.get("last_activity_desc") or "unknown"
-            current_tool = run.get("current_tool") or "-"
-            heartbeat = run.get("heartbeat_at") or "-"
-            lines.append(
-                f"  run={run['run_id']} job={run['job_name'] or run['job_id']} "
-                f"activity={activity_desc} tool={current_tool} heartbeat={heartbeat}"
-            )
-    else:
-        lines.append("Running jobs: 0")
-    
-    # Add stale runs info
-    stale_runs = state_store.list_stale_running_runs(limit=10)
-    if stale_runs:
-        lines.append(f"Stale runs (will be abandoned): {len(stale_runs)}")
-        for run in stale_runs:
-            lines.append(
-                f"  run={run['run_id']} job={run['job_name'] or run['job_id']} "
-                f"reason={run.get('stale_reason')}"
-            )
+    from cron.state_store import StateStore
 
-    failed_run = state_store.latest_failed_run()
-    if failed_run:
+    summary = StateStore().cron_status_summary(top_n=5)
+    next_due = summary.get("next_due")
+    lines.append(f"Next due: {next_due['id']} {next_due.get('name') or ''} at {next_due['next_run_at']}" if next_due else "Next due: -")
+    lines.append(f"Running: {len(summary['running'])}")
+    for run in summary["running"]:
         lines.append(
-            "Last failed run: "
-            f"job={failed_run.get('job_id') or '-'} "
-            f"run={failed_run.get('run_id') or '-'} "
-            f"exit={failed_run.get('exit_reason') or '-'} "
-            f"error={failed_run.get('error') or '-'}"
+            f"  {_short(run['id'])} job={_short(run['job_id'])} "
+            f"activity={run.get('last_activity_desc') or '-'}"
         )
+    lines.append(f"Queued: {len(summary['queued'])}")
+    for run in summary["queued"]:
+        lines.append(f"  {_short(run['id'])} job={_short(run['job_id'])} scheduled={run.get('scheduled_for') or '-'}")
+    lines.append(f"Stale: {len(summary['stale'])}")
+    if summary.get("latest_failed_run"):
+        failed = summary["latest_failed_run"]
+        lines.append(f"Latest failed run: {_short(failed['id'])} exit={failed.get('exit_reason') or '-'} error={_preview(failed.get('error'))}")
     
     if mode == "subprocess":
         from cron.runner_subprocess import subprocess_timeout_diagnostic

@@ -804,7 +804,7 @@ def test_cron_status_shows_next_due_and_latest_failed_run(monkeypatch, tmp_path)
 
     assert "Next due:" in result.text
     assert "next-due" in result.text
-    assert "Last failed run:" in result.text
+    assert "Latest failed run:" in result.text
     assert "idle_timeout" in result.text
     assert "idle" in result.text
 
@@ -930,3 +930,34 @@ def test_retry_delivery_resets_failed_event(monkeypatch, tmp_path):
     assert result.exit_code == 0
     assert updated["status"] == "pending"
     assert updated["last_error"] is None
+
+
+def test_cron_status_shows_running_queued_and_next_due(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    from cron.jobs import create_job, update_job
+    from cron.state_store import StateStore
+    from agent_cli.cron_commands import cron_status
+
+    first = create_job(
+        prompt="first",
+        schedule="every 5m",
+        concurrency_key="repo:a",
+        concurrency_policy="queue_one",
+    )
+    second = create_job(
+        prompt="second",
+        schedule="every 5m",
+        concurrency_key="repo:a",
+        concurrency_policy="queue_one",
+    )
+    update_job(first["id"], {"next_run_at": "2026-05-29T10:00:00+00:00"})
+    update_job(second["id"], {"next_run_at": "2026-05-29T10:00:00+00:00"})
+    StateStore().claim_due_jobs(now_text="2026-05-29T10:00:00+00:00", limit=10)
+
+    result = cron_status()
+
+    assert result.exit_code == 0
+    assert "Running:" in result.text
+    assert "Queued:" in result.text
+    assert "Next due:" in result.text

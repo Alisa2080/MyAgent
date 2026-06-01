@@ -1716,3 +1716,27 @@ class StateStore:
             if len(stale) >= max(1, int(limit)):
                 break
         return stale
+
+    def cron_status_summary(self, *, top_n: int = 5) -> dict[str, Any]:
+        running = self.list_runs(statuses={"claimed", "running"}, limit=top_n)
+        queued = self.list_runs(statuses={"queued"}, limit=top_n)
+        stale = self.list_stale_running_runs(limit=top_n)
+        failed = self.latest_failed_run()
+        with self._connect() as conn:
+            next_due = conn.execute(
+                """
+                SELECT id, name, next_run_at FROM jobs
+                WHERE enabled = 1
+                  AND state = 'scheduled'
+                  AND next_run_at IS NOT NULL
+                ORDER BY next_run_at ASC
+                LIMIT 1
+                """
+            ).fetchone()
+        return {
+            "running": running,
+            "queued": queued,
+            "stale": stale,
+            "latest_failed_run": failed,
+            "next_due": dict(next_due) if next_due else None,
+        }
