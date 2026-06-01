@@ -128,6 +128,33 @@ agent = build_agent(include_cron_tools=True)
 
 Cron output is saved under the configured terminal toolkit home. `deliver="origin"` queues thread-scoped notifications that embedding applications can drain with `cron.notifications.drain_cron_notifications_for_thread_id(thread_id)`.
 
+For local automatic scheduling, install and run the user-level cron service:
+
+```bash
+python -m agent_cli cron service install
+python -m agent_cli cron service start
+python -m agent_cli cron service status
+python -m agent_cli cron service logs
+```
+
+Linux uses user systemd when it is available. macOS uses a user LaunchAgent. The installed service runs the existing foreground command:
+
+```bash
+python -m agent_cli cron serve --interval 60 --lease-seconds 180
+```
+
+If scheduled jobs are not firing, run:
+
+```bash
+python -m agent_cli cron doctor
+```
+
+If user-level services are unsupported on your platform, run the foreground scheduler directly:
+
+```bash
+python -m agent_cli cron serve
+```
+
 ## Agent CLI
 
 This repository includes a local terminal CLI for the LangGraph agent. It
