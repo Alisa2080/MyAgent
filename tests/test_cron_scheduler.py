@@ -654,6 +654,67 @@ def test_tick_with_no_due_jobs_dispatches_due_failed_delivery(monkeypatch, tmp_p
     assert DeliveryStore().get(event["id"])["status"] == "delivered"
 
 
+def test_tick_recovers_stale_delivery_before_claiming(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    from cron.delivery import JobRunResult, enqueue_result
+    from cron.delivery_store import DeliveryStore
+    import cron.delivery as delivery
+    import cron.scheduler as scheduler
+
+    sent = []
+    monkeypatch.setattr(delivery, "default_webhook_sender", lambda url, payload, timeout=10: sent.append(payload["event_id"]) or (204, "ok"))
+    event = enqueue_result(
+        {"id": "job-1", "name": "Daily", "deliver": "webhook:https://example.invalid/hook"},
+        JobRunResult(success=True, output_doc="# out", final_response="done"),
+        "/tmp/out.md",
+        "2026-05-22T08:00:00+00:00",
+    )
+    DeliveryStore().update_event(
+        event["id"],
+        status="delivering",
+        updated_at="2026-05-22T08:00:00+00:00",
+        next_attempt_at=None,
+    )
+
+    result = scheduler.tick(now_dt=RUN_AT, job_runner=lambda job: pytest.fail("no jobs should run"))
+
+    assert result.delivery.recovered_stale == 1
+    assert result.delivery.claimed == 1
+    assert result.delivery.delivered == 1
+    assert sent == [event["id"]]
+    assert DeliveryStore().get(event["id"])["status"] == "delivered"
+
+
+def test_delivery_maintenance_error_does_not_prevent_due_jobs(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    from cron.contracts import JobRunResult
+    from cron.jobs import create_job, update_job
+    import cron.scheduler as scheduler
+    from cron.state_store import StateStore
+
+    job = create_job(prompt="write report", schedule="30m", name="daily", deliver="local")
+    update_job(job["id"], {"next_run_at": RUN_AT.isoformat()})
+    store = StateStore()
+    monkeypatch.setattr(scheduler, "_store", lambda: store)
+    monkeypatch.setattr(store, "recover_stale_delivery_events", lambda: (_ for _ in ()).throw(RuntimeError("delivery db locked")))
+    monkeypatch.setattr(scheduler, "save_job_output", lambda job_id, doc, run_at=None: str(tmp_path / "out.md"))
+    import cron.state_store as state_store
+    monkeypatch.setattr(state_store, "utc_now", lambda: RUN_AT)
+
+    result = scheduler.tick(
+        now_dt=RUN_AT,
+        job_runner=lambda claimed_job: JobRunResult(True, "doc", "final", None),
+    )
+
+    assert result.delivery.error == "RuntimeError: delivery db locked"
+    assert result.due == 1
+    assert result.ran == 1
+    assert result.succeeded == 1
+    assert store.runs_for_job(job["id"])[0]["status"] == "succeeded"
+
+
 def test_tick_with_no_due_jobs_keeps_origin_delivery_pending(monkeypatch, tmp_path):
     monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
 

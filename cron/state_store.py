@@ -919,7 +919,9 @@ class StateStore:
             ).fetchall()
         recovered = 0
         for row in rows:
-            self.mark_delivery_failed(str(row["id"]), "delivery attempt abandoned")
+            recovered_event = self.mark_delivery_failed(str(row["id"]), "delivery attempt abandoned")
+            if recovered_event.get("status") == "failed":
+                self.update_delivery_event(str(row["id"]), next_attempt_at=utc_now().isoformat())
             recovered += 1
         return recovered
 
