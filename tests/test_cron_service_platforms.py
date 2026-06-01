@@ -86,6 +86,39 @@ def test_systemd_install_writes_unit_and_enables(monkeypatch, tmp_path):
     ]
 
 
+def test_systemd_install_auto_injects_subprocess_for_prod(monkeypatch, tmp_path):
+    from cron.service_manager import ServiceInstallConfig
+    from cron.service_platforms.systemd_user import SystemdUserCronService
+
+    calls = []
+
+    def fake_run(args):
+        calls.append(args)
+        return 0, "ok", ""
+
+    monkeypatch.setattr(
+        "cron.service_platforms.systemd_user.systemd_unit_path",
+        lambda: tmp_path / "langchain-agent-cron.service",
+    )
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path / "cron-home"))
+    monkeypatch.delenv("AGENT_CRON_RUNNER_MODE", raising=False)
+
+    service = SystemdUserCronService(command_runner=fake_run)
+    result = service.install(
+        ServiceInstallConfig(
+            interval_seconds=30,
+            lease_seconds=90,
+            force=False,
+            python_executable="/usr/bin/python3",
+            environment_overrides={"AGENT_CRON_RUNNER_MODE": "subprocess"},
+        )
+    )
+
+    unit = (tmp_path / "langchain-agent-cron.service").read_text(encoding="utf-8")
+    assert result.exit_code == 0
+    assert 'Environment="AGENT_CRON_RUNNER_MODE=subprocess"' in unit
+
+
 def test_systemd_unit_escapes_execstart_and_environment(monkeypatch):
     from cron.service_manager import ServiceInstallConfig
     from cron.service_platforms.systemd_user import render_unit
@@ -489,6 +522,41 @@ def test_launchd_install_writes_plist(monkeypatch, tmp_path):
     assert payload["StandardErrorPath"] == str(stderr_path)
     assert stdout_path.parent.is_dir()
     assert "agent cron service start" in result.message
+
+
+def test_launchd_install_auto_injects_subprocess_for_prod(monkeypatch, tmp_path):
+    import plistlib
+
+    from cron.service_manager import ServiceInstallConfig
+    from cron.service_platforms.launchd_user import LaunchdUserCronService
+
+    monkeypatch.setattr(
+        "cron.service_platforms.launchd_user.launchd_plist_path",
+        lambda: tmp_path / "ai.langchain.agent.cron.plist",
+    )
+    monkeypatch.setattr(
+        "cron.service_platforms.launchd_user.launchd_log_paths",
+        lambda: (tmp_path / "out.log", tmp_path / "err.log"),
+    )
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path / "cron-home"))
+    monkeypatch.delenv("AGENT_CRON_RUNNER_MODE", raising=False)
+
+    service = LaunchdUserCronService(command_runner=lambda args: (0, "ok", ""))
+    result = service.install(
+        ServiceInstallConfig(
+            interval_seconds=30,
+            lease_seconds=90,
+            force=False,
+            python_executable="/usr/bin/python3",
+            environment_overrides={"AGENT_CRON_RUNNER_MODE": "subprocess"},
+        )
+    )
+
+    payload = plistlib.loads(
+        (tmp_path / "ai.langchain.agent.cron.plist").read_bytes()
+    )
+    assert result.exit_code == 0
+    assert payload["EnvironmentVariables"]["AGENT_CRON_RUNNER_MODE"] == "subprocess"
 
 
 def test_launchd_supported_probes_gui_domain(monkeypatch):

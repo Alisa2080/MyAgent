@@ -39,17 +39,19 @@ def _quote_systemd_arg(value: str) -> str:
     return escaped
 
 
-def _format_environment() -> str:
+def _format_environment(config: ServiceInstallConfig) -> str:
     return "\n".join(
         f'Environment="{key}={_quote_systemd(value)}"'
-        for key, value in sorted(service_environment().items())
+        for key, value in sorted(
+            service_environment(config.environment_overrides).items()
+        )
         if "\n" not in value and "\r" not in value
     )
 
 
 def render_unit(config: ServiceInstallConfig) -> str:
     command = " ".join(_quote_systemd_arg(arg) for arg in serve_command(config))
-    environment = _format_environment()
+    environment = _format_environment(config)
     environment_block = f"{environment}\n" if environment else ""
     return (
         "[Unit]\n"

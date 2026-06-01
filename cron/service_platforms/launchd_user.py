@@ -48,10 +48,12 @@ def _run_command(args: list[str]) -> tuple[int, str, str]:
     return result.returncode, result.stdout or "", result.stderr or ""
 
 
-def _environment_variables() -> dict[str, str]:
+def _environment_variables(config: ServiceInstallConfig) -> dict[str, str]:
     return {
         key: value
-        for key, value in sorted(service_environment().items())
+        for key, value in sorted(
+            service_environment(config.environment_overrides).items()
+        )
         if "\n" not in value and "\r" not in value
     }
 
@@ -66,7 +68,7 @@ def render_plist(config: ServiceInstallConfig) -> bytes:
         "StandardOutPath": str(stdout_path),
         "StandardErrorPath": str(stderr_path),
     }
-    environment = _environment_variables()
+    environment = _environment_variables(config)
     if environment:
         payload["EnvironmentVariables"] = environment
     return plistlib.dumps(payload, sort_keys=True)
