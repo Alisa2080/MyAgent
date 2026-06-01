@@ -1177,6 +1177,7 @@ class StateStore:
         next_run_at: str | None,
         completed: bool,
         delivery_error: str | None = None,
+        exit_reason: str | None = None,
     ) -> dict[str, Any]:
         run_status = "succeeded" if success else "failed"
         job_state = "completed" if completed else "scheduled"
@@ -1237,11 +1238,22 @@ class StateStore:
                         """
                         UPDATE runs
                         SET status = ?, finished_at = ?, output_path = ?, final_response = ?,
-                            error = ?, heartbeat_at = ?, last_activity_at = ?,
+                            error = ?, exit_reason = ?, heartbeat_at = ?, last_activity_at = ?,
                             last_activity_desc = 'completed', current_tool = NULL, updated_at = ?
                         WHERE id = ? AND status IN ('claimed', 'running')
                         """,
-                        (run_status, now_text, output_path, final_response, error, now_text, now_text, now_text, run_id),
+                        (
+                            run_status,
+                            now_text,
+                            output_path,
+                            final_response,
+                            error,
+                            None if success else exit_reason,
+                            now_text,
+                            now_text,
+                            now_text,
+                            run_id,
+                        ),
                     )
                     if updated_run.rowcount:
                         conn.execute(

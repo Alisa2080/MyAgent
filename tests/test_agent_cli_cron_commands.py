@@ -767,6 +767,48 @@ def test_cron_status_lists_registered_delivery_adapters(monkeypatch, tmp_path):
     assert "slack" in result.text
 
 
+def test_cron_status_shows_next_due_and_latest_failed_run(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    from agent_cli.cron_commands import cron_status
+    from cron.jobs import create_job
+    from cron.state_store import StateStore
+
+    next_job = create_job(
+        prompt="write report",
+        schedule="every 30m",
+        name="next-due",
+        deliver="local",
+    )
+    failed_job = create_job(
+        prompt="write report",
+        schedule="every 30m",
+        name="failed-job",
+        deliver="local",
+    )
+    store = StateStore()
+    run_id = store.claim_due_jobs(now_text=failed_job["next_run_at"], limit=1)[0]["run"]["id"]
+    store.mark_run_started(run_id)
+    store.complete_run(
+        run_id,
+        success=False,
+        output_path=None,
+        final_response=None,
+        error="idle",
+        next_run_at=next_job["next_run_at"],
+        completed=False,
+        exit_reason="idle_timeout",
+    )
+
+    result = cron_status()
+
+    assert "Next due:" in result.text
+    assert "next-due" in result.text
+    assert "Last failed run:" in result.text
+    assert "idle_timeout" in result.text
+    assert "idle" in result.text
+
+
 def test_cron_doctor_lists_delivery_adapters(monkeypatch, tmp_path):
     monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
 

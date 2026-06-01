@@ -14,6 +14,7 @@ def activity_reporter(
     run_id: str,
     store: StateStore,
     *,
+    heartbeat: bool = True,
     activity: bool = False,
     last_activity_desc: str | None = None,
     current_tool: str | None = None,
@@ -32,7 +33,7 @@ def activity_reporter(
     try:
         store.update_run_activity(
             run_id,
-            heartbeat=True,
+            heartbeat=heartbeat,
             activity=activity,
             last_activity_desc=last_activity_desc,
             current_tool=current_tool,

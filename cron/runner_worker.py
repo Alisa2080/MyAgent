@@ -37,6 +37,7 @@ def _failure_result(error: str) -> dict[str, Any]:
         "output_doc": None,
         "final_response": None,
         "error": error,
+        "exit_reason": None,
     }
 
 
@@ -102,6 +103,7 @@ def main() -> int:
             "output_doc": result.output_doc,
             "final_response": result.final_response,
             "error": result.error,
+            "exit_reason": getattr(result, "exit_reason", None),
         }
         _write_result(output_path, result_payload)
         return 0

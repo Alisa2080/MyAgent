@@ -309,6 +309,210 @@ class TestRunJobSubprocess:
                 assert result.output_doc == "the output doc"
                 assert result.final_response == "the response"
 
+    def test_parent_reports_activity_while_subprocess_runs(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+        monkeypatch.setenv("AGENT_CRON_RUNNER_SUBPROCESS_TIMEOUT", "30")
+
+        mock_dir = tmp_path / "cron" / "runner-tmp" / "heartbeat_run"
+        mock_dir.mkdir(parents=True, exist_ok=True)
+
+        import subprocess as sp_module
+
+        activity_events = []
+
+        def reporter(**kwargs):
+            activity_events.append(kwargs)
+
+        def fake_popen(cmd, stdout=None, stderr=None, stdin=None):
+            proc = type("MockP", (), {"pid": 99999, "returncode": None})()
+            proc.wait_calls = 0
+
+            def do_wait(timeout=None):
+                proc.wait_calls += 1
+                if proc.wait_calls == 1:
+                    raise sp_module.TimeoutExpired(cmd=cmd, timeout=timeout)
+                proc.returncode = 0
+                (mock_dir / "result.json").write_text(json.dumps({
+                    "version": 1,
+                    "success": True,
+                    "output_doc": "doc",
+                    "final_response": "final",
+                    "error": None,
+                }), encoding="utf-8")
+                return 0
+
+            proc.wait = do_wait
+            proc.terminate = lambda: None
+            proc.kill = lambda: None
+            return proc
+
+        with patch("cron.runner_subprocess._create_temp_run_dir", return_value=mock_dir):
+            with patch.object(sp_module, "Popen", fake_popen):
+                from cron.runner_subprocess import run_job_subprocess
+                result = run_job_subprocess({
+                    "id": "job-1",
+                    "name": "test",
+                    "prompt": "x",
+                    "_activity_reporter": reporter,
+                })
+
+        assert result.success is True
+        assert activity_events[0]["activity"] is True
+        assert activity_events[0]["last_activity_desc"] == "subprocess_running"
+        assert any(
+            event["heartbeat"] is True and event["activity"] is False
+            for event in activity_events[1:]
+        )
+
+    def test_subprocess_input_excludes_runtime_only_fields(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+        monkeypatch.setenv("AGENT_CRON_RUNNER_SUBPROCESS_TIMEOUT", "30")
+
+        mock_dir = tmp_path / "cron" / "runner-tmp" / "payload_run"
+        mock_dir.mkdir(parents=True, exist_ok=True)
+
+        import subprocess as sp_module
+
+        captured_payload = {}
+
+        def fake_popen(cmd, stdout=None, stderr=None, stdin=None):
+            input_path = Path(cmd[cmd.index("--input") + 1])
+            captured_payload.update(json.loads(input_path.read_text(encoding="utf-8")))
+            proc = type("MockP", (), {"pid": 99999, "returncode": 0})()
+
+            def do_wait(timeout=None):
+                (mock_dir / "result.json").write_text(json.dumps({
+                    "version": 1,
+                    "success": True,
+                    "output_doc": "doc",
+                    "final_response": "final",
+                    "error": None,
+                }), encoding="utf-8")
+                return 0
+
+            proc.wait = do_wait
+            proc.terminate = lambda: None
+            proc.kill = lambda: None
+            return proc
+
+        with patch("cron.runner_subprocess._create_temp_run_dir", return_value=mock_dir):
+            with patch.object(sp_module, "Popen", fake_popen):
+                from cron.runner_subprocess import run_job_subprocess
+                result = run_job_subprocess({
+                    "id": "job-1",
+                    "name": "test",
+                    "prompt": "x",
+                    "timeout_settings": {"idle_timeout_seconds": 60},
+                    "_activity_reporter": lambda **kwargs: None,
+                    "_private": "hidden",
+                })
+
+        assert result.success is True
+        assert captured_payload["job"]["id"] == "job-1"
+        assert "timeout_settings" not in captured_payload["job"]
+        assert "_activity_reporter" not in captured_payload["job"]
+        assert "_private" not in captured_payload["job"]
+
+    def test_subprocess_input_materializes_timeout_settings_fallback(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+        monkeypatch.setenv("AGENT_CRON_RUNNER_SUBPROCESS_TIMEOUT", "30")
+
+        mock_dir = tmp_path / "cron" / "runner-tmp" / "timeout_payload_run"
+        mock_dir.mkdir(parents=True, exist_ok=True)
+
+        import subprocess as sp_module
+
+        captured_payload = {}
+
+        def fake_popen(cmd, stdout=None, stderr=None, stdin=None):
+            input_path = Path(cmd[cmd.index("--input") + 1])
+            captured_payload.update(json.loads(input_path.read_text(encoding="utf-8")))
+            proc = type("MockP", (), {"pid": 99999, "returncode": 0})()
+
+            def do_wait(timeout=None):
+                (mock_dir / "result.json").write_text(json.dumps({
+                    "version": 1,
+                    "success": True,
+                    "output_doc": "doc",
+                    "final_response": "final",
+                    "error": None,
+                }), encoding="utf-8")
+                return 0
+
+            proc.wait = do_wait
+            proc.terminate = lambda: None
+            proc.kill = lambda: None
+            return proc
+
+        with patch("cron.runner_subprocess._create_temp_run_dir", return_value=mock_dir):
+            with patch.object(sp_module, "Popen", fake_popen):
+                from cron.runner_subprocess import run_job_subprocess
+                result = run_job_subprocess({
+                    "id": "job-1",
+                    "name": "test",
+                    "prompt": "x",
+                    "timeout_settings": {
+                        "idle_timeout_seconds": 11,
+                        "max_runtime_seconds": 22,
+                    },
+                })
+
+        assert result.success is True
+        assert captured_payload["job"]["idle_timeout_seconds"] == 11
+        assert captured_payload["job"]["max_runtime_seconds"] == 22
+        assert "timeout_settings" not in captured_payload["job"]
+
+    def test_subprocess_input_schema_timeout_precedes_timeout_settings(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+        monkeypatch.setenv("AGENT_CRON_RUNNER_SUBPROCESS_TIMEOUT", "30")
+
+        mock_dir = tmp_path / "cron" / "runner-tmp" / "timeout_precedence_run"
+        mock_dir.mkdir(parents=True, exist_ok=True)
+
+        import subprocess as sp_module
+
+        captured_payload = {}
+
+        def fake_popen(cmd, stdout=None, stderr=None, stdin=None):
+            input_path = Path(cmd[cmd.index("--input") + 1])
+            captured_payload.update(json.loads(input_path.read_text(encoding="utf-8")))
+            proc = type("MockP", (), {"pid": 99999, "returncode": 0})()
+
+            def do_wait(timeout=None):
+                (mock_dir / "result.json").write_text(json.dumps({
+                    "version": 1,
+                    "success": True,
+                    "output_doc": "doc",
+                    "final_response": "final",
+                    "error": None,
+                }), encoding="utf-8")
+                return 0
+
+            proc.wait = do_wait
+            proc.terminate = lambda: None
+            proc.kill = lambda: None
+            return proc
+
+        with patch("cron.runner_subprocess._create_temp_run_dir", return_value=mock_dir):
+            with patch.object(sp_module, "Popen", fake_popen):
+                from cron.runner_subprocess import run_job_subprocess
+                result = run_job_subprocess({
+                    "id": "job-1",
+                    "name": "test",
+                    "prompt": "x",
+                    "idle_timeout_seconds": 33,
+                    "max_runtime_seconds": 44,
+                    "timeout_settings": {
+                        "idle_timeout_seconds": 11,
+                        "max_runtime_seconds": 22,
+                    },
+                })
+
+        assert result.success is True
+        assert captured_payload["job"]["idle_timeout_seconds"] == 33
+        assert captured_payload["job"]["max_runtime_seconds"] == 44
+        assert "timeout_settings" not in captured_payload["job"]
+
     def test_worker_failure_result_parsed(self, monkeypatch, tmp_path):
         monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
         monkeypatch.setenv("AGENT_CRON_RUNNER_SUBPROCESS_TIMEOUT", "30")
@@ -528,6 +732,7 @@ class TestRunJobSubprocess:
                 result = run_job_subprocess({"id": "job-1", "name": "slow", "prompt": "x"})
                 assert result.success is False
                 assert "timed out" in result.error
+                assert result.exit_reason == "max_runtime_exceeded"
 
     def test_nonzero_exit_without_result_returns_failure(self, monkeypatch, tmp_path):
         monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))

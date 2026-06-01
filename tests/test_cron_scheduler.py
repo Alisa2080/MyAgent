@@ -735,6 +735,57 @@ def test_tick_abandons_stale_idle_timed_out_run(monkeypatch, tmp_path):
     assert len(runs) >= 1
 
 
+def test_tick_abandons_idle_timed_out_recurring_run_with_next_run_and_reason(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    import cron.scheduler as scheduler
+    import cron.state_store as state_store_module
+    from cron.jobs import create_job, update_job
+    from cron.state_store import StateStore
+
+    due_at = "2026-05-30T10:00:00+00:00"
+    due_dt = datetime(2026, 5, 30, 10, 0, 0, tzinfo=timezone.utc)
+    job = create_job(
+        prompt="test job",
+        schedule="every 30m",
+        idle_timeout_seconds=300,
+        deliver="local",
+    )
+    update_job(job["id"], {"next_run_at": due_at})
+    store = StateStore()
+    monkeypatch.setattr(state_store_module, "utc_now", lambda: due_dt)
+    run_id = store.claim_due_jobs(now_text=due_at, limit=1)[0]["run"]["id"]
+    store.mark_run_started(run_id)
+    with store._connect() as conn:
+        conn.execute(
+            """
+            UPDATE runs
+            SET last_activity_at = ?, heartbeat_at = ?
+            WHERE id = ?
+            """,
+            (
+                "2026-05-30T09:00:00+00:00",
+                "2026-05-30T09:59:59+00:00",
+                run_id,
+            ),
+        )
+    result = scheduler.tick(
+        now_dt=due_dt,
+        job_runner=lambda running_job: (_ for _ in ()).throw(
+            AssertionError("runner should not be called for stale run")
+        ),
+    )
+
+    run = store.get_run(run_id)
+    job_after = store.get_job(job["id"])
+    assert result.ran == 0
+    assert run["status"] == "failed"
+    assert run["exit_reason"] == "idle_timeout"
+    assert job_after["state"] == "scheduled"
+    assert job_after["next_run_at"] is not None
+    assert job_after["next_run_at"] != due_at
+
+
 def test_process_claimed_abandons_run_marked_stale_before_runner(monkeypatch, tmp_path):
     """_process_claimed should abandon run if it becomes stale before runner starts."""
     import cron.scheduler as scheduler

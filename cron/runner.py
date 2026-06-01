@@ -41,9 +41,10 @@ AGENT_TERMINATE_GRACE_SECONDS = 5
 
 
 class _ScriptTimeoutError(TimeoutError):
-    def __init__(self, message: str, output: str):
+    def __init__(self, message: str, output: str, exit_reason: str | None = None):
         super().__init__(message)
         self.output = output
+        self.exit_reason = exit_reason
 
 
 def _bounded(text: str, max_chars: int | None = None) -> str:
@@ -123,14 +124,20 @@ def _format_script_output(stdout: str | None, stderr: str | None) -> str:
     return _bounded(_redact_untrusted_text("\n".join(parts)))
 
 
-def _run_script(script: str) -> tuple[bool, str]:
+def _run_script(
+    script: str,
+    *,
+    timeout_seconds: float | None = None,
+    timeout_reason: str | None = None,
+) -> tuple[bool, str]:
     path = _resolve_script_path(script)
+    timeout = timeout_seconds if timeout_seconds is not None else _script_timeout()
     try:
         result = subprocess.run(
             [sys.executable, str(path)],
             capture_output=True,
             text=True,
-            timeout=_script_timeout(),
+            timeout=timeout,
             cwd=str(path.parent),
         )
     except subprocess.TimeoutExpired as exc:
@@ -139,8 +146,9 @@ def _run_script(script: str) -> tuple[bool, str]:
             _decode_timeout_output(exc.stderr),
         )
         raise _ScriptTimeoutError(
-            f"Pre-run script timed out after {_script_timeout()} seconds.",
+            f"Pre-run script timed out after {timeout:g} seconds.",
             output,
+            timeout_reason,
         ) from exc
 
     output = _format_script_output(result.stdout, result.stderr)
@@ -278,6 +286,94 @@ def _cron_timeout() -> int | None:
     return value if value > 0 else None
 
 
+class _CronRunTimeout(TimeoutError):
+    def __init__(self, exit_reason: str, message: str) -> None:
+        super().__init__(message)
+        self.exit_reason = exit_reason
+
+
+def _positive_timeout(value: Any) -> float | None:
+    if value is None or value == "":
+        return None
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
+
+
+def _timeout_settings(job: dict[str, Any]) -> dict[str, float | None]:
+    settings = dict(job.get("timeout_settings") or {})
+    idle_source = (
+        job.get("idle_timeout_seconds")
+        if "idle_timeout_seconds" in job
+        else settings.get("idle_timeout_seconds")
+    )
+    max_runtime_source = (
+        job.get("max_runtime_seconds")
+        if "max_runtime_seconds" in job
+        else settings.get("max_runtime_seconds")
+    )
+    idle = _positive_timeout(idle_source)
+    max_runtime = _positive_timeout(max_runtime_source)
+    has_idle_override = (
+        ("idle_timeout_seconds" in job and job.get("idle_timeout_seconds") not in (None, ""))
+        or ("idle_timeout_seconds" in settings and settings.get("idle_timeout_seconds") not in (None, ""))
+    )
+    if (
+        idle is None
+        and not has_idle_override
+    ):
+        idle = _positive_timeout(_cron_timeout())
+    return {
+        "idle_timeout_seconds": idle,
+        "max_runtime_seconds": max_runtime,
+    }
+
+
+def _job_payload_for_agent_process(job: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: value
+        for key, value in job.items()
+        if not key.startswith("_") and key != "timeout_settings" and not callable(value)
+    }
+
+
+def _script_timeout_for_job(
+    settings: dict[str, float | None],
+    run_started_at: float,
+) -> tuple[float, str | None]:
+    script_timeout = float(_script_timeout())
+    now_mono = time.monotonic()
+    candidates: list[tuple[float, str | None]] = [(script_timeout, None)]
+    idle_timeout = settings["idle_timeout_seconds"]
+    if idle_timeout is not None:
+        candidates.append((idle_timeout, "idle_timeout"))
+    max_runtime = settings["max_runtime_seconds"]
+    if max_runtime is not None:
+        candidates.append((max_runtime - (now_mono - run_started_at), "max_runtime_exceeded"))
+    timeout, reason = min(candidates, key=lambda item: item[0])
+    return max(0.001, timeout), reason
+
+
+def _report_activity(
+    job: dict[str, Any],
+    desc: str | None = None,
+    *,
+    heartbeat: bool = True,
+    activity: bool = False,
+    current_tool: str | None = None,
+) -> None:
+    reporter = job.get("_activity_reporter")
+    if callable(reporter):
+        reporter(
+            heartbeat=heartbeat,
+            activity=activity,
+            last_activity_desc=desc,
+            current_tool=current_tool,
+        )
+
+
 def _agent_process_target(
     job: dict[str, Any],
     prompt: str,
@@ -397,26 +493,43 @@ def _read_agent_result(
 
 def _invoke_cron_agent(job: dict[str, Any], prompt: str) -> str:
     result_queue = _create_agent_result_queue()
-    process = _create_agent_process(job, prompt, result_queue)
+    process = _create_agent_process(_job_payload_for_agent_process(job), prompt, result_queue)
     process.start()
-    timeout = _cron_timeout()
-    deadline = None if timeout is None else time.monotonic() + timeout
+    settings = _timeout_settings(job)
+    idle_timeout = settings["idle_timeout_seconds"]
+    max_runtime = settings["max_runtime_seconds"]
+    started_at = _positive_timeout(job.get("_run_started_at")) or time.monotonic()
+    last_activity_at = time.monotonic()
 
     result: dict[str, Any] | None = None
     while result is None:
-        if deadline is None:
-            read_timeout = AGENT_QUEUE_POLL_SECONDS
-        else:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                _terminate_agent_process(process)
-                raise concurrent.futures.TimeoutError()
-            read_timeout = min(AGENT_QUEUE_POLL_SECONDS, remaining)
+        now_mono = time.monotonic()
+        if max_runtime is not None and now_mono - started_at >= max_runtime:
+            _terminate_agent_process(process)
+            raise _CronRunTimeout(
+                "max_runtime_exceeded",
+                f"Cron job exceeded max runtime of {max_runtime:g} seconds.",
+            )
+        if idle_timeout is not None and now_mono - last_activity_at >= idle_timeout:
+            _terminate_agent_process(process)
+            raise _CronRunTimeout(
+                "idle_timeout",
+                f"Cron job idle for {idle_timeout:g} seconds.",
+            )
+
+        wait_limits = [AGENT_QUEUE_POLL_SECONDS]
+        if max_runtime is not None:
+            wait_limits.append(max_runtime - (now_mono - started_at))
+        if idle_timeout is not None:
+            wait_limits.append(idle_timeout - (now_mono - last_activity_at))
+        read_timeout = max(0.001, min(wait_limits))
 
         try:
             result = _read_agent_result(result_queue, timeout=read_timeout)
+            last_activity_at = time.monotonic()
             break
         except queue.Empty:
+            _report_activity(job, heartbeat=True, activity=False)
             if process.is_alive():
                 continue
             process.join(0)
@@ -462,10 +575,21 @@ def _output_doc(
 
 def run_job(job: dict[str, Any]) -> JobRunResult:
     script_output = None
+    run_started_at = time.monotonic()
+    settings = _timeout_settings(job)
     try:
         script = job.get("script")
         if script:
-            script_ok, script_output = _run_script(str(script))
+            _report_activity(job, "script_running", activity=True)
+            script_timeout, script_timeout_reason = _script_timeout_for_job(
+                settings,
+                run_started_at,
+            )
+            script_ok, script_output = _run_script(
+                str(script),
+                timeout_seconds=script_timeout,
+                timeout_reason=script_timeout_reason,
+            )
             if not script_ok:
                 error = "Pre-run script failed."
                 return JobRunResult(
@@ -488,6 +612,8 @@ def run_job(job: dict[str, Any]) -> JobRunResult:
                 )
 
         prompt = build_job_prompt(job, script_output=script_output)
+        _report_activity(job, "agent_running", activity=True)
+        job["_run_started_at"] = run_started_at
         final_response = _invoke_cron_agent(job, prompt)
         return JobRunResult(
             success=True,
@@ -501,6 +627,16 @@ def run_job(job: dict[str, Any]) -> JobRunResult:
             output_doc=_output_doc(job, "", exc.output or script_output, error),
             final_response="",
             error=error,
+            exit_reason=exc.exit_reason or "script_timeout",
+        )
+    except _CronRunTimeout as exc:
+        error = str(exc)
+        return JobRunResult(
+            success=False,
+            output_doc=_output_doc(job, "", script_output, error),
+            final_response="",
+            error=error,
+            exit_reason=exc.exit_reason,
         )
     except concurrent.futures.TimeoutError:
         error = "Cron job timed out."
@@ -509,6 +645,7 @@ def run_job(job: dict[str, Any]) -> JobRunResult:
             output_doc=_output_doc(job, "", script_output, error),
             final_response="",
             error=error,
+            exit_reason="idle_timeout",
         )
     except TimeoutError as exc:
         error = str(exc)

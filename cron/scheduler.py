@@ -6,7 +6,7 @@ import logging
 import os
 import threading
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Any
 
 try:
@@ -162,6 +162,34 @@ def _next_run_after_completion(job: dict[str, Any], run_at: datetime) -> tuple[s
     return None, False
 
 
+def _exit_reason_for_stale_reason(stale_reason: str | None) -> str:
+    if stale_reason == "idle_timeout_exceeded":
+        return "idle_timeout"
+    if stale_reason == "heartbeat_stale":
+        return "idle_timeout"
+    return str(stale_reason or "abandoned")
+
+
+def _complete_stale_run(
+    store: StateStore,
+    stale: dict[str, Any],
+    run_at: datetime,
+) -> None:
+    job = store.get_job(str(stale["job_id"]))
+    next_run_at, completed = _next_run_after_completion(job or stale, run_at)
+    stale_reason = str(stale.get("stale_reason") or "stale")
+    store.complete_run(
+        str(stale["run_id"]),
+        success=False,
+        output_path=None,
+        final_response=None,
+        error=f"Job abandoned: {stale_reason}",
+        next_run_at=next_run_at,
+        completed=completed,
+        exit_reason=_exit_reason_for_stale_reason(stale_reason),
+    )
+
+
 def _process_claimed(
     claimed: dict[str, Any],
     run_at: datetime,
@@ -182,26 +210,22 @@ def _process_claimed(
         except Exception:
             logger.debug("Failed to report started activity for run %s", run_id)
         
-        # Track max runtime timeout
-        job_timeout = store.resolve_job_timeouts(job)
-        max_runtime_seconds = job_timeout.get("max_runtime_seconds")
-        max_runtime_deadline = None
-        if max_runtime_seconds:
-            max_runtime_deadline = run_at + timedelta(seconds=max_runtime_seconds)
+        try:
+            from cron.activity_reporter import activity_reporter
+
+            job["_activity_reporter"] = lambda **kwargs: activity_reporter(
+                run_id,
+                store,
+                **kwargs,
+            )
+        except Exception:
+            logger.debug("Failed to attach activity reporter for run %s", run_id)
         
         # Check if this run has become stale before starting (race condition protection)
         stale_runs = store.list_stale_running_runs(limit=10)
         for stale in stale_runs:
             if stale["run_id"] == run_id and stale.get("stale_reason") in ("idle_timeout_exceeded", "heartbeat_stale"):
-                store.complete_run(
-                    run_id,
-                    success=False,
-                    output_path=None,
-                    final_response=None,
-                    error=f"Job abandoned: {stale['stale_reason']}",
-                    next_run_at=job.get("next_run_at"),
-                    completed=False,
-                )
+                _complete_stale_run(store, stale, run_at)
                 return JobTickResult(job_id=job_id, success=False, error=f"Job abandoned: {stale['stale_reason']}")
         
         result = job_runner(job)
@@ -220,7 +244,8 @@ def _process_claimed(
         from cron.delivery import enqueue_result, process_due
 
         delivery_store = DeliveryStore(store.path)
-        delivery_events = enqueue_result(job, result, output_path, run_at, store=delivery_store)
+        delivery_job = {key: value for key, value in job.items() if not key.startswith("_")}
+        delivery_events = enqueue_result(delivery_job, result, output_path, run_at, store=delivery_store)
         if not store.run_owns_lease(run["id"]):
             events = delivery_events if isinstance(delivery_events, list) else ([delivery_events] if delivery_events else [])
             delivery_store.delete_events([str(event["id"]) for event in events])
@@ -257,6 +282,7 @@ def _process_claimed(
             next_run_at=next_run_at,
             completed=completed,
             delivery_error=delivery_error,
+            exit_reason=result.exit_reason,
         )
         try:
             from cron.activity_reporter import activity_reporter
@@ -275,6 +301,7 @@ def _process_claimed(
             error=str(exc),
             next_run_at=next_run_at,
             completed=completed,
+            exit_reason=getattr(exc, "exit_reason", None),
         )
         return JobTickResult(job_id=job_id, success=False, error=str(exc))
 
@@ -377,15 +404,7 @@ def tick(
         stale_runs = store.list_stale_running_runs(limit=10)
         for stale in stale_runs:
             if stale.get("stale_reason") in ("idle_timeout_exceeded", "heartbeat_stale"):
-                store.complete_run(
-                    stale["run_id"],
-                    success=False,
-                    output_path=None,
-                    final_response=None,
-                    error=f"Job abandoned: {stale['stale_reason']}",
-                    next_run_at=None,
-                    completed=False,
-                )
+                _complete_stale_run(store, stale, run_at)
         
         claimed = store.claim_due_jobs(now_text=run_at.isoformat(), limit=100)
         result = TickResult(due=len(claimed))

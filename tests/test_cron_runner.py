@@ -654,6 +654,283 @@ def test_cron_timeout_returns_failure_result(monkeypatch):
     assert "Cron job timed out." in result.output_doc
 
 
+def test_inprocess_idle_timeout_uses_job_timeout_and_exit_reason(monkeypatch):
+    import cron.runner as runner
+
+    class NeverRespondingProcess:
+        pid = 12345
+
+        def start(self):
+            pass
+
+        def is_alive(self):
+            return True
+
+        def join(self, timeout=None):
+            pass
+
+        def terminate(self):
+            pass
+
+    monkeypatch.setattr(
+        runner,
+        "_create_agent_process",
+        lambda job, prompt, result_queue: NeverRespondingProcess(),
+    )
+    monkeypatch.setattr(runner, "_create_agent_result_queue", lambda: object())
+    monkeypatch.setattr(
+        runner,
+        "_read_agent_result",
+        lambda result_queue, timeout=None: (_ for _ in ()).throw(runner.queue.Empty()),
+    )
+    monkeypatch.setattr(runner, "AGENT_QUEUE_POLL_SECONDS", 0.01)
+
+    result = runner.run_job(
+        {
+            "id": "job-1",
+            "name": "slow",
+            "prompt": "do it",
+            "timeout_settings": {
+                "idle_timeout_seconds": 0.01,
+                "max_runtime_seconds": None,
+            },
+        }
+    )
+
+    assert result.success is False
+    assert result.exit_reason == "idle_timeout"
+    assert "idle" in result.error.lower()
+
+
+def test_inprocess_max_runtime_uses_job_timeout_and_exit_reason(monkeypatch):
+    import cron.runner as runner
+
+    class NeverRespondingProcess:
+        pid = 12345
+
+        def start(self):
+            pass
+
+        def is_alive(self):
+            return True
+
+        def join(self, timeout=None):
+            pass
+
+        def terminate(self):
+            pass
+
+    monkeypatch.setattr(
+        runner,
+        "_create_agent_process",
+        lambda job, prompt, result_queue: NeverRespondingProcess(),
+    )
+    monkeypatch.setattr(runner, "_create_agent_result_queue", lambda: object())
+    monkeypatch.setattr(
+        runner,
+        "_read_agent_result",
+        lambda result_queue, timeout=None: (_ for _ in ()).throw(runner.queue.Empty()),
+    )
+    monkeypatch.setattr(runner, "AGENT_QUEUE_POLL_SECONDS", 0.01)
+
+    result = runner.run_job(
+        {
+            "id": "job-1",
+            "name": "slow",
+            "prompt": "do it",
+            "timeout_settings": {
+                "idle_timeout_seconds": 60,
+                "max_runtime_seconds": 0.01,
+            },
+        }
+    )
+
+    assert result.success is False
+    assert result.exit_reason == "max_runtime_exceeded"
+    assert "max runtime" in result.error.lower()
+
+
+def test_run_job_uses_job_timeout_schema_without_precomputed_settings(monkeypatch):
+    import cron.runner as runner
+
+    class NeverRespondingProcess:
+        pid = 12345
+
+        def start(self):
+            pass
+
+        def is_alive(self):
+            return True
+
+        def join(self, timeout=None):
+            pass
+
+        def terminate(self):
+            pass
+
+    monkeypatch.setattr(
+        runner,
+        "_create_agent_process",
+        lambda job, prompt, result_queue: NeverRespondingProcess(),
+    )
+    monkeypatch.setattr(runner, "_create_agent_result_queue", lambda: object())
+    monkeypatch.setattr(
+        runner,
+        "_read_agent_result",
+        lambda result_queue, timeout=None: (_ for _ in ()).throw(runner.queue.Empty()),
+    )
+    monkeypatch.setattr(runner, "AGENT_QUEUE_POLL_SECONDS", 0.01)
+
+    result = runner.run_job(
+        {
+            "id": "job-1",
+            "name": "slow",
+            "prompt": "do it",
+            "idle_timeout_seconds": 60,
+            "max_runtime_seconds": 0.01,
+        }
+    )
+
+    assert result.success is False
+    assert result.exit_reason == "max_runtime_exceeded"
+
+
+def test_job_schema_timeout_takes_precedence_over_internal_settings(monkeypatch):
+    import cron.runner as runner
+
+    class NeverRespondingProcess:
+        pid = 12345
+
+        def start(self):
+            pass
+
+        def is_alive(self):
+            return True
+
+        def join(self, timeout=None):
+            pass
+
+        def terminate(self):
+            pass
+
+    monkeypatch.setattr(
+        runner,
+        "_create_agent_process",
+        lambda job, prompt, result_queue: NeverRespondingProcess(),
+    )
+    monkeypatch.setattr(runner, "_create_agent_result_queue", lambda: object())
+    monkeypatch.setattr(
+        runner,
+        "_read_agent_result",
+        lambda result_queue, timeout=None: (_ for _ in ()).throw(runner.queue.Empty()),
+    )
+    monkeypatch.setattr(runner, "AGENT_QUEUE_POLL_SECONDS", 0.01)
+
+    result = runner.run_job(
+        {
+            "id": "job-1",
+            "name": "slow",
+            "prompt": "do it",
+            "idle_timeout_seconds": 60,
+            "max_runtime_seconds": 0.01,
+            "timeout_settings": {
+                "idle_timeout_seconds": 0.01,
+                "max_runtime_seconds": 60,
+            },
+        }
+    )
+
+    assert result.success is False
+    assert result.exit_reason == "max_runtime_exceeded"
+
+
+def test_agent_process_payload_excludes_runtime_only_fields(monkeypatch):
+    import cron.runner as runner
+
+    captured = {}
+
+    class RespondingProcess:
+        pid = 12345
+
+        def start(self):
+            pass
+
+        def is_alive(self):
+            return False
+
+        def join(self, timeout=None):
+            pass
+
+        def terminate(self):
+            pass
+
+    def fake_create_agent_process(job, prompt, result_queue):
+        captured["job"] = job
+        return RespondingProcess()
+
+    monkeypatch.setattr(runner, "_create_agent_process", fake_create_agent_process)
+    monkeypatch.setattr(runner, "_create_agent_result_queue", lambda: object())
+    monkeypatch.setattr(
+        runner,
+        "_read_agent_result",
+        lambda result_queue, timeout=None: {
+            "success": True,
+            "final_response": "done",
+        },
+    )
+
+    reporter = lambda **kwargs: None
+    result = runner.run_job(
+        {
+            "id": "job-1",
+            "name": "agent",
+            "prompt": "do it",
+            "timeout_settings": {"idle_timeout_seconds": 60},
+            "_activity_reporter": reporter,
+            "_private": "hidden",
+        }
+    )
+
+    assert result.success is True
+    assert captured["job"]["id"] == "job-1"
+    assert "timeout_settings" not in captured["job"]
+    assert "_activity_reporter" not in captured["job"]
+    assert "_private" not in captured["job"]
+
+
+def test_script_stage_uses_job_max_runtime_and_exit_reason(monkeypatch):
+    import subprocess
+
+    import cron.runner as runner
+
+    captured_timeouts = []
+
+    def fake_run(*args, **kwargs):
+        captured_timeouts.append(kwargs["timeout"])
+        raise subprocess.TimeoutExpired(cmd=args[0], timeout=kwargs["timeout"])
+
+    monkeypatch.setattr(runner, "validate_script_path", lambda script: None)
+    monkeypatch.setattr(runner, "_resolve_script_path", lambda script: runner.Path("/tmp/script.py"))
+    monkeypatch.setattr(runner.subprocess, "run", fake_run)
+
+    result = runner.run_job(
+        {
+            "id": "job-1",
+            "name": "script",
+            "prompt": "do it",
+            "script": "script.py",
+            "idle_timeout_seconds": 60,
+            "max_runtime_seconds": 0.01,
+        }
+    )
+
+    assert captured_timeouts
+    assert captured_timeouts[0] <= 0.01
+    assert result.success is False
+    assert result.exit_reason == "max_runtime_exceeded"
+    assert "Pre-run script timed out" in result.error
+
+
 def test_activity_reporter_does_not_raise_on_failure(monkeypatch, tmp_path):
     monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
 

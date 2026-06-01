@@ -28,6 +28,7 @@ logger = logging.getLogger(__name__)
 # ----------------------------------------------------------------------
 _SUBPROCESS_TIMEOUT_DEFAULT = 900  # seconds
 _TERMINATE_GRACE_DEFAULT = 5  # seconds
+_SUBPROCESS_HEARTBEAT_SECONDS = 5.0
 _STDERR_MAX_BYTES = 10_000
 _STDOUT_MAX_BYTES = 10_000
 _COMBINED_SOFT_CAP = _STDERR_MAX_BYTES + _STDOUT_MAX_BYTES
@@ -160,11 +161,15 @@ def _parse_result_file(result_path: Path) -> JobRunResult:
                 f"Result field {field_name!r} must be string or null "
                 f"(got {type(value).__name__})"
             )
+    exit_reason = data.get("exit_reason")
+    if exit_reason is not None and not isinstance(exit_reason, str):
+        raise _ResultFileError("Result field 'exit_reason' must be string or null")
     return JobRunResult(
         success=data["success"],
         output_doc=data.get("output_doc"),
         final_response=data.get("final_response"),
         error=data.get("error"),
+        exit_reason=exit_reason,
     )
 
 
@@ -304,6 +309,37 @@ def _terminate_child(proc: subprocess.Popen[Any], grace_seconds: float) -> None:
         logger.error("Cron runner subprocess still alive after SIGKILL; PID %d", proc.pid)
 
 
+def _job_payload_for_subprocess(job: dict[str, Any]) -> dict[str, Any]:
+    payload = {
+        key: value
+        for key, value in job.items()
+        if not key.startswith("_") and key != "timeout_settings" and not callable(value)
+    }
+    settings = job.get("timeout_settings")
+    if isinstance(settings, dict):
+        for key in ("idle_timeout_seconds", "max_runtime_seconds"):
+            if key not in payload and settings.get(key) not in (None, ""):
+                payload[key] = settings.get(key)
+    return payload
+
+
+def _report_parent_activity(
+    job: dict[str, Any],
+    desc: str | None = None,
+    *,
+    heartbeat: bool = True,
+    activity: bool = False,
+) -> None:
+    reporter = job.get("_activity_reporter")
+    if callable(reporter):
+        reporter(
+            heartbeat=heartbeat,
+            activity=activity,
+            last_activity_desc=desc,
+            current_tool=None,
+        )
+
+
 # ----------------------------------------------------------------------
 # Main entry point
 # ----------------------------------------------------------------------
@@ -326,7 +362,10 @@ def run_job_subprocess(job: dict[str, Any]) -> JobRunResult:
     stderr_thread: threading.Thread | None = None
 
     # Write input file
-    input_payload = {"version": 1, "job": job}
+    input_payload = {
+        "version": 1,
+        "job": _job_payload_for_subprocess(job),
+    }
     try:
         input_path.write_text(json.dumps(input_payload, indent=2), encoding="utf-8")
         secure_file(input_path)
@@ -373,9 +412,20 @@ def run_job_subprocess(job: dict[str, Any]) -> JobRunResult:
         stderr_capture, stderr_thread = _start_pipe_reader(
             getattr(proc, "stderr", None), "stderr", _STDERR_MAX_BYTES
         )
+        _report_parent_activity(job, "subprocess_running", activity=True)
         try:
-            proc.wait(timeout=timeout_seconds)
-            exit_code = proc.returncode
+            remaining = float(timeout_seconds)
+            while True:
+                wait_timeout = min(_SUBPROCESS_HEARTBEAT_SECONDS, remaining)
+                try:
+                    proc.wait(timeout=wait_timeout)
+                    exit_code = proc.returncode
+                    break
+                except subprocess.TimeoutExpired:
+                    if wait_timeout >= remaining:
+                        raise
+                    remaining -= wait_timeout
+                    _report_parent_activity(job, heartbeat=True, activity=False)
         except subprocess.TimeoutExpired:
             timed_out = True
             logger.warning(
@@ -435,7 +485,11 @@ def run_job_subprocess(job: dict[str, Any]) -> JobRunResult:
         else:
             msg = str(exc)
         _cleanup_temp_dir(tmp_dir)
-        return _make_failure(msg, diagnostics=diagnostics)
+        return _make_failure(
+            msg,
+            diagnostics=diagnostics,
+            exit_reason="max_runtime_exceeded" if timed_out else None,
+        )
 
     if not result.success:
         result = _enrich_failure_result(result, diagnostics)
@@ -443,7 +497,7 @@ def run_job_subprocess(job: dict[str, Any]) -> JobRunResult:
     return result
 
 
-def _make_failure(error: str, diagnostics: str) -> JobRunResult:
+def _make_failure(error: str, diagnostics: str, *, exit_reason: str | None = None) -> JobRunResult:
     error_parts = [error]
     if diagnostics:
         error_parts.append("Diagnostics:")
@@ -453,6 +507,7 @@ def _make_failure(error: str, diagnostics: str) -> JobRunResult:
         output_doc="\n".join(error_parts) or None,
         final_response=None,
         error=error,
+        exit_reason=exit_reason,
     )
 
 
