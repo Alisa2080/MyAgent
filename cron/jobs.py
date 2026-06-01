@@ -36,6 +36,22 @@ CONCURRENCY_POLICIES = {
 }
 DEFAULT_CONCURRENCY_POLICY = "queue_one"
 
+
+def normalize_concurrency_policy(value: Any) -> str:
+    """Normalize and validate concurrency policy."""
+    if value is None or str(value).strip() == "":
+        return DEFAULT_CONCURRENCY_POLICY
+    normalized = str(value).strip().lower()
+    if normalized not in CONCURRENCY_POLICIES:
+        raise ValueError(f"Unsupported concurrency_policy: {normalized}")
+    return normalized
+
+
+def normalize_concurrency_key(value: Any, job_id: str) -> str:
+    """Normalize concurrency key, defaulting to job:<job_id>."""
+    normalized = str(value).strip() if value is not None else ""
+    return normalized or f"job:{job_id}"
+
 _jobs_file_lock = threading.Lock()
 
 
@@ -175,20 +191,6 @@ def _normalize_timeout_seconds(value: Any, *, allow_zero: bool = True) -> int | 
     return seconds
 
 
-def normalize_concurrency_policy(value: Any) -> str:
-    if value is None or str(value).strip() == "":
-        return DEFAULT_CONCURRENCY_POLICY
-    normalized = str(value).strip()
-    if normalized not in CONCURRENCY_POLICIES:
-        raise ValueError(f"Unsupported concurrency_policy: {normalized}")
-    return normalized
-
-
-def normalize_concurrency_key(value: Any, job_id: str) -> str:
-    normalized = str(value).strip() if value is not None else ""
-    return normalized or f"job:{job_id}"
-
-
 def _normalize_delivery_config(job: dict[str, Any]) -> dict[str, Any]:
     from cron.delivery_registry import default_delivery_registry
     from cron.delivery_targets import DeliveryIdentity
@@ -326,9 +328,12 @@ def _normalize_updates(
             normalized_updates["concurrency_policy"]
         )
     if "concurrency_key" in normalized_updates:
-        job_id = (existing_job or {}).get("id", "")
+        job_id = str((existing_job or {}).get("id") or "")
+        if not job_id:
+            raise ValueError("concurrency_key update requires an existing job id")
         normalized_updates["concurrency_key"] = normalize_concurrency_key(
-            normalized_updates["concurrency_key"], job_id
+            normalized_updates["concurrency_key"],
+            job_id,
         )
     return normalized_updates
 

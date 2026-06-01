@@ -391,8 +391,14 @@ def tick(
     now_dt: datetime | None = None,
     *,
     job_runner: JobRunner | None = None,
+    now_text: str | None = None,
 ) -> TickResult:
-    run_at = now_dt or now()
+    if now_text:
+        from cron.state_store import _parse_time
+        parsed = _parse_time(now_text)
+        run_at = parsed if parsed is not None else (now_dt or now())
+    else:
+        run_at = now_dt or now()
     lock = _TickLock()
     try:
         lock.__enter__()
@@ -409,19 +415,15 @@ def tick(
             if stale.get("stale_reason") in ("idle_timeout_exceeded", "heartbeat_stale"):
                 _complete_stale_run(store, stale, run_at)
 
-        claimed = store.claim_due_jobs(now_text=run_at.isoformat(), limit=100)
+        claimed = store.promote_queued_runs(now_text=run_at.isoformat(), limit=100)
+        claimed = claimed + store.claim_due_jobs(now_text=run_at.isoformat(), limit=max(0, 100 - len(claimed)))
         result = TickResult(due=len(claimed))
 
         if not claimed:
             return result
 
         resolved_runner: JobRunner = job_runner if job_runner is not None else _run_default_job
-        workdir_claimed = [item for item in claimed if item["job"].get("workdir")]
-        parallel_claimed = [item for item in claimed if not item["job"].get("workdir")]
-
-        for item in workdir_claimed:
-            result.results.append(_process_claimed(item, run_at, resolved_runner))
-        result.results.extend(_run_parallel_claimed(parallel_claimed, run_at, resolved_runner))
+        result.results.extend(_run_parallel_claimed(claimed, run_at, resolved_runner))
 
         result.ran = len(result.results)
         result.succeeded = sum(1 for item in result.results if item.success)

@@ -1,5 +1,7 @@
 """Project-native cron scheduling support."""
 
+import sys
+
 from cron.jobs import (
     JOBS_FILE,
     create_job,
@@ -20,6 +22,10 @@ def __getattr__(name: str):
 
         globals()[name] = tick
         return tick
+    module = sys.modules.get(f"{__name__}.{name}")
+    if module is not None:
+        globals()[name] = module
+        return module
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 

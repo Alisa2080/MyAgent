@@ -834,6 +834,24 @@ def test_cronjob_public_tool_preserves_gateway_origin_identity(monkeypatch):
     }
 
 
+def test_cronjob_tool_create_accepts_concurrency_fields(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    from agent_tools.public.cronjob import run_cronjob_action
+
+    result = run_cronjob_action(
+        "create",
+        schedule="every 5m",
+        prompt="hello",
+        concurrency_key="account:alpha",
+        concurrency_policy="queue_all",
+    )
+
+    assert result["success"] is True
+    assert result["job"]["concurrency_key"] == "account:alpha"
+    assert result["job"]["concurrency_policy"] == "queue_all"
+
+
 def test_cronjob_create_accepts_web_origin_without_thread(monkeypatch):
     cronjob_tool = _cronjob_tool()
     created = {}

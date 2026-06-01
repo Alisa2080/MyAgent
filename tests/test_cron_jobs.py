@@ -661,3 +661,12 @@ def test_update_job_normalizes_empty_concurrency_key(monkeypatch, tmp_path):
 
     assert updated is not None
     assert updated["concurrency_key"] == f"job:{job['id']}"
+
+
+def test_create_job_normalizes_whitespace_concurrency_key(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    from cron.jobs import create_job
+
+    job = create_job(prompt="hello", schedule="every 5m", concurrency_key="   ")
+    assert job["concurrency_key"] == f"job:{job['id']}"

@@ -961,3 +961,110 @@ def test_cron_status_shows_running_queued_and_next_due(monkeypatch, tmp_path):
     assert "Running:" in result.text
     assert "Queued:" in result.text
     assert "Next due:" in result.text
+
+
+def test_cron_run_dry_run_shows_resolved_execution_plan(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    from cron.jobs import create_job, update_job
+    from agent_cli.cron_commands import run_cron_job
+
+    job = create_job(
+        prompt="hello",
+        schedule="every 5m",
+        deliver="local",
+        idle_timeout_seconds=30,
+        max_runtime_seconds=90,
+    )
+    update_job(job["id"], {"next_run_at": "2026-05-29T10:00:00+00:00"})
+
+    result = run_cron_job(job_id=job["id"], dry_run=True, now_text="2026-05-29T10:00:00+00:00")
+
+    assert result.exit_code == 0
+    assert "Due: yes" in result.text
+    assert "Decision: would_claim" in result.text
+    assert "Timeouts: idle=30s max_runtime=90s" in result.text
+    assert "Delivery targets: local" in result.text
+    assert "Next scheduled:" in result.text
+
+
+def test_cron_run_dry_run_missing_job_returns_not_found(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    from agent_cli.cron_commands import run_cron_job
+
+    result = run_cron_job(
+        job_id="missing",
+        dry_run=True,
+        now_text="2026-05-29T10:00:00+00:00",
+    )
+
+    assert result.exit_code == 2
+    assert "Cron job not found: missing." in result.text
+
+
+def test_cron_create_and_edit_pass_concurrency_flags(monkeypatch):
+    import agent_cli.main as main
+
+    calls = []
+
+    def fake_create(**kwargs):
+        calls.append(("create", kwargs))
+        return main.cron_commands.CronCommandResult("created")
+
+    def fake_update(**kwargs):
+        calls.append(("edit", kwargs))
+        return main.cron_commands.CronCommandResult("updated")
+
+    monkeypatch.setattr(main.cron_commands, "create_cron_job", fake_create)
+    monkeypatch.setattr(main.cron_commands, "update_cron_job", fake_update)
+
+    parser = main.build_parser()
+    create_args = parser.parse_args([
+        "cron",
+        "create",
+        "every 5m",
+        "hello",
+        "--concurrency-key",
+        "repo:a",
+        "--concurrency-policy",
+        "skip_if_running",
+    ])
+    edit_args = parser.parse_args([
+        "cron",
+        "edit",
+        "job-1",
+        "--concurrency-key",
+        "repo:b",
+        "--concurrency-policy",
+        "queue_all",
+    ])
+
+    main._run_cron_command(create_args)
+    main._run_cron_command(edit_args)
+
+    assert calls[0] == (
+        "create",
+        {
+            "schedule": "every 5m",
+            "prompt": "hello",
+            "top_level": True,
+            "name": None,
+            "deliver": None,
+            "repeat": None,
+            "skills": None,
+            "script": None,
+            "workdir": None,
+            "concurrency_key": "repo:a",
+            "concurrency_policy": "skip_if_running",
+        },
+    )
+    assert calls[1] == (
+        "edit",
+        {
+            "job_id": "job-1",
+            "top_level": True,
+            "concurrency_key": "repo:b",
+            "concurrency_policy": "queue_all",
+        },
+    )

@@ -60,7 +60,7 @@ class CronJobInput(BaseModel):
     )
     concurrency_policy: Literal["queue_one", "queue_all", "replace_running", "skip_if_running"] | None = Field(
         default=None,
-        description="How to handle a due run when another run with the same concurrency key is active.",
+        description="How to handle a due run when another run with the same concurrency key is active. Defaults to queue_one.",
     )
 
 

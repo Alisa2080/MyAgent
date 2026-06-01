@@ -142,9 +142,13 @@ def build_parser() -> argparse.ArgumentParser:
     cron_edit.add_argument("job_id")
     _add_cron_edit_flags(cron_edit)
 
-    for name in ("pause", "resume", "run"):
+    for name in ("pause", "resume"):
         parser_for_action = cron_subparsers.add_parser(name, parents=[public_options])
         parser_for_action.add_argument("job_id")
+
+    cron_run = cron_subparsers.add_parser("run", parents=[public_options])
+    cron_run.add_argument("job_id")
+    cron_run.add_argument("--dry-run", action="store_true")
 
     cron_remove = cron_subparsers.add_parser(
         "remove",
@@ -190,6 +194,11 @@ def _add_cron_create_flags(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--repeat", type=int)
     parser.add_argument("--skill", dest="skills", action="append")
     parser.add_argument("--script")
+    parser.add_argument("--concurrency-key")
+    parser.add_argument(
+        "--concurrency-policy",
+        choices=["queue_one", "queue_all", "replace_running", "skip_if_running"],
+    )
     # --workdir is inherited from parent parser
 
 
@@ -204,6 +213,11 @@ def _add_cron_edit_flags(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--remove-skill", dest="remove_skills", action="append")
     parser.add_argument("--clear-skills", action="store_true")
     parser.add_argument("--script")
+    parser.add_argument("--concurrency-key")
+    parser.add_argument(
+        "--concurrency-policy",
+        choices=["queue_one", "queue_all", "replace_running", "skip_if_running"],
+    )
     # --workdir is inherited from parent parser
 
 
@@ -282,6 +296,8 @@ def _run_cron_command(args: argparse.Namespace):
             skills=getattr(args, "skills", None),
             script=getattr(args, "script", None),
             workdir=getattr(args, "workdir", None),
+            concurrency_key=getattr(args, "concurrency_key", None),
+            concurrency_policy=getattr(args, "concurrency_policy", None),
         )
     if subcommand == "edit":
         updates = {
@@ -293,6 +309,8 @@ def _run_cron_command(args: argparse.Namespace):
             "skills": getattr(args, "skills", None),
             "script": getattr(args, "script", None),
             "workdir": getattr(args, "workdir", None),
+            "concurrency_key": getattr(args, "concurrency_key", None),
+            "concurrency_policy": getattr(args, "concurrency_policy", None),
         }
         updates = {key: value for key, value in updates.items() if value is not None}
         if getattr(args, "clear_skills", False):
@@ -310,8 +328,13 @@ def _run_cron_command(args: argparse.Namespace):
             top_level=True,
             **updates,
         )
-    if subcommand in {"pause", "resume", "run"}:
+    if subcommand in {"pause", "resume"}:
         return cron_commands.simple_job_action(subcommand, job_id=args.job_id)
+    if subcommand == "run":
+        return cron_commands.run_cron_job(
+            job_id=args.job_id,
+            dry_run=bool(getattr(args, "dry_run", False)),
+        )
     if subcommand in {"remove", "rm", "delete"}:
         return cron_commands.simple_job_action("remove", job_id=args.job_id)
     if subcommand == "status":
