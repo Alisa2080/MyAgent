@@ -1,6 +1,83 @@
 from __future__ import annotations
 
 
+def test_service_install_config_injects_subprocess_for_runtime_prod(monkeypatch):
+    monkeypatch.delenv("AGENT_CRON_RUNNER_MODE", raising=False)
+    monkeypatch.setenv("AGENT_RUNTIME_PROFILE", "prod")
+
+    from cron.service_manager import build_service_install_config
+
+    config, detail = build_service_install_config(
+        interval_seconds=60,
+        lease_seconds=180,
+        force=False,
+        cli_profile=None,
+    )
+
+    assert config.environment_overrides["AGENT_CRON_RUNNER_MODE"] == "subprocess"
+    assert detail.effective_profile == "prod"
+    assert detail.runner_mode == "subprocess"
+    assert detail.runner_mode_source == "auto"
+    assert detail.production_recommended is True
+
+
+def test_service_install_config_injects_subprocess_for_cli_prod(monkeypatch):
+    monkeypatch.delenv("AGENT_CRON_RUNNER_MODE", raising=False)
+    monkeypatch.delenv("AGENT_RUNTIME_PROFILE", raising=False)
+
+    from cron.service_manager import build_service_install_config
+
+    config, detail = build_service_install_config(
+        interval_seconds=60,
+        lease_seconds=180,
+        force=False,
+        cli_profile="prod",
+    )
+
+    assert config.environment_overrides["AGENT_CRON_RUNNER_MODE"] == "subprocess"
+    assert detail.effective_profile == "prod"
+    assert detail.profile_source == "cli"
+    assert detail.runner_mode_source == "auto"
+
+
+def test_service_install_config_preserves_explicit_inprocess_for_prod(monkeypatch):
+    monkeypatch.setenv("AGENT_CRON_RUNNER_MODE", "inprocess")
+    monkeypatch.setenv("AGENT_RUNTIME_PROFILE", "prod")
+
+    from cron.service_manager import build_service_install_config
+
+    config, detail = build_service_install_config(
+        interval_seconds=60,
+        lease_seconds=180,
+        force=False,
+        cli_profile=None,
+    )
+
+    assert config.environment_overrides == {}
+    assert detail.runner_mode == "inprocess"
+    assert detail.runner_mode_source == "explicit"
+    assert detail.production_recommended is False
+
+
+def test_service_install_config_keeps_dev_inprocess(monkeypatch):
+    monkeypatch.delenv("AGENT_CRON_RUNNER_MODE", raising=False)
+    monkeypatch.setenv("AGENT_RUNTIME_PROFILE", "dev")
+
+    from cron.service_manager import build_service_install_config
+
+    config, detail = build_service_install_config(
+        interval_seconds=60,
+        lease_seconds=180,
+        force=False,
+        cli_profile="dev",
+    )
+
+    assert config.environment_overrides == {}
+    assert detail.effective_profile == "dev"
+    assert detail.runner_mode == "inprocess"
+    assert detail.runner_mode_source == "default"
+
+
 def test_unsupported_platform_install_returns_exit_code_2(monkeypatch, tmp_path):
     monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
 

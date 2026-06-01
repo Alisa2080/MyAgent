@@ -4,8 +4,9 @@ import importlib.util
 import os
 import platform as platform_module
 import sys
-from dataclasses import dataclass
-from typing import Any, Protocol
+from dataclasses import dataclass, field
+from types import MappingProxyType
+from typing import Any, Mapping, Protocol
 
 from cron.service_state import is_status_fresh, read_service_status
 
@@ -22,6 +23,16 @@ class ServiceInstallConfig:
     lease_seconds: int
     force: bool = False
     python_executable: str = sys.executable
+    environment_overrides: Mapping[str, str] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class ServiceInstallDetail:
+    effective_profile: str
+    profile_source: str
+    runner_mode: str
+    runner_mode_source: str
+    production_recommended: bool
 
 
 @dataclass(frozen=True)
@@ -84,7 +95,69 @@ class CronServicePlatform(Protocol):
         raise NotImplementedError
 
 
-def service_environment() -> dict[str, str]:
+PRODUCTION_RUNTIME_PROFILES = frozenset({"hosted", "prod"})
+
+
+def _clean_profile(value: str | None) -> str | None:
+    text = str(value or "").strip().lower()
+    return text or None
+
+
+def effective_runtime_profile(*, cli_profile: str | None = None) -> tuple[str, str]:
+    runtime_profile = _clean_profile(os.getenv("AGENT_RUNTIME_PROFILE"))
+    if runtime_profile:
+        return runtime_profile, "runtime"
+    cli = _clean_profile(cli_profile)
+    if cli in PRODUCTION_RUNTIME_PROFILES:
+        return cli, "cli"
+    return "dev", "default"
+
+
+def _explicit_runner_mode() -> str | None:
+    raw = os.getenv("AGENT_CRON_RUNNER_MODE", "").strip().lower()
+    return raw or None
+
+
+def build_service_install_config(
+    *,
+    interval_seconds: float,
+    lease_seconds: int,
+    force: bool,
+    cli_profile: str | None = None,
+) -> tuple[ServiceInstallConfig, ServiceInstallDetail]:
+    profile, profile_source = effective_runtime_profile(cli_profile=cli_profile)
+    explicit_mode = _explicit_runner_mode()
+    overrides: dict[str, str] = {}
+    if explicit_mode:
+        runner_mode = "subprocess" if explicit_mode == "process" else explicit_mode
+        runner_source = "explicit"
+    elif profile in PRODUCTION_RUNTIME_PROFILES:
+        runner_mode = "subprocess"
+        runner_source = "auto"
+        overrides["AGENT_CRON_RUNNER_MODE"] = "subprocess"
+    else:
+        runner_mode = "inprocess"
+        runner_source = "default"
+
+    detail = ServiceInstallDetail(
+        effective_profile=profile,
+        profile_source=profile_source,
+        runner_mode=runner_mode,
+        runner_mode_source=runner_source,
+        production_recommended=(
+            profile not in PRODUCTION_RUNTIME_PROFILES or runner_mode == "subprocess"
+        ),
+    )
+    config = ServiceInstallConfig(
+        interval_seconds=interval_seconds,
+        lease_seconds=lease_seconds,
+        force=force,
+        environment_overrides=MappingProxyType(overrides),
+    )
+    return config, detail
+
+
+def service_environment(overrides: Mapping[str, str] | None = None) -> dict[str, str]:
     keys = (
         "PATH",
         "AGENT_CLI_HOME",
@@ -94,7 +167,10 @@ def service_environment() -> dict[str, str]:
         "AGENT_CRON_RUNNER_SUBPROCESS_TIMEOUT",
         "AGENT_CRON_MAX_PARALLEL",
     )
-    return {key: value for key in keys if (value := os.getenv(key))}
+    env = {key: value for key in keys if (value := os.getenv(key))}
+    if overrides:
+        env.update({key: value for key, value in overrides.items() if value})
+    return env
 
 
 def serve_command(config: ServiceInstallConfig) -> list[str]:
@@ -147,17 +223,25 @@ def install_service(
     interval_seconds: float,
     lease_seconds: int,
     force: bool,
+    cli_profile: str | None = None,
 ) -> ServiceCommandResult:
     platform = _platform_or_none()
     if platform is None:
         return unsupported_result()
-    return platform.install(
-        ServiceInstallConfig(
-            interval_seconds=interval_seconds,
-            lease_seconds=lease_seconds,
-            force=force,
-        )
+    config, detail = build_service_install_config(
+        interval_seconds=interval_seconds,
+        lease_seconds=lease_seconds,
+        force=force,
+        cli_profile=cli_profile,
     )
+    result = platform.install(config)
+    if result.exit_code:
+        return result
+    if detail.runner_mode_source == "auto":
+        suffix = f" Runner mode: subprocess for {detail.effective_profile} profile."
+    else:
+        suffix = f" Runner mode: {detail.runner_mode}."
+    return ServiceCommandResult(result.message + suffix, exit_code=result.exit_code)
 
 
 def uninstall_service() -> ServiceCommandResult:
