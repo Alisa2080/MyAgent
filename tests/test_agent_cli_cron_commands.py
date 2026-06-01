@@ -241,6 +241,44 @@ def test_status_renders_scheduler_and_paths(monkeypatch, tmp_path):
     assert "Jobs: 1" in result.text
 
 
+def test_cron_status_includes_automatic_scheduling_summary(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    import agent_cli.cron_commands as cron_commands
+    from cron.service_manager import ServiceStatus
+
+    monkeypatch.setattr(cron_commands, "_service_status_lines", lambda: [])
+    monkeypatch.setattr(cron_commands, "display_cron_home", lambda: str(tmp_path))
+    monkeypatch.setattr(cron_commands, "get_jobs_file", lambda: tmp_path / "jobs.json")
+    monkeypatch.setattr(cron_commands, "list_jobs", lambda include_disabled=True: [])
+    monkeypatch.setattr(cron_commands, "_delivery_stats_lines", lambda: [])
+    monkeypatch.setattr(
+        "cron.service_manager.compose_service_status",
+        lambda: ServiceStatus(
+            platform="systemd-user",
+            supported=True,
+            installed=True,
+            enabled=True,
+            active=True,
+            pid=123,
+            detail="active",
+            error=None,
+            heartbeat_fresh=True,
+            process_state="running",
+            leader_state="leader",
+            last_heartbeat_at="2026-06-01T10:00:00+00:00",
+            last_tick=None,
+            last_error=None,
+            exit_reason=None,
+        ),
+    )
+
+    result = cron_commands.cron_status()
+
+    assert "Service manager: systemd-user installed active enabled" in result.text
+    assert "Automatic scheduling: enabled" in result.text
+
+
 def test_serve_cron_calls_service(monkeypatch):
     from agent_cli import cron_commands
 
@@ -360,11 +398,12 @@ def test_cron_status_handles_missing_and_malformed_status(monkeypatch, tmp_path)
     assert "Scheduler service: unknown" in malformed_result.text
 
 
-def test_cron_doctor_reports_fresh_service_heartbeat(monkeypatch, tmp_path):
+def test_cron_doctor_reports_running_service(monkeypatch, tmp_path):
     monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
 
     from agent_cli import cron_commands
     from cron.jobs import now
+    from cron.service_manager import ServiceStatus
     from cron.service_state import write_service_status
 
     def fail_scheduler_check():
@@ -377,6 +416,26 @@ def test_cron_doctor_reports_fresh_service_heartbeat(monkeypatch, tmp_path):
         raising=False,
     )
     monkeypatch.setattr(cron_commands, "list_jobs", lambda include_disabled=False: [])
+    monkeypatch.setattr(
+        "cron.service_manager.compose_service_status",
+        lambda: ServiceStatus(
+            platform="systemd-user",
+            supported=True,
+            installed=True,
+            enabled=True,
+            active=True,
+            pid=123,
+            detail="active",
+            error=None,
+            heartbeat_fresh=True,
+            process_state="running",
+            leader_state="leader",
+            last_heartbeat_at=now().isoformat(),
+            last_tick=None,
+            last_error=None,
+            exit_reason=None,
+        ),
+    )
     write_service_status(
         {
             "process_state": "running",
@@ -387,33 +446,72 @@ def test_cron_doctor_reports_fresh_service_heartbeat(monkeypatch, tmp_path):
 
     result = cron_commands.cron_doctor()
 
-    assert "[ok] cron service heartbeat: fresh (leader)" in result.text
+    assert "[ok] cron service: running (systemd-user)" in result.text
     assert "scheduler is stopped" not in result.text
 
 
-def test_cron_doctor_warns_when_service_status_missing(monkeypatch, tmp_path):
+def test_cron_doctor_warns_when_service_is_not_installed(monkeypatch, tmp_path):
     monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
 
     from agent_cli import cron_commands
+    from cron.service_manager import ServiceStatus
 
     monkeypatch.setattr(cron_commands, "list_jobs", lambda include_disabled=False: [])
+    monkeypatch.setattr(
+        "cron.service_manager.compose_service_status",
+        lambda: ServiceStatus(
+            platform="systemd-user",
+            supported=True,
+            installed=False,
+            enabled=False,
+            active=False,
+            pid=None,
+            detail="not installed",
+            error=None,
+            heartbeat_fresh=False,
+            process_state=None,
+            leader_state=None,
+            last_heartbeat_at=None,
+            last_tick=None,
+            last_error=None,
+            exit_reason=None,
+        ),
+    )
 
     result = cron_commands.cron_doctor()
 
     assert result.exit_code == 1
-    assert (
-        "[warn] cron service heartbeat: missing; start automatic scheduling "
-        "with `agent cron serve`"
-    ) in result.text
+    assert "[warn] cron service: not installed; run `agent cron service install`" in result.text
 
 
 def test_cron_doctor_warns_when_service_heartbeat_stale(monkeypatch, tmp_path):
     monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
 
     from agent_cli import cron_commands
+    from cron.service_manager import ServiceStatus
     from cron.service_state import write_service_status
 
     monkeypatch.setattr(cron_commands, "list_jobs", lambda include_disabled=False: [])
+    monkeypatch.setattr(
+        "cron.service_manager.compose_service_status",
+        lambda: ServiceStatus(
+            platform="systemd-user",
+            supported=True,
+            installed=True,
+            enabled=True,
+            active=True,
+            pid=123,
+            detail="active",
+            error=None,
+            heartbeat_fresh=False,
+            process_state="running",
+            leader_state="leader",
+            last_heartbeat_at="2026-05-29T10:00:00+00:00",
+            last_tick=None,
+            last_error=None,
+            exit_reason=None,
+        ),
+    )
     write_service_status(
         {
             "process_state": "running",
@@ -425,9 +523,77 @@ def test_cron_doctor_warns_when_service_heartbeat_stale(monkeypatch, tmp_path):
     result = cron_commands.cron_doctor()
 
     assert result.exit_code == 1
-    assert (
-        "[warn] cron service heartbeat: stale; automatic scheduling may be stopped"
-    ) in result.text
+    assert "[warn] cron service heartbeat: stale; run `agent cron service restart`" in result.text
+
+
+def test_cron_doctor_suggests_service_install_when_missing(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    from agent_cli import cron_commands
+    from cron.service_manager import ServiceStatus
+
+    monkeypatch.setattr(cron_commands, "list_jobs", lambda include_disabled=False: [])
+    monkeypatch.setattr(
+        "cron.service_manager.compose_service_status",
+        lambda: ServiceStatus(
+            platform="systemd-user",
+            supported=True,
+            installed=False,
+            enabled=False,
+            active=False,
+            pid=None,
+            detail="not installed",
+            error=None,
+            heartbeat_fresh=False,
+            process_state=None,
+            leader_state=None,
+            last_heartbeat_at=None,
+            last_tick=None,
+            last_error=None,
+            exit_reason=None,
+        ),
+    )
+
+    result = cron_commands.cron_doctor()
+
+    assert result.exit_code == 1
+    assert "[warn] cron service: not installed; run `agent cron service install`" in result.text
+    assert "cron service heartbeat: missing" not in result.text
+
+
+def test_cron_doctor_suggests_service_restart_when_heartbeat_stale(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    from agent_cli import cron_commands
+    from cron.service_manager import ServiceStatus
+
+    monkeypatch.setattr(cron_commands, "list_jobs", lambda include_disabled=False: [])
+    monkeypatch.setattr(
+        "cron.service_manager.compose_service_status",
+        lambda: ServiceStatus(
+            platform="systemd-user",
+            supported=True,
+            installed=True,
+            enabled=True,
+            active=True,
+            pid=123,
+            detail="active",
+            error=None,
+            heartbeat_fresh=False,
+            process_state="running",
+            leader_state="leader",
+            last_heartbeat_at="2026-06-01T10:00:00+00:00",
+            last_tick=None,
+            last_error=None,
+            exit_reason=None,
+        ),
+    )
+
+    result = cron_commands.cron_doctor()
+
+    assert result.exit_code == 1
+    assert "[warn] cron service heartbeat: stale; run `agent cron service restart`" in result.text
+    assert "automatic scheduling may be stopped" not in result.text
 
 
 def test_delivery_stats_lines_labels_origin_poll_pending(monkeypatch, tmp_path):
@@ -616,8 +782,29 @@ def test_cron_doctor_accepts_multi_target_delivery(monkeypatch, tmp_path):
 
     from agent_cli import cron_commands
     from cron.jobs import now
+    from cron.service_manager import ServiceStatus
     from cron.service_state import write_service_status
 
+    monkeypatch.setattr(
+        "cron.service_manager.compose_service_status",
+        lambda: ServiceStatus(
+            platform="systemd-user",
+            supported=True,
+            installed=True,
+            enabled=True,
+            active=True,
+            pid=123,
+            detail="active",
+            error=None,
+            heartbeat_fresh=True,
+            process_state="running",
+            leader_state="leader",
+            last_heartbeat_at=now().isoformat(),
+            last_tick=None,
+            last_error=None,
+            exit_reason=None,
+        ),
+    )
     write_service_status(
         {
             "process_state": "running",

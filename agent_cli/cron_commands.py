@@ -297,6 +297,17 @@ def _service_manager_summary_line(status) -> str:
     return f"Service manager: {status.platform} {installed} {active} {enabled}"
 
 
+def _automatic_scheduling_line(status) -> str:
+    ready = (
+        status.supported
+        and status.installed
+        and status.enabled
+        and status.active
+        and status.heartbeat_fresh
+    )
+    return f"Automatic scheduling: {'enabled' if ready else 'not-ready'}"
+
+
 def _last_tick_line(last_tick: dict[str, Any]) -> str:
     return (
         "Last tick: "
@@ -312,16 +323,9 @@ def cron_service_status() -> CronCommandResult:
     from cron.service_manager import compose_service_status
 
     status = compose_service_status()
-    ready = (
-        status.supported
-        and status.installed
-        and status.enabled
-        and status.active
-        and status.heartbeat_fresh
-    )
     lines = [
         _service_manager_summary_line(status),
-        f"Automatic scheduling: {'enabled' if ready else 'not-ready'}",
+        _automatic_scheduling_line(status),
     ]
     if status.pid:
         lines.append(f"PID: {status.pid}")
@@ -382,16 +386,20 @@ def _service_status_lines() -> list[str]:
 def cron_status() -> CronCommandResult:
     from cron.delivery_registry import default_delivery_registry
     from cron.runner_client import runner_mode_diagnostic
+    from cron.service_manager import compose_service_status
     from cron.state_store import StateStore
 
     jobs = list_jobs(include_disabled=True)
     state_store = StateStore()
+    service_status = compose_service_status()
     mode, mode_ok = runner_mode_diagnostic()
     mode_label = f"{'ok' if mode_ok else 'UNSUPPORTED'} ({mode})"
     counts = state_store.job_counts_by_state()
     count_text = ", ".join(f"{state}={count}" for state, count in sorted(counts.items())) or "-"
     lines = [
         *_service_status_lines(),
+        _service_manager_summary_line(service_status),
+        _automatic_scheduling_line(service_status),
         f"Cron home: {display_cron_home()}",
         f"Cron sqlite: {state_store.path}",
         f"Runner mode: {mode_label}",
@@ -501,6 +509,22 @@ def _add_service_heartbeat_check(add) -> None:
         add("ok", f"cron service heartbeat: fresh ({leader_state})")
     else:
         add("warn", "cron service heartbeat: stale; automatic scheduling may be stopped")
+
+
+def _add_service_manager_check(add) -> None:
+    from cron.service_manager import compose_service_status
+
+    status = compose_service_status()
+    if not status.supported:
+        add("warn", "cron service: unsupported platform; use `agent cron serve`")
+    elif not status.installed:
+        add("warn", "cron service: not installed; run `agent cron service install`")
+    elif not status.active:
+        add("warn", "cron service: installed but inactive; run `agent cron service start`")
+    elif not status.heartbeat_fresh:
+        add("warn", "cron service heartbeat: stale; run `agent cron service restart`")
+    else:
+        add("ok", f"cron service: running ({status.platform})")
 
 
 def cron_doctor() -> CronCommandResult:
@@ -613,7 +637,7 @@ def cron_doctor() -> CronCommandResult:
     except Exception as exc:
         add("fail", f"delivery db error: {exc}")
 
-    _add_service_heartbeat_check(add)
+    _add_service_manager_check(add)
 
     try:
         active_jobs = list_jobs(include_disabled=False)
