@@ -676,7 +676,13 @@ def cron_doctor(
 
     if cleanup_runner_tmp:
         cleanup = _cleanup_runner_tmp()
-        if cleanup.failed:
+        if cleanup.error:
+            add(
+                "fail",
+                f"runner tmp cleanup: {cleanup.error} "
+                f"(removed={cleanup.removed} failed={cleanup.failed} remaining={cleanup.remaining})",
+            )
+        elif cleanup.failed:
             add(
                 "warn",
                 f"runner tmp cleanup: removed={cleanup.removed} failed={cleanup.failed} remaining={cleanup.remaining}",

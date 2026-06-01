@@ -191,6 +191,24 @@ def test_cleanup_runner_tmp_ignores_invalid_smoke_prefix_dir(monkeypatch, tmp_pa
     assert invalid_smoke.exists()
 
 
+def test_cleanup_runner_tmp_reports_unusable_root(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+    from cron.paths import get_runner_tmp_dir
+    from cron.runner_subprocess import cleanup_runner_tmp
+
+    root = get_runner_tmp_dir()
+    root.parent.mkdir(parents=True)
+    root.write_text("not a directory", encoding="utf-8")
+
+    result = cleanup_runner_tmp(stale_after_seconds=24 * 60 * 60)
+
+    assert result.removed == 0
+    assert result.failed == 1
+    assert result.remaining == 0
+    assert result.error is not None
+    assert "not a directory" in result.error.lower()
+
+
 # ----------------------------------------------------------------------
 # Timeout config
 # ----------------------------------------------------------------------

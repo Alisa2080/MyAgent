@@ -371,6 +371,7 @@ class RunnerTmpCleanupResult:
     failed: int
     remaining: int
     path: Path
+    error: str | None = None
 
 
 def _is_runner_tmp_child(path: Path) -> bool:
@@ -426,7 +427,17 @@ def cleanup_runner_tmp(
     now = time.time()
     removed = 0
     failed = 0
-    for child in _runner_tmp_children():
+    try:
+        children = _runner_tmp_children()
+    except OSError as exc:
+        return RunnerTmpCleanupResult(
+            removed=0,
+            failed=1,
+            remaining=0,
+            path=root,
+            error=str(exc),
+        )
+    for child in children:
         try:
             age = max(0, int(now - child.stat().st_mtime))
             if age < stale_after_seconds:
@@ -435,7 +446,16 @@ def cleanup_runner_tmp(
             removed += 1
         except OSError:
             failed += 1
-    remaining = len(_runner_tmp_children())
+    try:
+        remaining = len(_runner_tmp_children())
+    except OSError as exc:
+        return RunnerTmpCleanupResult(
+            removed=removed,
+            failed=failed + 1,
+            remaining=0,
+            path=root,
+            error=str(exc),
+        )
     return RunnerTmpCleanupResult(
         removed=removed,
         failed=failed,

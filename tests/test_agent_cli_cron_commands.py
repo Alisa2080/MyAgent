@@ -973,6 +973,36 @@ def test_cron_doctor_cleanup_runner_tmp(monkeypatch, tmp_path):
     assert "runner tmp cleanup: removed=2 remaining=1" in result.text
 
 
+def test_cron_doctor_cleanup_runner_tmp_reports_failure(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    import agent_cli.cron_commands as cron_commands
+    from cron.runner_subprocess import RunnerTmpCleanupResult, RunnerTmpSummary
+
+    monkeypatch.setattr(cron_commands, "_add_service_manager_check", lambda add: None)
+    monkeypatch.setattr(cron_commands, "_add_service_heartbeat_check", lambda add: None)
+    monkeypatch.setattr(cron_commands, "list_jobs", lambda include_disabled=False: [])
+    monkeypatch.setattr(
+        "cron.runner_subprocess.cleanup_runner_tmp",
+        lambda: RunnerTmpCleanupResult(
+            removed=0,
+            failed=1,
+            remaining=0,
+            path=tmp_path,
+            error="not a directory",
+        ),
+    )
+    monkeypatch.setattr(
+        "cron.runner_subprocess.inspect_runner_tmp",
+        lambda: RunnerTmpSummary(total=0, stale=0, oldest_age_seconds=None, path=tmp_path),
+    )
+
+    result = cron_commands.cron_doctor(cli_profile=None, cleanup_runner_tmp=True)
+
+    assert result.exit_code == 2
+    assert "[fail] runner tmp cleanup: not a directory" in result.text
+
+
 def test_cron_status_renders_effective_profile_and_tmp_summary(monkeypatch, tmp_path):
     monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
     monkeypatch.setenv("AGENT_RUNTIME_PROFILE", "prod")
