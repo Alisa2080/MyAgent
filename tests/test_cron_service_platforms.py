@@ -516,6 +516,75 @@ def test_launchd_start_requires_installed_plist(monkeypatch, tmp_path):
     assert "agent cron service install" in result.message
 
 
+def test_launchd_stop_boots_out_plist_from_domain(monkeypatch, tmp_path):
+    from cron.service_platforms.launchd_user import (
+        LABEL,
+        LaunchdUserCronService,
+    )
+
+    calls = []
+    plist_path = tmp_path / f"{LABEL}.plist"
+    monkeypatch.setattr(
+        "cron.service_platforms.launchd_user.launchd_plist_path",
+        lambda: plist_path,
+    )
+    monkeypatch.setattr("cron.service_platforms.launchd_user._uid", lambda: 501)
+
+    def fake_run(args):
+        calls.append(args)
+        return 5, "", "not loaded"
+
+    result = LaunchdUserCronService(command_runner=fake_run).stop()
+
+    assert result.exit_code == 0
+    assert calls == [["launchctl", "bootout", "gui/501", str(plist_path)]]
+
+
+def test_launchd_status_reports_loaded_detail(monkeypatch, tmp_path):
+    from cron.service_platforms.launchd_user import (
+        LABEL,
+        LaunchdUserCronService,
+    )
+
+    plist_path = tmp_path / f"{LABEL}.plist"
+    plist_path.write_text("plist", encoding="utf-8")
+    monkeypatch.setattr(
+        "cron.service_platforms.launchd_user.launchd_plist_path",
+        lambda: plist_path,
+    )
+    monkeypatch.setattr("cron.service_platforms.launchd_user._uid", lambda: 501)
+
+    status = LaunchdUserCronService(
+        command_runner=lambda args: (0, "random first line\n    pid = 789\n", "")
+    ).status()
+
+    assert status.installed is True
+    assert status.enabled is True
+    assert status.active is True
+    assert status.pid == 789
+    assert status.detail == "loaded"
+
+
+def test_launchd_status_reports_not_loaded_detail(monkeypatch, tmp_path):
+    from cron.service_platforms.launchd_user import LaunchdUserCronService
+
+    monkeypatch.setattr(
+        "cron.service_platforms.launchd_user.launchd_plist_path",
+        lambda: tmp_path / "missing.plist",
+    )
+
+    status = LaunchdUserCronService(
+        command_runner=lambda args: (113, "", "Could not find service")
+    ).status()
+
+    assert status.installed is False
+    assert status.enabled is False
+    assert status.active is False
+    assert status.pid is None
+    assert status.detail == "not loaded"
+    assert status.error == "Could not find service"
+
+
 def test_launchd_logs_read_stdout_and_stderr(monkeypatch, tmp_path):
     from cron.service_platforms.launchd_user import LaunchdUserCronService
 

@@ -172,8 +172,9 @@ class LaunchdUserCronService:
         )
 
     def stop(self) -> ServiceCommandResult:
+        path = launchd_plist_path()
         return self._result(
-            ["launchctl", "bootout", launchd_service_ref()],
+            ["launchctl", "bootout", launchd_domain(), str(path)],
             ok_codes=(0, 5),
             fallback="stopped",
         )
@@ -192,7 +193,7 @@ class LaunchdUserCronService:
         )
         active = code == 0
         pid = _parse_pid(stdout)
-        detail = _first_nonempty_line(stdout)
+        detail = "loaded" if active else "not loaded"
         error = None if code == 0 else (stderr or stdout).strip() or None
         return ServiceRuntimeStatus(
             platform=self.key,
@@ -224,14 +225,6 @@ def _parse_pid(output: str) -> int | None:
         return None
     pid = int(match.group(1))
     return pid if pid > 0 else None
-
-
-def _first_nonempty_line(output: str) -> str | None:
-    for line in output.splitlines():
-        text = line.strip()
-        if text:
-            return text
-    return None
 
 
 def _tail_file(path: Path, lines: int) -> str | None:
