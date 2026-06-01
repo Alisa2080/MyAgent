@@ -874,6 +874,86 @@ def test_cron_doctor_warns_when_subprocess_timeout_is_too_small(monkeypatch, tmp
     )
 
 
+def test_cron_doctor_fails_when_worker_smoke_cannot_use_tmp_root(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+    monkeypatch.setenv("AGENT_CRON_RUNNER_MODE", "subprocess")
+
+    import agent_cli.cron_commands as cron_commands
+    from cron.runner_subprocess import RunnerTmpSummary, WorkerSmokeResult
+
+    monkeypatch.setattr(cron_commands, "_add_service_manager_check", lambda add: None)
+    monkeypatch.setattr(cron_commands, "_add_service_heartbeat_check", lambda add: None)
+    monkeypatch.setattr(cron_commands, "list_jobs", lambda include_disabled=False: [])
+    monkeypatch.setattr(
+        "cron.runner_subprocess.worker_protocol_smoke",
+        lambda: WorkerSmokeResult(False, "runner tmp unavailable", severity="fail"),
+    )
+    monkeypatch.setattr(
+        "cron.runner_subprocess.inspect_runner_tmp",
+        lambda: RunnerTmpSummary(total=0, stale=0, oldest_age_seconds=None, path=tmp_path),
+    )
+
+    result = cron_commands.cron_doctor(cli_profile=None)
+
+    assert result.exit_code == 2
+    assert "[fail] runner_worker smoke: runner tmp unavailable" in result.text
+
+
+def test_cron_doctor_warns_when_worker_smoke_times_out(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+    monkeypatch.setenv("AGENT_CRON_RUNNER_MODE", "subprocess")
+
+    import agent_cli.cron_commands as cron_commands
+    from cron.runner_subprocess import RunnerTmpSummary, WorkerSmokeResult
+
+    monkeypatch.setattr(cron_commands, "_add_service_manager_check", lambda add: None)
+    monkeypatch.setattr(cron_commands, "_add_service_heartbeat_check", lambda add: None)
+    monkeypatch.setattr(cron_commands, "list_jobs", lambda include_disabled=False: [])
+    monkeypatch.setattr(
+        "cron.runner_subprocess.worker_protocol_smoke",
+        lambda: WorkerSmokeResult(
+            False,
+            "runner_worker smoke timed out after 10s",
+            severity="warn",
+        ),
+    )
+    monkeypatch.setattr(
+        "cron.runner_subprocess.inspect_runner_tmp",
+        lambda: RunnerTmpSummary(total=0, stale=0, oldest_age_seconds=None, path=tmp_path),
+    )
+
+    result = cron_commands.cron_doctor(cli_profile=None)
+
+    assert result.exit_code == 1
+    assert "[warn] runner_worker smoke: runner_worker smoke timed out after 10s" in result.text
+
+
+def test_cron_doctor_fails_when_runner_tmp_inspection_fails(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    import agent_cli.cron_commands as cron_commands
+    from cron.runner_subprocess import RunnerTmpSummary
+
+    monkeypatch.setattr(cron_commands, "_add_service_manager_check", lambda add: None)
+    monkeypatch.setattr(cron_commands, "_add_service_heartbeat_check", lambda add: None)
+    monkeypatch.setattr(cron_commands, "list_jobs", lambda include_disabled=False: [])
+    monkeypatch.setattr(
+        "cron.runner_subprocess.inspect_runner_tmp",
+        lambda: RunnerTmpSummary(
+            total=0,
+            stale=0,
+            oldest_age_seconds=None,
+            path=tmp_path,
+            error="permission denied",
+        ),
+    )
+
+    result = cron_commands.cron_doctor(cli_profile=None)
+
+    assert result.exit_code == 2
+    assert "[fail] runner tmp residuals: permission denied" in result.text
+
+
 def test_cron_doctor_cleanup_runner_tmp(monkeypatch, tmp_path):
     monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
 

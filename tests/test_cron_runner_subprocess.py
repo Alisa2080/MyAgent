@@ -42,6 +42,41 @@ def test_worker_protocol_smoke_reports_cleanup_failure(monkeypatch, tmp_path):
     assert "cleanup" in result.error.lower()
 
 
+def test_worker_protocol_smoke_reports_tmp_root_failure(monkeypatch, tmp_path):
+    from cron.runner_subprocess import worker_protocol_smoke
+
+    blocked_home = tmp_path / "blocked-home"
+    blocked_home.write_text("not a directory", encoding="utf-8")
+    monkeypatch.setattr(
+        "cron.runner_subprocess.get_runner_tmp_dir",
+        lambda: blocked_home / "runner-tmp",
+    )
+
+    result = worker_protocol_smoke(timeout_seconds=10)
+
+    assert result.ok is False
+    assert result.severity == "fail"
+    assert result.error is not None
+    assert "runner tmp" in result.error.lower()
+
+
+def test_worker_protocol_smoke_timeout_is_warning(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    from cron.runner_subprocess import worker_protocol_smoke
+
+    def timeout(*args, **kwargs):
+        raise subprocess.TimeoutExpired(cmd=["runner"], timeout=1)
+
+    monkeypatch.setattr(subprocess, "run", timeout)
+
+    result = worker_protocol_smoke(timeout_seconds=1)
+
+    assert result.ok is False
+    assert result.severity == "warn"
+    assert result.error == "runner_worker smoke timed out after 1s"
+
+
 def test_runner_tmp_residuals_report_old_directory(monkeypatch, tmp_path):
     import time
 
@@ -84,6 +119,22 @@ def test_inspect_runner_tmp_skips_vanished_entries(monkeypatch, tmp_path):
     assert summary.total == 0
     assert summary.stale == 0
     assert summary.oldest_age_seconds is None
+
+
+def test_inspect_runner_tmp_reports_unusable_root(monkeypatch):
+    from cron.runner_subprocess import inspect_runner_tmp
+
+    monkeypatch.setattr(
+        "cron.runner_subprocess._runner_tmp_children",
+        lambda: (_ for _ in ()).throw(OSError("permission denied")),
+    )
+
+    summary = inspect_runner_tmp(stale_after_seconds=24 * 60 * 60)
+
+    assert summary.total == 0
+    assert summary.stale == 0
+    assert summary.oldest_age_seconds is None
+    assert summary.error == "permission denied"
 
 
 def test_cleanup_runner_tmp_removes_only_old_valid_dirs(monkeypatch, tmp_path):

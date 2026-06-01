@@ -657,7 +657,7 @@ def cron_doctor(
         if smoke.ok:
             add("ok", "runner_worker smoke: ok")
         else:
-            add("fail", f"runner_worker smoke: {smoke.error or 'failed'}")
+            add(smoke.severity, f"runner_worker smoke: {smoke.error or 'failed'}")
 
     try:
         runner_tmp = get_runner_tmp_dir()
@@ -687,7 +687,9 @@ def cron_doctor(
                 f"runner tmp cleanup: removed={cleanup.removed} remaining={cleanup.remaining}",
             )
     summary = inspect_runner_tmp()
-    if summary.stale:
+    if summary.error:
+        add("fail", f"runner tmp residuals: {summary.error}")
+    elif summary.stale:
         oldest = "-" if summary.oldest_age_seconds is None else f"{summary.oldest_age_seconds}s"
         add("warn", f"runner tmp residuals: stale={summary.stale} total={summary.total} oldest={oldest}")
     else:

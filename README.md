@@ -148,7 +148,12 @@ production cron services, set `AGENT_RUNTIME_PROFILE=hosted` or
 `AGENT_RUNTIME_PROFILE=prod` before installing the service; if
 `AGENT_CRON_RUNNER_MODE` is not already set, the installed user service will use
 `AGENT_CRON_RUNNER_MODE=subprocess`. This keeps the long-lived scheduler process
-separate from each job's agent execution.
+separate from each job's agent execution. If `AGENT_RUNTIME_PROFILE` is unset,
+pass the production profile explicitly when installing:
+
+```bash
+python -m agent_cli --profile prod cron service install
+```
 
 If scheduled jobs are not firing, run:
 

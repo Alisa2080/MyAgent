@@ -353,6 +353,7 @@ def _report_parent_activity(
 class WorkerSmokeResult:
     ok: bool
     error: str | None = None
+    severity: str = "fail"
 
 
 @dataclass(frozen=True)
@@ -361,6 +362,7 @@ class RunnerTmpSummary:
     stale: int
     oldest_age_seconds: int | None
     path: Path
+    error: str | None = None
 
 
 @dataclass(frozen=True)
@@ -391,7 +393,16 @@ def inspect_runner_tmp(
 ) -> RunnerTmpSummary:
     root = get_runner_tmp_dir()
     now = time.time()
-    children = _runner_tmp_children()
+    try:
+        children = _runner_tmp_children()
+    except OSError as exc:
+        return RunnerTmpSummary(
+            total=0,
+            stale=0,
+            oldest_age_seconds=None,
+            path=root,
+            error=str(exc),
+        )
     ages = []
     for child in children:
         try:
@@ -437,19 +448,22 @@ def worker_protocol_smoke(
     *,
     timeout_seconds: int = _SMOKE_TIMEOUT_DEFAULT,
 ) -> WorkerSmokeResult:
-    tmp_root = get_runner_tmp_dir()
-    tmp_root.parent.mkdir(parents=True, exist_ok=True)
-    secure_dir(tmp_root.parent)
-    tmp_root.mkdir(parents=True, exist_ok=True)
-    secure_dir(tmp_root)
-    smoke_dir = tmp_root / f"{_SMOKE_DIR_PREFIX}{uuid.uuid4().hex[:16]}"
-    smoke_dir.mkdir(parents=True, exist_ok=True)
-    secure_dir(smoke_dir)
-    input_path = smoke_dir / "input.json"
-    output_path = smoke_dir / "result.json"
+    smoke_dir: Path | None = None
     result = WorkerSmokeResult(True)
     cleanup_error: str | None = None
+    failure_context = "runner tmp unavailable"
     try:
+        tmp_root = get_runner_tmp_dir()
+        tmp_root.parent.mkdir(parents=True, exist_ok=True)
+        secure_dir(tmp_root.parent)
+        tmp_root.mkdir(parents=True, exist_ok=True)
+        secure_dir(tmp_root)
+        smoke_dir = tmp_root / f"{_SMOKE_DIR_PREFIX}{uuid.uuid4().hex[:16]}"
+        smoke_dir.mkdir(parents=True, exist_ok=True)
+        secure_dir(smoke_dir)
+        input_path = smoke_dir / "input.json"
+        output_path = smoke_dir / "result.json"
+        failure_context = "runner_worker smoke failed"
         input_path.write_text(
             json.dumps({"version": _RESULT_VERSION, "smoke": True}),
             encoding="utf-8",
@@ -490,15 +504,18 @@ def worker_protocol_smoke(
         result = WorkerSmokeResult(
             False,
             f"runner_worker smoke timed out after {timeout_seconds}s",
+            severity="warn",
         )
     except Exception as exc:
-        result = WorkerSmokeResult(False, str(exc))
+        result = WorkerSmokeResult(False, f"{failure_context}: {exc}")
     finally:
-        cleanup_error = _cleanup_temp_dir(smoke_dir)
+        if smoke_dir is not None:
+            cleanup_error = _cleanup_temp_dir(smoke_dir)
     if cleanup_error is not None:
         cleanup_result = WorkerSmokeResult(
             False,
             f"runner_worker smoke cleanup failed: {cleanup_error}",
+            severity="fail",
         )
         if not result.ok and result.error:
             cleanup_result = replace(
