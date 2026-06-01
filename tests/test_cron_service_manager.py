@@ -15,6 +15,20 @@ def test_unsupported_platform_install_returns_exit_code_2(monkeypatch, tmp_path)
     assert "agent cron serve" in result.message
 
 
+def test_missing_linux_adapter_install_returns_exit_code_2(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    from cron.service_manager import install_service, platform_module
+
+    monkeypatch.setattr(platform_module, "system", lambda: "Linux")
+
+    result = install_service(interval_seconds=60, lease_seconds=180, force=False)
+
+    assert result.exit_code == 2
+    assert "user-level cron service is not supported" in result.message
+    assert "agent cron serve" in result.message
+
+
 def test_service_status_combines_platform_and_fresh_heartbeat(monkeypatch, tmp_path):
     monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
 

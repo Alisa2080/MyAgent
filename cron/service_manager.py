@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib.util
 import os
 import platform as platform_module
 import sys
@@ -112,11 +113,15 @@ def serve_command(config: ServiceInstallConfig) -> list[str]:
 def detect_platform() -> CronServicePlatform | None:
     system = platform_module.system().lower()
     if system == "linux":
+        if importlib.util.find_spec("cron.service_platforms.systemd_user") is None:
+            return None
         from cron.service_platforms.systemd_user import SystemdUserCronService
 
         platform = SystemdUserCronService()
         return platform if platform.supported() else None
     if system == "darwin":
+        if importlib.util.find_spec("cron.service_platforms.launchd_user") is None:
+            return None
         from cron.service_platforms.launchd_user import LaunchdUserCronService
 
         platform = LaunchdUserCronService()
