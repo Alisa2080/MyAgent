@@ -768,13 +768,80 @@ def test_main_cron_doctor(monkeypatch, tmp_path, capsys):
     monkeypatch.setattr(
         main_module.cron_commands,
         "cron_doctor",
-        lambda: CronCommandResult("doctor ok", exit_code=0),
+        lambda **kwargs: CronCommandResult("doctor ok", exit_code=0),
     )
 
     code = main_module.main(["cron", "doctor"])
 
     assert code == 0
     assert "doctor ok" in capsys.readouterr().out
+
+
+def test_main_cron_service_install_passes_cli_profile(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("AGENT_CLI_HOME", str(tmp_path))
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    import agent_cli.main as main_module
+    from agent_cli.cron_commands import CronCommandResult
+
+    captured = {}
+
+    def fake_install(**kwargs):
+        captured.update(kwargs)
+        return CronCommandResult("installed", exit_code=0)
+
+    monkeypatch.setattr(main_module.cron_commands, "install_cron_service", fake_install)
+
+    code = main_module.main(
+        ["--profile", "prod", "cron", "service", "install", "--interval", "30"]
+    )
+
+    assert code == 0
+    assert captured["cli_profile"] == "prod"
+
+
+def test_main_cron_doctor_passes_cleanup_and_profile(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("AGENT_CLI_HOME", str(tmp_path))
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    import agent_cli.main as main_module
+    from agent_cli.cron_commands import CronCommandResult
+
+    captured = {}
+
+    def fake_doctor(**kwargs):
+        captured.update(kwargs)
+        return CronCommandResult("doctor", exit_code=0)
+
+    monkeypatch.setattr(main_module.cron_commands, "cron_doctor", fake_doctor)
+
+    code = main_module.main(
+        ["--profile", "prod", "cron", "doctor", "--cleanup-runner-tmp"]
+    )
+
+    assert code == 0
+    assert captured == {"cli_profile": "prod", "cleanup_runner_tmp": True}
+
+
+def test_main_cron_status_passes_cli_profile(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("AGENT_CLI_HOME", str(tmp_path))
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    import agent_cli.main as main_module
+    from agent_cli.cron_commands import CronCommandResult
+
+    captured = {}
+
+    def fake_status(**kwargs):
+        captured.update(kwargs)
+        return CronCommandResult("status", exit_code=0)
+
+    monkeypatch.setattr(main_module.cron_commands, "cron_status", fake_status)
+
+    code = main_module.main(["--profile", "hosted", "cron", "status"])
+
+    assert code == 0
+    assert captured == {"cli_profile": "hosted"}
 
 
 def test_main_cron_doctor_fail(monkeypatch, tmp_path, capsys):
@@ -787,7 +854,7 @@ def test_main_cron_doctor_fail(monkeypatch, tmp_path, capsys):
     monkeypatch.setattr(
         main_module.cron_commands,
         "cron_doctor",
-        lambda: CronCommandResult("FAIL: something bad", exit_code=1),
+        lambda **kwargs: CronCommandResult("FAIL: something bad", exit_code=1),
     )
 
     code = main_module.main(["cron", "doctor"])
@@ -891,7 +958,12 @@ def test_main_cron_service_install_dispatches(monkeypatch, tmp_path, capsys):
     )
 
     assert code == 0
-    assert captured == {"interval_seconds": 30.0, "lease_seconds": 90, "force": True}
+    assert captured == {
+        "interval_seconds": 30.0,
+        "lease_seconds": 90,
+        "force": True,
+        "cli_profile": None,
+    }
     assert "installed" in capsys.readouterr().out
 
 

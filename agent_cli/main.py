@@ -159,7 +159,16 @@ def build_parser() -> argparse.ArgumentParser:
 
     cron_subparsers.add_parser("status", parents=[public_options])
     cron_subparsers.add_parser("tick", parents=[public_options])
-    cron_subparsers.add_parser("doctor", parents=[public_options])
+    cron_doctor_parser = cron_subparsers.add_parser(
+        "doctor",
+        help="Run cron health checks.",
+        parents=[public_options],
+    )
+    cron_doctor_parser.add_argument(
+        "--cleanup-runner-tmp",
+        action="store_true",
+        help="Delete stale cron runner temp directories older than 24 hours.",
+    )
 
     cron_serve = cron_subparsers.add_parser("serve", parents=[public_options])
     cron_serve.add_argument("--interval", type=float, default=60.0)
@@ -297,7 +306,7 @@ def make_cli(
 def _run_cron_command(args: argparse.Namespace):
     subcommand = getattr(args, "cron_command", None)
     if subcommand is None:
-        return cron_commands.cron_status()
+        return cron_commands.cron_status(cli_profile=getattr(args, "profile", None))
     if subcommand == "list":
         return cron_commands.list_cron_jobs(
             include_disabled=bool(getattr(args, "include_disabled", False))
@@ -355,11 +364,14 @@ def _run_cron_command(args: argparse.Namespace):
     if subcommand in {"remove", "rm", "delete"}:
         return cron_commands.simple_job_action("remove", job_id=args.job_id)
     if subcommand == "status":
-        return cron_commands.cron_status()
+        return cron_commands.cron_status(cli_profile=getattr(args, "profile", None))
     if subcommand == "tick":
         return cron_commands.run_tick()
     if subcommand == "doctor":
-        return cron_commands.cron_doctor()
+        return cron_commands.cron_doctor(
+            cli_profile=getattr(args, "profile", None),
+            cleanup_runner_tmp=bool(getattr(args, "cleanup_runner_tmp", False)),
+        )
     if subcommand == "serve":
         return cron_commands.serve_cron(
             interval_seconds=args.interval,
@@ -378,6 +390,7 @@ def _run_cron_command(args: argparse.Namespace):
                 interval_seconds=args.interval,
                 lease_seconds=args.lease_seconds,
                 force=bool(getattr(args, "force", False)),
+                cli_profile=getattr(args, "profile", None),
             )
         if service_command == "uninstall":
             return cron_commands.uninstall_cron_service()

@@ -797,6 +797,124 @@ def test_status_includes_subprocess_timeout_when_subprocess_mode(monkeypatch, tm
     assert "Subprocess timeout: 45s" in result.text
 
 
+def test_cron_doctor_warns_for_prod_inprocess(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+    monkeypatch.setenv("AGENT_RUNTIME_PROFILE", "prod")
+    monkeypatch.delenv("AGENT_CRON_RUNNER_MODE", raising=False)
+
+    import agent_cli.cron_commands as cron_commands
+
+    monkeypatch.setattr(cron_commands, "_add_service_manager_check", lambda add: None)
+    monkeypatch.setattr(cron_commands, "_add_service_heartbeat_check", lambda add: None)
+    monkeypatch.setattr(cron_commands, "list_jobs", lambda include_disabled=False: [])
+
+    result = cron_commands.cron_doctor(cli_profile=None)
+
+    assert result.exit_code == 1
+    assert "[ok] effective profile: prod (runtime)" in result.text
+    assert "[ok] runner mode: inprocess" in result.text
+    assert (
+        "[warn] prod/hosted cron service should use AGENT_CRON_RUNNER_MODE=subprocess"
+        in result.text
+    )
+
+
+def test_cron_doctor_runs_worker_smoke_for_subprocess(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+    monkeypatch.setenv("AGENT_CRON_RUNNER_MODE", "subprocess")
+
+    import agent_cli.cron_commands as cron_commands
+    from cron.runner_subprocess import RunnerTmpSummary, WorkerSmokeResult
+
+    monkeypatch.setattr(cron_commands, "_add_service_manager_check", lambda add: None)
+    monkeypatch.setattr(cron_commands, "_add_service_heartbeat_check", lambda add: None)
+    monkeypatch.setattr(cron_commands, "list_jobs", lambda include_disabled=False: [])
+    monkeypatch.setattr(
+        "cron.runner_subprocess.worker_protocol_smoke",
+        lambda: WorkerSmokeResult(True),
+    )
+    monkeypatch.setattr(
+        "cron.runner_subprocess.inspect_runner_tmp",
+        lambda: RunnerTmpSummary(total=0, stale=0, oldest_age_seconds=None, path=tmp_path),
+    )
+
+    result = cron_commands.cron_doctor(cli_profile=None)
+
+    assert result.exit_code == 0
+    assert "[ok] runner_worker smoke: ok" in result.text
+
+
+def test_cron_doctor_warns_when_subprocess_timeout_is_too_small(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+    monkeypatch.setenv("AGENT_CRON_RUNNER_MODE", "subprocess")
+    monkeypatch.setenv("AGENT_CRON_RUNNER_SUBPROCESS_TIMEOUT", "5")
+
+    import agent_cli.cron_commands as cron_commands
+    from cron.runner_subprocess import RunnerTmpSummary, WorkerSmokeResult
+
+    monkeypatch.setattr(cron_commands, "_add_service_manager_check", lambda add: None)
+    monkeypatch.setattr(cron_commands, "_add_service_heartbeat_check", lambda add: None)
+    monkeypatch.setattr(cron_commands, "list_jobs", lambda include_disabled=False: [])
+    monkeypatch.setattr(
+        "cron.runner_subprocess.worker_protocol_smoke",
+        lambda: WorkerSmokeResult(True),
+    )
+    monkeypatch.setattr(
+        "cron.runner_subprocess.inspect_runner_tmp",
+        lambda: RunnerTmpSummary(total=0, stale=0, oldest_age_seconds=None, path=tmp_path),
+    )
+
+    result = cron_commands.cron_doctor(cli_profile=None)
+
+    assert result.exit_code == 1
+    assert "[ok] subprocess timeout: 5s" in result.text
+    assert (
+        "[warn] subprocess timeout is very small; use at least 30s for production cron jobs"
+        in result.text
+    )
+
+
+def test_cron_doctor_cleanup_runner_tmp(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    import agent_cli.cron_commands as cron_commands
+    from cron.runner_subprocess import RunnerTmpCleanupResult
+
+    monkeypatch.setattr(cron_commands, "_add_service_manager_check", lambda add: None)
+    monkeypatch.setattr(cron_commands, "_add_service_heartbeat_check", lambda add: None)
+    monkeypatch.setattr(cron_commands, "list_jobs", lambda include_disabled=False: [])
+    monkeypatch.setattr(
+        "cron.runner_subprocess.cleanup_runner_tmp",
+        lambda: RunnerTmpCleanupResult(removed=2, failed=0, remaining=1, path=tmp_path),
+    )
+
+    result = cron_commands.cron_doctor(cli_profile=None, cleanup_runner_tmp=True)
+
+    assert "runner tmp cleanup: removed=2 remaining=1" in result.text
+
+
+def test_cron_status_renders_effective_profile_and_tmp_summary(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+    monkeypatch.setenv("AGENT_RUNTIME_PROFILE", "prod")
+
+    import agent_cli.cron_commands as cron_commands
+    from cron.runner_subprocess import RunnerTmpSummary
+
+    monkeypatch.setattr(cron_commands, "display_cron_home", lambda: str(tmp_path))
+    monkeypatch.setattr(cron_commands, "get_jobs_file", lambda: tmp_path / "jobs.json")
+    monkeypatch.setattr(cron_commands, "list_jobs", lambda include_disabled=True: [])
+    monkeypatch.setattr(cron_commands, "_delivery_stats_lines", lambda: [])
+    monkeypatch.setattr(
+        "cron.runner_subprocess.inspect_runner_tmp",
+        lambda: RunnerTmpSummary(total=3, stale=1, oldest_age_seconds=90000, path=tmp_path),
+    )
+
+    result = cron_commands.cron_status(cli_profile=None)
+
+    assert "Effective profile: prod (runtime)" in result.text
+    assert "Runner tmp: total=3 stale=1 oldest=90000s" in result.text
+
+
 def test_tick_returns_failure_exit_when_job_fails(monkeypatch):
     import agent_cli.cron_commands as cron_commands
 
@@ -1038,7 +1156,7 @@ def test_cron_doctor_checks_subprocess_runner(monkeypatch, tmp_path):
 
     assert "runner mode: subprocess" in result.text
     assert "subprocess timeout: 45s" in result.text
-    assert "runner_worker entrypoint: resolvable" in result.text
+    assert "runner_worker smoke: ok" in result.text
     assert "name 'sys' is not defined" not in result.text
 
 
@@ -1060,7 +1178,7 @@ def test_cron_doctor_reports_worker_help_failure(monkeypatch, tmp_path):
     result = cron_commands.cron_doctor()
 
     assert result.exit_code == 2
-    assert "runner_worker entrypoint failed" in result.text
+    assert "runner_worker smoke: runner_worker smoke exited with code 2" in result.text
     assert "worker help failed" in result.text
 
 
@@ -1461,11 +1579,17 @@ def test_install_cron_service_renders_manager_result(monkeypatch):
         interval_seconds=30,
         lease_seconds=90,
         force=True,
+        cli_profile="prod",
     )
 
     assert result.exit_code == 0
     assert result.text == "installed ok"
-    assert captured == {"interval_seconds": 30, "lease_seconds": 90, "force": True}
+    assert captured == {
+        "interval_seconds": 30,
+        "lease_seconds": 90,
+        "force": True,
+        "cli_profile": "prod",
+    }
 
 
 def test_cron_service_status_renders_composed_status(monkeypatch):

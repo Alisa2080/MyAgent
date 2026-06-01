@@ -247,6 +247,7 @@ def install_cron_service(
     interval_seconds: float,
     lease_seconds: int,
     force: bool = False,
+    cli_profile: str | None = None,
 ) -> CronCommandResult:
     from cron.service_manager import install_service
 
@@ -255,6 +256,7 @@ def install_cron_service(
             interval_seconds=interval_seconds,
             lease_seconds=lease_seconds,
             force=force,
+            cli_profile=cli_profile,
         )
     )
 
@@ -419,26 +421,31 @@ def _service_status_lines() -> list[str]:
     return lines
 
 
-def cron_status() -> CronCommandResult:
+def cron_status(*, cli_profile: str | None = None) -> CronCommandResult:
     from cron.delivery_registry import default_delivery_registry
     from cron.runner_client import runner_mode_diagnostic
+    from cron.runner_subprocess import inspect_runner_tmp
     from cron.service_manager import compose_service_status
     from cron.state_store import StateStore
 
     jobs = list_jobs(include_disabled=True)
     state_store = StateStore()
     service_status = compose_service_status()
+    profile, profile_source, _profile_text = _profile_line(cli_profile)
     mode, mode_ok = runner_mode_diagnostic()
     mode_label = f"{'ok' if mode_ok else 'UNSUPPORTED'} ({mode})"
     counts = state_store.job_counts_by_state()
     count_text = ", ".join(f"{state}={count}" for state, count in sorted(counts.items())) or "-"
+    tmp_summary = inspect_runner_tmp()
     lines = [
         *_service_status_lines(),
         _service_manager_summary_line(service_status),
         _automatic_scheduling_line(service_status),
+        f"Effective profile: {profile} ({profile_source})",
         f"Cron home: {display_cron_home()}",
         f"Cron sqlite: {state_store.path}",
         f"Runner mode: {mode_label}",
+        f"Runner tmp: {_tmp_summary_line(tmp_summary).removeprefix('runner tmp: ')}",
         f"Jobs file: {get_jobs_file()}",
         f"Output dir: {get_output_dir()}",
         f"Scripts dir: {get_scripts_dir()}",
@@ -510,6 +517,21 @@ def _check_line(status: str, message: str) -> str:
     return f"[{status}] {message}"
 
 
+def _profile_line(cli_profile: str | None) -> tuple[str, str, str]:
+    from cron.service_manager import effective_runtime_profile
+
+    profile, source = effective_runtime_profile(cli_profile=cli_profile)
+    return profile, source, f"effective profile: {profile} ({source})"
+
+
+def _tmp_summary_line(summary) -> str:
+    oldest = "-" if summary.oldest_age_seconds is None else f"{summary.oldest_age_seconds}s"
+    return (
+        "runner tmp: "
+        f"total={summary.total} stale={summary.stale} oldest={oldest}"
+    )
+
+
 def _add_service_heartbeat_check(add) -> None:
     from cron.jobs import now
     from cron.service_state import (
@@ -579,7 +601,11 @@ def _add_service_manager_check(add) -> None:
         add("ok", f"cron service: running ({status.platform})")
 
 
-def cron_doctor() -> CronCommandResult:
+def cron_doctor(
+    *,
+    cli_profile: str | None = None,
+    cleanup_runner_tmp: bool = False,
+) -> CronCommandResult:
     from cron.delivery import validate_webhook_url
     from cron.delivery_registry import default_delivery_registry
     from cron.delivery_targets import DeliveryIdentity
@@ -587,6 +613,7 @@ def cron_doctor() -> CronCommandResult:
     from cron.paths import get_runner_tmp_dir
     from cron.runner_client import runner_mode_diagnostic
     from cron.runner_subprocess import subprocess_timeout_diagnostic
+    from cron.service_manager import PRODUCTION_RUNTIME_PROFILES, effective_runtime_profile
     from cron.state_store import StateStore
 
     lines: list[str] = []
@@ -602,48 +629,69 @@ def cron_doctor() -> CronCommandResult:
             failures += 1
         lines.append(_check_line(normalized, message))
 
+    profile, profile_source = effective_runtime_profile(cli_profile=cli_profile)
+    add("ok", f"effective profile: {profile} ({profile_source})")
+
     # Runner mode
     mode, mode_ok = runner_mode_diagnostic()
     if mode_ok:
         add("ok", f"runner mode: {mode}")
     else:
         add("fail", f"runner mode: {mode!r} (unsupported)")
+    if profile in PRODUCTION_RUNTIME_PROFILES and mode != "subprocess" and mode_ok:
+        add("warn", "prod/hosted cron service should use AGENT_CRON_RUNNER_MODE=subprocess")
     if mode == "subprocess":
         timeout_val, timeout_ok = subprocess_timeout_diagnostic()
         if timeout_ok:
             add("ok", f"subprocess timeout: {timeout_val}s")
+            if timeout_val is not None and timeout_val < 30:
+                add(
+                    "warn",
+                    "subprocess timeout is very small; use at least 30s for production cron jobs",
+                )
         else:
             add("fail", f"subprocess timeout: invalid (set AGENT_CRON_RUNNER_SUBPROCESS_TIMEOUT to a positive integer)")
-        # Worker entrypoint resolvable
-        import subprocess as _subprocess
-        try:
-            result = _subprocess.run(
-                [sys.executable, "-m", "cron.runner_worker", "--help"],
-                capture_output=True,
-                timeout=5,
+        from cron.runner_subprocess import worker_protocol_smoke
+
+        smoke = worker_protocol_smoke()
+        if smoke.ok:
+            add("ok", "runner_worker smoke: ok")
+        else:
+            add("fail", f"runner_worker smoke: {smoke.error or 'failed'}")
+
+    try:
+        runner_tmp = get_runner_tmp_dir()
+        runner_tmp.mkdir(parents=True, exist_ok=True)
+        probe = runner_tmp / ".doctor-write-test"
+        probe.write_text("ok", encoding="utf-8")
+        probe.unlink()
+        add("ok", f"runner tmp dir writable: {runner_tmp}")
+    except Exception as exc:
+        add("fail", f"runner tmp dir not writable: {exc}")
+
+    from cron.runner_subprocess import (
+        cleanup_runner_tmp as _cleanup_runner_tmp,
+        inspect_runner_tmp,
+    )
+
+    if cleanup_runner_tmp:
+        cleanup = _cleanup_runner_tmp()
+        if cleanup.failed:
+            add(
+                "warn",
+                f"runner tmp cleanup: removed={cleanup.removed} failed={cleanup.failed} remaining={cleanup.remaining}",
             )
-            if result.returncode == 0:
-                add("ok", "runner_worker entrypoint: resolvable")
-            else:
-                details = (result.stderr or result.stdout or b"").decode(
-                    "utf-8", errors="replace"
-                ).strip()
-                suffix = f": {details}" if details else ""
-                add("fail", f"runner_worker entrypoint failed with code {result.returncode}{suffix}")
-        except _subprocess.TimeoutExpired:
-            add("warn", "runner_worker entrypoint: timed out during check")
-        except Exception as exc:
-            add("fail", f"runner_worker entrypoint: {exc}")
-        # Temp directory writable
-        try:
-            runner_tmp = get_runner_tmp_dir()
-            runner_tmp.mkdir(parents=True, exist_ok=True)
-            probe = runner_tmp / ".doctor-write-test"
-            probe.write_text("ok", encoding="utf-8")
-            probe.unlink()
-            add("ok", f"runner tmp dir writable: {runner_tmp}")
-        except Exception as exc:
-            add("fail", f"runner tmp dir not writable: {exc}")
+        else:
+            add(
+                "ok",
+                f"runner tmp cleanup: removed={cleanup.removed} remaining={cleanup.remaining}",
+            )
+    summary = inspect_runner_tmp()
+    if summary.stale:
+        oldest = "-" if summary.oldest_age_seconds is None else f"{summary.oldest_age_seconds}s"
+        add("warn", f"runner tmp residuals: stale={summary.stale} total={summary.total} oldest={oldest}")
+    else:
+        add("ok", f"runner tmp residuals: total={summary.total} stale=0")
 
     try:
         cron_home = display_cron_home()
