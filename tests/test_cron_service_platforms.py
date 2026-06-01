@@ -536,6 +536,8 @@ def test_launchd_start_bootstraps_and_kickstarts(monkeypatch, tmp_path):
         calls.append(args)
         if args[:2] == ["launchctl", "bootstrap"]:
             return 5, "", "service already loaded"
+        if args == ["launchctl", "print", "gui/501/ai.langchain.agent.cron"]:
+            return 0, "service info", ""
         return 0, "started", ""
 
     result = LaunchdUserCronService(command_runner=fake_run).start()
@@ -543,6 +545,7 @@ def test_launchd_start_bootstraps_and_kickstarts(monkeypatch, tmp_path):
     assert result.exit_code == 0
     assert calls == [
         ["launchctl", "bootstrap", "gui/501", str(plist_path)],
+        ["launchctl", "print", "gui/501/ai.langchain.agent.cron"],
         ["launchctl", "kickstart", "-k", "gui/501/ai.langchain.agent.cron"],
     ]
 
@@ -564,13 +567,92 @@ def test_launchd_start_rejects_non_benign_bootstrap_code_5(monkeypatch, tmp_path
 
     def fake_run(args):
         calls.append(args)
-        return 5, "", "permission denied"
+        if args[:2] == ["launchctl", "bootstrap"]:
+            return 5, "", "permission denied"
+        if args == ["launchctl", "print", "gui/501/ai.langchain.agent.cron"]:
+            return 113, "", "not found"
+        raise AssertionError(args)
 
     result = LaunchdUserCronService(command_runner=fake_run).start()
 
     assert result.exit_code == 1
     assert result.message == "permission denied"
-    assert calls == [["launchctl", "bootstrap", "gui/501", str(plist_path)]]
+    assert calls == [
+        ["launchctl", "bootstrap", "gui/501", str(plist_path)],
+        ["launchctl", "print", "gui/501/ai.langchain.agent.cron"],
+    ]
+
+
+def test_launchd_start_accepts_generic_code_5_when_service_printable(
+    monkeypatch, tmp_path
+):
+    from cron.service_platforms.launchd_user import (
+        LABEL,
+        LaunchdUserCronService,
+    )
+
+    calls = []
+    plist_path = tmp_path / f"{LABEL}.plist"
+    plist_path.write_text("plist", encoding="utf-8")
+    monkeypatch.setattr(
+        "cron.service_platforms.launchd_user.launchd_plist_path",
+        lambda: plist_path,
+    )
+    monkeypatch.setattr("cron.service_platforms.launchd_user._uid", lambda: 501)
+
+    def fake_run(args):
+        calls.append(args)
+        if args[:2] == ["launchctl", "bootstrap"]:
+            return 5, "", "Input/output error"
+        if args == ["launchctl", "print", "gui/501/ai.langchain.agent.cron"]:
+            return 0, "service info", ""
+        if args[:2] == ["launchctl", "kickstart"]:
+            return 0, "started", ""
+        raise AssertionError(args)
+
+    result = LaunchdUserCronService(command_runner=fake_run).start()
+
+    assert result.exit_code == 0
+    assert calls == [
+        ["launchctl", "bootstrap", "gui/501", str(plist_path)],
+        ["launchctl", "print", "gui/501/ai.langchain.agent.cron"],
+        ["launchctl", "kickstart", "-k", "gui/501/ai.langchain.agent.cron"],
+    ]
+
+
+def test_launchd_start_rejects_generic_code_5_when_service_not_printable(
+    monkeypatch, tmp_path
+):
+    from cron.service_platforms.launchd_user import (
+        LABEL,
+        LaunchdUserCronService,
+    )
+
+    calls = []
+    plist_path = tmp_path / f"{LABEL}.plist"
+    plist_path.write_text("plist", encoding="utf-8")
+    monkeypatch.setattr(
+        "cron.service_platforms.launchd_user.launchd_plist_path",
+        lambda: plist_path,
+    )
+    monkeypatch.setattr("cron.service_platforms.launchd_user._uid", lambda: 501)
+
+    def fake_run(args):
+        calls.append(args)
+        if args[:2] == ["launchctl", "bootstrap"]:
+            return 5, "", "Input/output error"
+        if args == ["launchctl", "print", "gui/501/ai.langchain.agent.cron"]:
+            return 113, "", "not found"
+        raise AssertionError(args)
+
+    result = LaunchdUserCronService(command_runner=fake_run).start()
+
+    assert result.exit_code == 1
+    assert result.message == "Input/output error"
+    assert calls == [
+        ["launchctl", "bootstrap", "gui/501", str(plist_path)],
+        ["launchctl", "print", "gui/501/ai.langchain.agent.cron"],
+    ]
 
 
 def test_launchd_start_requires_installed_plist(monkeypatch, tmp_path):
@@ -603,12 +685,19 @@ def test_launchd_stop_boots_out_plist_from_domain(monkeypatch, tmp_path):
 
     def fake_run(args):
         calls.append(args)
-        return 5, "", "not loaded"
+        if args[:2] == ["launchctl", "bootout"]:
+            return 5, "", "not loaded"
+        if args == ["launchctl", "print", "gui/501/ai.langchain.agent.cron"]:
+            return 113, "", "not found"
+        raise AssertionError(args)
 
     result = LaunchdUserCronService(command_runner=fake_run).stop()
 
     assert result.exit_code == 0
-    assert calls == [["launchctl", "bootout", "gui/501", str(plist_path)]]
+    assert calls == [
+        ["launchctl", "bootout", "gui/501", str(plist_path)],
+        ["launchctl", "print", "gui/501/ai.langchain.agent.cron"],
+    ]
 
 
 def test_launchd_stop_rejects_non_benign_code_5(monkeypatch, tmp_path):
@@ -624,12 +713,84 @@ def test_launchd_stop_rejects_non_benign_code_5(monkeypatch, tmp_path):
     )
     monkeypatch.setattr("cron.service_platforms.launchd_user._uid", lambda: 501)
 
-    result = LaunchdUserCronService(
-        command_runner=lambda args: (5, "", "permission denied")
-    ).stop()
+    def fake_run(args):
+        if args[:2] == ["launchctl", "bootout"]:
+            return 5, "", "permission denied"
+        if args == ["launchctl", "print", "gui/501/ai.langchain.agent.cron"]:
+            return 0, "still loaded", ""
+        raise AssertionError(args)
+
+    result = LaunchdUserCronService(command_runner=fake_run).stop()
 
     assert result.exit_code == 1
     assert result.message == "permission denied"
+
+
+def test_launchd_stop_accepts_generic_code_5_when_service_not_printable(
+    monkeypatch, tmp_path
+):
+    from cron.service_platforms.launchd_user import (
+        LABEL,
+        LaunchdUserCronService,
+    )
+
+    calls = []
+    plist_path = tmp_path / f"{LABEL}.plist"
+    monkeypatch.setattr(
+        "cron.service_platforms.launchd_user.launchd_plist_path",
+        lambda: plist_path,
+    )
+    monkeypatch.setattr("cron.service_platforms.launchd_user._uid", lambda: 501)
+
+    def fake_run(args):
+        calls.append(args)
+        if args[:2] == ["launchctl", "bootout"]:
+            return 5, "", "Input/output error"
+        if args == ["launchctl", "print", "gui/501/ai.langchain.agent.cron"]:
+            return 113, "", "not found"
+        raise AssertionError(args)
+
+    result = LaunchdUserCronService(command_runner=fake_run).stop()
+
+    assert result.exit_code == 0
+    assert calls == [
+        ["launchctl", "bootout", "gui/501", str(plist_path)],
+        ["launchctl", "print", "gui/501/ai.langchain.agent.cron"],
+    ]
+
+
+def test_launchd_stop_rejects_generic_code_5_when_service_still_printable(
+    monkeypatch, tmp_path
+):
+    from cron.service_platforms.launchd_user import (
+        LABEL,
+        LaunchdUserCronService,
+    )
+
+    calls = []
+    plist_path = tmp_path / f"{LABEL}.plist"
+    monkeypatch.setattr(
+        "cron.service_platforms.launchd_user.launchd_plist_path",
+        lambda: plist_path,
+    )
+    monkeypatch.setattr("cron.service_platforms.launchd_user._uid", lambda: 501)
+
+    def fake_run(args):
+        calls.append(args)
+        if args[:2] == ["launchctl", "bootout"]:
+            return 5, "", "Input/output error"
+        if args == ["launchctl", "print", "gui/501/ai.langchain.agent.cron"]:
+            return 0, "still loaded", ""
+        raise AssertionError(args)
+
+    result = LaunchdUserCronService(command_runner=fake_run).stop()
+
+    assert result.exit_code == 1
+    assert result.message == "Input/output error"
+    assert calls == [
+        ["launchctl", "bootout", "gui/501", str(plist_path)],
+        ["launchctl", "print", "gui/501/ai.langchain.agent.cron"],
+    ]
 
 
 def test_launchd_status_reports_loaded_detail(monkeypatch, tmp_path):
@@ -753,6 +914,25 @@ def test_launchd_logs_use_bounded_tail_without_read_text(monkeypatch, tmp_path):
 
     assert result.exit_code == 0
     assert result.message == "==> stdout <==\nout2\nout3"
+
+
+def test_launchd_logs_tail_large_single_line_from_bounded_suffix(monkeypatch, tmp_path):
+    from cron.service_platforms.launchd_user import LaunchdUserCronService
+
+    stdout_path = tmp_path / "cron.out.log"
+    stderr_path = tmp_path / "cron.err.log"
+    stdout_path.write_text("a" * 20000 + "TAIL", encoding="utf-8")
+    monkeypatch.setattr(
+        "cron.service_platforms.launchd_user.launchd_log_paths",
+        lambda: (stdout_path, stderr_path),
+    )
+
+    result = LaunchdUserCronService(command_runner=lambda args: (0, "", "")).logs(
+        lines=1
+    )
+
+    assert result.exit_code == 0
+    assert result.message == "==> stdout <==\n" + "a" * 8188 + "TAIL"
 
 
 def test_launchd_logs_report_when_no_logs(monkeypatch, tmp_path):

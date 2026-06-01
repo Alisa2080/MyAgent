@@ -165,7 +165,9 @@ class LaunchdUserCronService:
         code, stdout, stderr = self._run_raw(
             ["launchctl", "bootstrap", launchd_domain(), str(path)]
         )
-        if code != 0 and not _is_benign_bootstrap_code_5(code, stdout, stderr):
+        if code == 5 and self._print_service_code() == 0:
+            pass
+        elif code != 0:
             return _command_result(code, stdout, stderr, fallback="bootstrap failed")
         return self._result(
             ["launchctl", "kickstart", "-k", launchd_service_ref()],
@@ -177,7 +179,9 @@ class LaunchdUserCronService:
         code, stdout, stderr = self._run_raw(
             ["launchctl", "bootout", launchd_domain(), str(path)]
         )
-        if code != 0 and not _is_benign_bootout_code_5(code, stdout, stderr):
+        if code == 5 and self._print_service_code() != 0:
+            pass
+        elif code != 0:
             return _command_result(code, stdout, stderr, fallback="bootout failed")
         return ServiceCommandResult((stderr or stdout).strip() or "stopped")
 
@@ -225,6 +229,12 @@ class LaunchdUserCronService:
             "\n\n".join(sections) if sections else "No cron service logs yet."
         )
 
+    def _print_service_code(self) -> int:
+        code, _stdout, _stderr = self._run_raw(
+            ["launchctl", "print", launchd_service_ref()]
+        )
+        return code
+
 
 def _parse_pid(output: str) -> int | None:
     match = re.search(r"\bpid\s*=\s*(\d+)\b", output)
@@ -242,27 +252,6 @@ def _parse_state_detail(output: str) -> str | None:
     return None
 
 
-def _is_benign_bootstrap_code_5(code: int, stdout: str, stderr: str) -> bool:
-    if code != 5:
-        return False
-    text = f"{stdout}\n{stderr}".lower()
-    return "already bootstrapped" in text or "already loaded" in text
-
-
-def _is_benign_bootout_code_5(code: int, stdout: str, stderr: str) -> bool:
-    if code != 5:
-        return False
-    text = f"{stdout}\n{stderr}".lower()
-    return any(
-        phrase in text
-        for phrase in (
-            "no such process",
-            "no such service",
-            "not loaded",
-        )
-    )
-
-
 def _command_result(
     code: int,
     stdout: str,
@@ -275,22 +264,16 @@ def _command_result(
 
 
 def _tail_file(path: Path, lines: int) -> str | None:
-    chunks: list[bytes] = []
-    newline_count = 0
-    block_size = 8192
+    max_bytes = min(max(8192, lines * 4096), 1024 * 1024)
     try:
         with path.open("rb") as handle:
             handle.seek(0, os.SEEK_END)
-            position = handle.tell()
-            while position > 0 and newline_count <= lines:
-                read_size = min(block_size, position)
-                position -= read_size
-                handle.seek(position)
-                chunk = handle.read(read_size)
-                chunks.append(chunk)
-                newline_count += chunk.count(b"\n")
+            size = handle.tell()
+            start = max(0, size - max_bytes)
+            handle.seek(start)
+            content_bytes = handle.read(size - start)
     except OSError:
         return None
-    content = b"".join(reversed(chunks)).decode("utf-8", errors="replace")
+    content = content_bytes.decode("utf-8", errors="replace")
     selected = content.splitlines()[-lines:]
     return "\n".join(selected).strip() or None
