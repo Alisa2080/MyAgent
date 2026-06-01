@@ -36,6 +36,37 @@ def test_service_run_once_ticks_when_leader(monkeypatch, tmp_path):
     assert status["exit_reason"] == "once"
 
 
+def test_service_tick_summary_includes_delivery():
+    from types import SimpleNamespace
+
+    from cron.service import _tick_summary
+
+    result = SimpleNamespace(
+        due=0,
+        ran=0,
+        succeeded=0,
+        failed=0,
+        skipped=0,
+        delivery=SimpleNamespace(
+            recovered_stale=1,
+            claimed=2,
+            delivered=1,
+            failed=1,
+            dead=0,
+            error=None,
+        ),
+    )
+
+    assert _tick_summary(result)["delivery"] == {
+        "recovered_stale": 1,
+        "claimed": 2,
+        "delivered": 1,
+        "failed": 1,
+        "dead": 0,
+        "error": None,
+    }
+
+
 def test_service_interval_seconds_accepts_float_and_clamps_minimum(monkeypatch, tmp_path):
     monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
 

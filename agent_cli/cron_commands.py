@@ -320,6 +320,35 @@ def _last_tick_line(last_tick: dict[str, Any]) -> str:
     )
 
 
+def _delivery_tick_line(delivery: Any) -> str | None:
+    if delivery is None:
+        return None
+    if isinstance(delivery, dict):
+        error = delivery.get("error")
+        recovered_stale = delivery.get("recovered_stale", 0)
+        claimed = delivery.get("claimed", 0)
+        delivered = delivery.get("delivered", 0)
+        failed = delivery.get("failed", 0)
+        dead = delivery.get("dead", 0)
+    else:
+        error = getattr(delivery, "error", None)
+        recovered_stale = getattr(delivery, "recovered_stale", 0)
+        claimed = getattr(delivery, "claimed", 0)
+        delivered = getattr(delivery, "delivered", 0)
+        failed = getattr(delivery, "failed", 0)
+        dead = getattr(delivery, "dead", 0)
+    if error:
+        return f"Delivery tick: error={error}"
+    return (
+        "Delivery tick: "
+        f"recovered={recovered_stale} "
+        f"claimed={claimed} "
+        f"delivered={delivered} "
+        f"failed={failed} "
+        f"dead={dead}"
+    )
+
+
 def cron_service_status() -> CronCommandResult:
     from cron.service_manager import compose_service_status
 
@@ -339,6 +368,9 @@ def cron_service_status() -> CronCommandResult:
         lines.append(f"Last heartbeat: {status.last_heartbeat_at}")
     if status.last_tick:
         lines.append(_last_tick_line(status.last_tick))
+        delivery_line = _delivery_tick_line(status.last_tick.get("delivery"))
+        if delivery_line:
+            lines.append(delivery_line)
     if status.last_error:
         lines.append(f"Last service error: {status.last_error}")
     if status.exit_reason:
@@ -372,6 +404,9 @@ def _service_status_lines() -> list[str]:
             f"failed={last_tick.get('failed', 0)} "
             f"skipped={last_tick.get('skipped', 0)}"
         )
+        delivery_line = _delivery_tick_line(last_tick.get("delivery"))
+        if delivery_line:
+            lines.append(delivery_line)
     if status.get("last_error"):
         lines.append(f"Last service error: {status['last_error']}")
     if status.get("exit_reason"):
@@ -695,6 +730,9 @@ def run_tick() -> CronCommandResult:
             f"succeeded={result.succeeded} failed={result.failed} skipped={result.skipped}"
         )
     ]
+    delivery_line = _delivery_tick_line(getattr(result, "delivery", None))
+    if delivery_line:
+        lines.append(delivery_line)
     try:
         lease = SchedulerLeaderLease().current()
     except Exception:

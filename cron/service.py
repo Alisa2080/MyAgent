@@ -22,14 +22,25 @@ def _default_owner_id(pid: int, hostname: str) -> str:
     return f"{hostname}:{pid}:{uuid.uuid4().hex}"
 
 
-def _tick_summary(result: Any) -> dict[str, int]:
-    return {
+def _tick_summary(result: Any) -> dict[str, Any]:
+    delivery = getattr(result, "delivery", None)
+    summary: dict[str, Any] = {
         "due": int(getattr(result, "due", 0) or 0),
         "ran": int(getattr(result, "ran", 0) or 0),
         "succeeded": int(getattr(result, "succeeded", 0) or 0),
         "failed": int(getattr(result, "failed", 0) or 0),
         "skipped": int(getattr(result, "skipped", 0) or 0),
     }
+    if delivery is not None:
+        summary["delivery"] = {
+            "recovered_stale": int(getattr(delivery, "recovered_stale", 0) or 0),
+            "claimed": int(getattr(delivery, "claimed", 0) or 0),
+            "delivered": int(getattr(delivery, "delivered", 0) or 0),
+            "failed": int(getattr(delivery, "failed", 0) or 0),
+            "dead": int(getattr(delivery, "dead", 0) or 0),
+            "error": getattr(delivery, "error", None),
+        }
+    return summary
 
 
 class CronService:

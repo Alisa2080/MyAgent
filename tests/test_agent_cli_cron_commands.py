@@ -279,6 +279,51 @@ def test_cron_status_includes_automatic_scheduling_summary(monkeypatch, tmp_path
     assert "Automatic scheduling: enabled" in result.text
 
 
+def test_cron_service_status_renders_delivery_summary(monkeypatch):
+    import agent_cli.cron_commands as cron_commands
+    from cron.service_manager import ServiceStatus
+
+    monkeypatch.setattr(
+        "cron.service_manager.compose_service_status",
+        lambda: ServiceStatus(
+            platform="systemd-user",
+            supported=True,
+            installed=True,
+            enabled=True,
+            active=True,
+            pid=123,
+            detail="active",
+            error=None,
+            heartbeat_fresh=True,
+            process_state="running",
+            leader_state="leader",
+            last_heartbeat_at="2026-06-01T10:00:00+00:00",
+            last_tick={
+                "due": 0,
+                "ran": 0,
+                "succeeded": 0,
+                "failed": 0,
+                "skipped": 0,
+                "delivery": {
+                    "recovered_stale": 1,
+                    "claimed": 2,
+                    "delivered": 1,
+                    "failed": 1,
+                    "dead": 0,
+                    "error": None,
+                },
+            },
+            last_error=None,
+            exit_reason=None,
+        ),
+    )
+
+    result = cron_commands.cron_service_status()
+
+    assert "Last tick: due=0 ran=0 succeeded=0 failed=0 skipped=0" in result.text
+    assert "Delivery tick: recovered=1 claimed=2 delivered=1 failed=1 dead=0" in result.text
+
+
 def test_serve_cron_calls_service(monkeypatch):
     from agent_cli import cron_commands
 
@@ -770,6 +815,33 @@ def test_tick_returns_failure_exit_when_job_fails(monkeypatch):
     assert result.exit_code == 1
     assert "failed=1" in result.text
     assert "job-1" in result.text
+
+
+def test_tick_renders_delivery_summary(monkeypatch):
+    import agent_cli.cron_commands as cron_commands
+
+    tick_result = SimpleNamespace(
+        due=0,
+        ran=0,
+        succeeded=0,
+        failed=0,
+        skipped=0,
+        delivery=SimpleNamespace(
+            recovered_stale=1,
+            claimed=2,
+            delivered=1,
+            failed=1,
+            dead=0,
+            error=None,
+        ),
+        results=[],
+    )
+    monkeypatch.setattr(cron_commands, "cron_tick", lambda: tick_result)
+
+    result = cron_commands.run_tick()
+
+    assert result.exit_code == 0
+    assert "Delivery tick: recovered=1 claimed=2 delivered=1 failed=1 dead=0" in result.text
 
 
 def test_tick_reports_current_scheduler_lease(monkeypatch, tmp_path):
