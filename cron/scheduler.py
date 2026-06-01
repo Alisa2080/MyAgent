@@ -64,12 +64,23 @@ class JobTickResult:
 
 
 @dataclass
+class DeliveryTickSummary:
+    recovered_stale: int = 0
+    claimed: int = 0
+    delivered: int = 0
+    failed: int = 0
+    dead: int = 0
+    error: str | None = None
+
+
+@dataclass
 class TickResult:
     due: int = 0
     ran: int = 0
     succeeded: int = 0
     failed: int = 0
     skipped: int = 0
+    delivery: DeliveryTickSummary = field(default_factory=DeliveryTickSummary)
     results: list[JobTickResult] = field(default_factory=list)
 
 
@@ -387,6 +398,35 @@ def _run_parallel_claimed(
         return [future.result() for future in futures]
 
 
+def _format_delivery_error(exc: Exception) -> str:
+    return f"{type(exc).__name__}: {exc}"
+
+
+def _process_delivery_maintenance(store: StateStore, *, limit: int = 20) -> DeliveryTickSummary:
+    summary = DeliveryTickSummary()
+    try:
+        summary.recovered_stale = store.recover_stale_delivery_events()
+    except Exception as exc:
+        summary.error = _format_delivery_error(exc)
+        logger.exception("Cron delivery stale recovery failed during tick.")
+        return summary
+
+    try:
+        from cron.delivery import process_due
+
+        dispatched = process_due(limit=limit, store=store, recover_stale=False)
+    except Exception as exc:
+        summary.error = _format_delivery_error(exc)
+        logger.exception("Cron delivery dispatch failed during tick.")
+        return summary
+
+    summary.claimed = int(dispatched.get("claimed", 0) or 0)
+    summary.delivered = int(dispatched.get("delivered", 0) or 0)
+    summary.failed = int(dispatched.get("failed", 0) or 0)
+    summary.dead = int(dispatched.get("dead", 0) or 0)
+    return summary
+
+
 def tick(
     now_dt: datetime | None = None,
     *,
@@ -415,9 +455,12 @@ def tick(
             if stale.get("stale_reason") in ("idle_timeout_exceeded", "heartbeat_stale"):
                 _complete_stale_run(store, stale, run_at)
 
+        result = TickResult()
+        result.delivery = _process_delivery_maintenance(store, limit=20)
+
         claimed = store.promote_queued_runs(now_text=run_at.isoformat(), limit=100)
         claimed = claimed + store.claim_due_jobs(now_text=run_at.isoformat(), limit=max(0, 100 - len(claimed)))
-        result = TickResult(due=len(claimed))
+        result.due = len(claimed)
 
         if not claimed:
             return result

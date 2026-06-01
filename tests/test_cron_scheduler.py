@@ -618,6 +618,69 @@ def test_tick_enqueues_delivery_event(monkeypatch, tmp_path):
     assert DeliveryStore().stats()["pending"] == 1
 
 
+def test_tick_with_no_due_jobs_dispatches_due_failed_delivery(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    from cron.delivery import JobRunResult, enqueue_result
+    from cron.delivery_store import DeliveryStore
+    import cron.delivery as delivery
+    import cron.scheduler as scheduler
+
+    sent = []
+    monkeypatch.setattr(
+        delivery,
+        "default_webhook_sender",
+        lambda url, payload, timeout=10: sent.append((url, payload)) or (204, "ok"),
+    )
+    event = enqueue_result(
+        {"id": "job-1", "name": "Daily", "deliver": "webhook:https://example.invalid/hook"},
+        JobRunResult(success=True, output_doc="# out", final_response="done"),
+        "/tmp/out.md",
+        "2026-05-22T08:00:00+00:00",
+    )
+    DeliveryStore().update_event(
+        event["id"],
+        status="failed",
+        next_attempt_at=RUN_AT.isoformat(),
+        last_error="HTTP 500: down",
+    )
+
+    result = scheduler.tick(now_dt=RUN_AT, job_runner=lambda job: pytest.fail("no jobs should run"))
+
+    assert result.due == 0
+    assert result.delivery.claimed == 1
+    assert result.delivery.delivered == 1
+    assert sent[0][0] == "https://example.invalid/hook"
+    assert DeliveryStore().get(event["id"])["status"] == "delivered"
+
+
+def test_tick_with_no_due_jobs_keeps_origin_delivery_pending(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    from cron.delivery import JobRunResult, enqueue_result
+    from cron.delivery_store import DeliveryStore
+    import cron.scheduler as scheduler
+
+    event = enqueue_result(
+        {
+            "id": "job-origin",
+            "name": "Origin",
+            "deliver": "origin",
+            "origin": {"source_type": "cli", "session_id": "session-1", "thread_id": "thread-1"},
+        },
+        JobRunResult(success=True, output_doc="# out", final_response="done"),
+        "/tmp/out.md",
+        "2026-05-22T08:00:00+00:00",
+    )
+
+    result = scheduler.tick(now_dt=RUN_AT, job_runner=lambda job: pytest.fail("no jobs should run"))
+
+    assert result.delivery.claimed == 0
+    assert result.delivery.failed == 0
+    assert result.delivery.dead == 0
+    assert DeliveryStore().get(event["id"])["status"] == "pending"
+
+
 def test_processing_exception_marks_error_and_returns_failed_result(monkeypatch, tmp_path):
     monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
 
