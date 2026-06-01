@@ -126,7 +126,7 @@ from agent_core.builders import build_agent
 agent = build_agent(include_cron_tools=True)
 ```
 
-Cron output is saved under the configured terminal toolkit home. `deliver="origin"` queues thread-scoped notifications that embedding applications can drain with `cron.notifications.drain_cron_notifications_for_thread_id(thread_id)`.
+Cron output is saved under the configured terminal toolkit home. The cron service also advances outbound delivery every tick: stale `delivering` events are recovered, and due `pending` or `failed` non-origin delivery events are retried even when no job is due. `deliver="origin"` queues thread-scoped notifications that embedding applications must drain with `cron.notifications.drain_cron_notifications_for_thread_id(thread_id)`. Inbound origin/platform polling remains a host responsibility; hosts that own pollers can call `cron.origin_poller.poll_deliveries(pollers, store=None, limit=100)` on their own cadence.
 
 For local automatic scheduling, install and run the user-level cron service:
 
