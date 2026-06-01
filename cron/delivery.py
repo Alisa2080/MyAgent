@@ -198,6 +198,7 @@ def process_due(
     limit: int = 20,
     store: DeliveryStore | None = None,
     webhook_sender: Callable[[str, dict[str, Any], int], tuple[int, str]] | None = None,
+    recover_stale: bool = True,
 ) -> dict[str, int]:
     from cron.delivery_dispatcher import DeliveryDispatcher
     from cron.delivery_registry import default_delivery_registry
@@ -211,4 +212,4 @@ def process_due(
     else:
         state_store = store
     dispatcher = DeliveryDispatcher(store=state_store, registry=registry)
-    return dispatcher.dispatch_due(limit=limit)
+    return dispatcher.dispatch_due(limit=limit, recover_stale=recover_stale)

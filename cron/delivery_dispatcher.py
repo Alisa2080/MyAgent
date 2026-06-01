@@ -11,10 +11,17 @@ class DeliveryDispatcher:
         self.store = store or StateStore()
         self.registry = registry or default_delivery_registry()
 
-    def dispatch_due(self, *, limit: int = 20, adapter_keys: set[str] | None = None) -> dict[str, int]:
+    def dispatch_due(
+        self,
+        *,
+        limit: int = 20,
+        adapter_keys: set[str] | None = None,
+        recover_stale: bool = True,
+    ) -> dict[str, int]:
         summary = {"claimed": 0, "delivered": 0, "failed": 0, "dead": 0}
         dispatch_keys = adapter_keys if adapter_keys is not None else set(self.registry.active_adapter_keys())
-        self.store.recover_stale_delivery_events()
+        if recover_stale:
+            self.store.recover_stale_delivery_events()
         if adapter_keys is None:
             for event in self.store.dead_letter_unsupported_delivery_events(
                 supported_adapter_keys=set(self.registry.adapter_keys()),

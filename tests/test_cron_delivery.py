@@ -392,6 +392,22 @@ def test_process_due_does_not_claim_origin_events(monkeypatch, tmp_path):
     assert stored["attempt_count"] == 0
 
 
+def test_process_due_can_skip_stale_recovery(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    from cron.delivery import process_due
+    from cron.state_store import StateStore
+
+    store = StateStore()
+    called = []
+    monkeypatch.setattr(store, "recover_stale_delivery_events", lambda: called.append("recover") or 0)
+
+    summary = process_due(limit=10, store=store, recover_stale=False)
+
+    assert summary == {"claimed": 0, "delivered": 0, "failed": 0, "dead": 0}
+    assert called == []
+
+
 def test_enqueue_result_creates_event_per_delivery_target(monkeypatch, tmp_path):
     monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
 

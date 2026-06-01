@@ -151,6 +151,22 @@ def test_default_dispatcher_does_not_claim_local_or_origin_events(monkeypatch, t
     assert DeliveryStore().get(origin_event["id"])["status"] == "pending"
 
 
+def test_dispatcher_can_skip_stale_recovery(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    from cron.delivery_dispatcher import DeliveryDispatcher
+    from cron.state_store import StateStore
+
+    store = StateStore()
+    called = []
+    monkeypatch.setattr(store, "recover_stale_delivery_events", lambda: called.append("recover") or 0)
+
+    summary = DeliveryDispatcher(store=store).dispatch_due(limit=10, recover_stale=False)
+
+    assert summary == {"claimed": 0, "delivered": 0, "failed": 0, "dead": 0}
+    assert called == []
+
+
 def test_default_registry_active_dispatch_keys_exclude_local_and_origin():
     from cron.delivery_registry import default_delivery_registry
 
