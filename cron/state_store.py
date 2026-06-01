@@ -16,6 +16,8 @@ from cron.delivery_targets import DeliveryIdentity, DeliveryTargetError, parse_d
 SCHEMA_VERSION = 2
 JOB_STATES = {"scheduled", "running", "paused", "completed", "error"}
 RUN_STATUSES = {"claimed", "running", "succeeded", "failed", "skipped", "abandoned"}
+ACTIVE_RUN_STATUSES = {"queued", "claimed", "running"}
+OCCUPYING_RUN_STATUSES = {"claimed", "running"}
 DELIVERY_STATUSES = {"pending", "delivering", "delivered", "failed", "dead"}
 RETRY_DELAYS = (60, 300, 900, 3600, 21600)
 logger = logging.getLogger(__name__)
@@ -235,6 +237,9 @@ class StateStore:
                 "last_activity_at": "TEXT",
                 "last_activity_desc": "TEXT",
                 "current_tool": "TEXT",
+                "concurrency_key": "TEXT",
+                "concurrency_policy": "TEXT",
+                "replaced_by_run_id": "TEXT",
             },
         )
         self._ensure_columns(
@@ -904,6 +909,8 @@ class StateStore:
         return self._row_to_run(row)
 
     def claim_due_jobs(self, *, now_text: str, limit: int = 20) -> list[dict[str, Any]]:
+        from cron.jobs import normalize_concurrency_key, normalize_concurrency_policy
+
         now_dt = _parse_time(now_text)
         claim_limit = max(0, int(limit))
         if now_dt is None or claim_limit == 0:
@@ -934,26 +941,83 @@ class StateStore:
                     break
                 if self._skip_missed_job_if_needed(conn, job, now_dt):
                     continue
+
+                job["concurrency_key"] = normalize_concurrency_key(
+                    job.get("concurrency_key"),
+                    str(job["id"]),
+                )
+                job["concurrency_policy"] = normalize_concurrency_policy(
+                    job.get("concurrency_policy")
+                )
+
+                active_runs = self._active_runs_for_key(conn, job["concurrency_key"])
+                occupying = [run for run in active_runs if run["status"] in OCCUPYING_RUN_STATUSES]
+                queued = [run for run in active_runs if run["status"] == "queued"]
+                policy = job["concurrency_policy"]
                 run_id = uuid.uuid4().hex
                 now_actual = utc_now().isoformat()
-                previous_attempts = conn.execute(
-                    "SELECT COUNT(*) AS count FROM runs WHERE job_id = ?",
-                    (job["id"],),
-                ).fetchone()["count"]
                 lease_expires_at = (now_dt + timedelta(seconds=self.lease_seconds)).isoformat()
-                conn.execute(
-                    """
-                    INSERT INTO runs (
-                        id, job_id, scheduled_for, claimed_at, lease_expires_at,
-                        started_at, finished_at, attempt, status, exit_reason,
-                        output_path, final_response, error, delivery_status,
-                        heartbeat_at, last_activity_at, last_activity_desc, current_tool,
-                        created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, NULL, NULL, ?, 'claimed', NULL, NULL, NULL, NULL, NULL,
-                              ?, ?, 'claimed', NULL,
-                              ?, ?)
-                    """,
-                    (run_id, job["id"], job["next_run_at"], now_actual, lease_expires_at, int(previous_attempts) + 1, now_actual, now_actual, now_actual, now_actual),
+
+                if policy == "queue_one" and occupying:
+                    if not queued:
+                        self._insert_run(
+                            conn,
+                            run_id=run_id,
+                            job=job,
+                            status="queued",
+                            now_text=now_actual,
+                            lease_expires_at=None,
+                        )
+                    self._advance_job_after_claim(conn, job, now_actual)
+                    continue
+
+                if policy == "queue_all" and occupying:
+                    self._insert_run(
+                        conn,
+                        run_id=run_id,
+                        job=job,
+                        status="queued",
+                        now_text=now_actual,
+                        lease_expires_at=None,
+                    )
+                    self._advance_job_after_claim(conn, job, now_actual)
+                    continue
+
+                if policy == "skip_if_running" and active_runs:
+                    self._insert_run(
+                        conn,
+                        run_id=run_id,
+                        job=job,
+                        status="skipped",
+                        now_text=now_actual,
+                        lease_expires_at=None,
+                        exit_reason="concurrency_skip",
+                    )
+                    self._advance_job_after_claim(conn, job, now_actual)
+                    continue
+
+                if policy == "replace_running" and active_runs:
+                    for active in active_runs:
+                        conn.execute(
+                            """
+                            UPDATE runs
+                            SET status = 'abandoned',
+                                finished_at = ?,
+                                exit_reason = 'replaced_by_newer_run',
+                                replaced_by_run_id = ?,
+                                updated_at = ?
+                            WHERE id = ? AND status IN ('queued', 'claimed', 'running')
+                            """,
+                            (now_actual, run_id, now_actual, active["id"]),
+                        )
+
+                self._insert_run(
+                    conn,
+                    run_id=run_id,
+                    job=job,
+                    status="claimed",
+                    now_text=now_actual,
+                    lease_expires_at=lease_expires_at,
                 )
                 conn.execute(
                     """
@@ -1346,10 +1410,130 @@ class StateStore:
                 recovered += 1
         return recovered
 
+    def list_runs(
+        self,
+        *,
+        job_id: str | None = None,
+        run_id: str | None = None,
+        statuses: set[str] | None = None,
+        limit: int = 20,
+    ) -> list[dict[str, Any]]:
+        clauses: list[str] = []
+        params: list[Any] = []
+        if job_id is not None:
+            clauses.append("job_id = ?")
+            params.append(job_id)
+        if run_id is not None:
+            clauses.append("id = ?")
+            params.append(run_id)
+        if statuses:
+            status_marks = ", ".join("?" for _ in statuses)
+            clauses.append(f"status IN ({status_marks})")
+            params.extend(sorted(statuses))
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        params.append(max(1, int(limit)))
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT * FROM runs
+                {where}
+                ORDER BY created_at DESC, id DESC
+                LIMIT ?
+                """,
+                params,
+            ).fetchall()
+        return [self._row_to_run(row) for row in rows]
+
+    def _active_runs_for_key(
+        self,
+        conn: sqlite3.Connection,
+        concurrency_key: str,
+    ) -> list[dict[str, Any]]:
+        rows = conn.execute(
+            """
+            SELECT * FROM runs
+            WHERE concurrency_key = ?
+              AND status IN ('queued', 'claimed', 'running')
+            ORDER BY scheduled_for, created_at, id
+            """,
+            (concurrency_key,),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
     def runs_for_job(self, job_id: str) -> list[dict[str, Any]]:
         with self._connect() as conn:
             rows = conn.execute("SELECT * FROM runs WHERE job_id = ? ORDER BY created_at", (job_id,)).fetchall()
         return [dict(row) for row in rows]
+
+    def _insert_run(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        run_id: str,
+        job: dict[str, Any],
+        status: str,
+        now_text: str,
+        lease_expires_at: str | None,
+        exit_reason: str | None = None,
+        replaced_by_run_id: str | None = None,
+    ) -> dict[str, Any]:
+        previous_attempts = conn.execute(
+            "SELECT COUNT(*) AS count FROM runs WHERE job_id = ?",
+            (job["id"],),
+        ).fetchone()["count"]
+        conn.execute(
+            """
+            INSERT INTO runs (
+                id, job_id, scheduled_for, claimed_at, lease_expires_at,
+                started_at, finished_at, attempt, status, exit_reason,
+                output_path, final_response, error, delivery_status,
+                heartbeat_at, last_activity_at, last_activity_desc, current_tool,
+                concurrency_key, concurrency_policy, replaced_by_run_id,
+                created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, NULL, NULL, NULL, NULL,
+                      ?, ?, ?, NULL, ?, ?, ?, ?, ?)
+            """,
+            (
+                run_id,
+                job["id"],
+                job["next_run_at"],
+                now_text,
+                lease_expires_at,
+                now_text if status in {"skipped", "abandoned"} else None,
+                int(previous_attempts) + 1,
+                status,
+                exit_reason,
+                now_text,
+                now_text,
+                status,
+                job["concurrency_key"],
+                job["concurrency_policy"],
+                replaced_by_run_id,
+                now_text,
+                now_text,
+            ),
+        )
+        row = conn.execute("SELECT * FROM runs WHERE id = ?", (run_id,)).fetchone()
+        return self._row_to_run(row)
+
+    def _advance_job_after_claim(
+        self,
+        conn: sqlite3.Connection,
+        job: dict[str, Any],
+        now_text: str,
+    ) -> None:
+        from cron.jobs import compute_next_run
+
+        next_run_at = compute_next_run(job["schedule"], job.get("next_run_at"))
+        conn.execute(
+            """
+            UPDATE jobs
+            SET next_run_at = ?,
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (next_run_at, now_text, job["id"]),
+        )
 
     # --- Poll State Methods ---
 

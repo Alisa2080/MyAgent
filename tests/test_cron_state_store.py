@@ -1146,3 +1146,99 @@ def test_status_query_helpers_return_next_running_and_failed(monkeypatch, tmp_pa
         completed=True,
     )
     assert store.latest_failed_run()["run_id"] == run_id
+
+
+def _due_job(store, *, job_id, key="key:one", policy="queue_one", next_run_at="2026-05-29T10:00:00+00:00"):
+    from cron.jobs import create_job, update_job
+
+    job = create_job(
+        prompt=f"job {job_id}",
+        schedule="every 5m",
+        concurrency_key=key,
+        concurrency_policy=policy,
+    )
+    return update_job(
+        job["id"],
+        {
+            "next_run_at": next_run_at,
+            "state": "scheduled",
+            "enabled": True,
+        },
+    )
+
+
+def test_claim_due_jobs_queue_one_creates_single_queued_run(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    from cron.state_store import StateStore
+
+    store = StateStore()
+    first = _due_job(store, job_id="first", key="repo:a", policy="queue_one")
+    second = _due_job(store, job_id="second", key="repo:a", policy="queue_one")
+
+    claimed = store.claim_due_jobs(now_text="2026-05-29T10:00:00+00:00", limit=10)
+    assert len(claimed) == 1
+    assert claimed[0]["run"]["status"] == "claimed"
+
+    claimed_again = store.claim_due_jobs(now_text="2026-05-29T10:05:00+00:00", limit=10)
+    assert claimed_again == []
+
+    runs = store.list_runs(limit=20)
+    queued = [run for run in runs if run["status"] == "queued"]
+    assert len(queued) == 1
+    assert queued[0]["concurrency_key"] == "repo:a"
+    assert queued[0]["concurrency_policy"] == "queue_one"
+
+
+def test_claim_due_jobs_queue_all_records_each_due_run(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    from cron.state_store import StateStore
+
+    store = StateStore()
+    _due_job(store, job_id="first", key="repo:a", policy="queue_all")
+    _due_job(store, job_id="second", key="repo:a", policy="queue_all")
+
+    store.claim_due_jobs(now_text="2026-05-29T10:00:00+00:00", limit=10)
+    store.claim_due_jobs(now_text="2026-05-29T10:05:00+00:00", limit=10)
+
+    queued = [run for run in store.list_runs(limit=20) if run["status"] == "queued"]
+    assert len(queued) == 2
+
+
+def test_claim_due_jobs_skip_if_running_records_skipped_run(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    from cron.state_store import StateStore
+
+    store = StateStore()
+    _due_job(store, job_id="first", key="repo:a", policy="skip_if_running")
+    _due_job(store, job_id="second", key="repo:a", policy="skip_if_running")
+
+    claimed = store.claim_due_jobs(now_text="2026-05-29T10:00:00+00:00", limit=10)
+    assert len(claimed) == 1
+
+    skipped = [run for run in store.list_runs(limit=20) if run["status"] == "skipped"]
+    assert len(skipped) == 1
+    assert skipped[0]["exit_reason"] == "concurrency_skip"
+
+
+def test_claim_due_jobs_replace_running_abandons_active_run(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    from cron.state_store import StateStore
+
+    store = StateStore()
+    _due_job(store, job_id="first", key="repo:a", policy="replace_running")
+    _due_job(store, job_id="second", key="repo:a", policy="replace_running")
+
+    claimed = store.claim_due_jobs(now_text="2026-05-29T10:00:00+00:00", limit=10)
+
+    runs = store.list_runs(limit=20)
+    abandoned = [run for run in runs if run["status"] == "abandoned"]
+    active = [run for run in runs if run["status"] == "claimed"]
+
+    assert len(claimed) == 2
+    assert len(abandoned) == 1
+    assert abandoned[0]["exit_reason"] == "replaced_by_newer_run"
+    assert abandoned[0]["replaced_by_run_id"] == active[-1]["id"]
