@@ -632,6 +632,51 @@ def test_cron_doctor_warns_when_service_pid_is_dead(monkeypatch, tmp_path):
     assert "[warn] cron service pid is not running; run `agent cron service restart`" in result.text
 
 
+def test_cron_doctor_warns_when_status_file_pid_is_dead(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    from agent_cli import cron_commands
+    from cron.jobs import now
+    from cron.service_manager import ServiceRuntimeStatus
+    from cron.service_state import read_service_status, write_service_status
+
+    payload = {
+        "version": 1,
+        "service": "agent-cron",
+        "owner_id": "host:99999999:abc",
+        "pid": 99999999,
+        "hostname": "host",
+        "process_state": "running",
+        "leader_state": "leader",
+        "last_heartbeat_at": now().isoformat(),
+        "last_tick": {"due": 0, "ran": 0, "succeeded": 0, "failed": 0, "skipped": 0},
+        "last_error": None,
+        "exit_reason": None,
+    }
+    write_service_status(payload)
+
+    monkeypatch.setattr(cron_commands, "list_jobs", lambda include_disabled=False: [])
+    monkeypatch.setattr(cron_commands, "_pid_is_running", lambda pid: False)
+    monkeypatch.setattr(
+        "cron.service_manager.service_runtime_status",
+        lambda: ServiceRuntimeStatus(
+            platform="systemd-user",
+            supported=True,
+            installed=True,
+            enabled=True,
+            active=True,
+            pid=None,
+            detail="active",
+        ),
+    )
+
+    result = cron_commands.cron_doctor()
+
+    assert result.exit_code == 1
+    assert "[warn] cron service status pid is not running; run `agent cron service restart`" in result.text
+    assert read_service_status() == payload
+
+
 def test_cron_doctor_suggests_force_install_when_service_disabled(monkeypatch, tmp_path):
     monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
 

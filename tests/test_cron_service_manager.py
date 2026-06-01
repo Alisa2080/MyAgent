@@ -70,6 +70,8 @@ def test_service_status_combines_platform_and_fresh_heartbeat(monkeypatch, tmp_p
     assert status.platform == "systemd-user"
     assert status.installed is True
     assert status.active is True
+    assert status.pid == 123
+    assert status.status_pid == 123
     assert status.heartbeat_fresh is True
     assert status.process_state == "running"
     assert status.leader_state == "leader"

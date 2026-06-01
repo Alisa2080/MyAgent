@@ -53,6 +53,7 @@ class ServiceStatus:
     last_tick: dict[str, Any] | None
     last_error: str | None
     exit_reason: str | None
+    status_pid: int | None = None
 
 
 class CronServicePlatform(Protocol):
@@ -216,6 +217,7 @@ def compose_service_status(
         stale_after_seconds=stale_after_seconds,
     )
     last_tick = status.get("last_tick") if isinstance(status, dict) else None
+    raw_status_pid = status.get("pid") if isinstance(status, dict) else None
     return ServiceStatus(
         platform=runtime.platform,
         supported=runtime.supported,
@@ -232,4 +234,5 @@ def compose_service_status(
         last_tick=last_tick if isinstance(last_tick, dict) else None,
         last_error=status.get("last_error") if isinstance(status, dict) else None,
         exit_reason=status.get("exit_reason") if isinstance(status, dict) else None,
+        status_pid=raw_status_pid if type(raw_status_pid) is int else None,
     )
