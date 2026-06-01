@@ -521,6 +521,8 @@ def _add_service_manager_check(add) -> None:
         add("warn", "cron service: not installed; run `agent cron service install`")
     elif not status.active:
         add("warn", "cron service: installed but inactive; run `agent cron service start`")
+    elif not status.enabled:
+        add("warn", "cron service: installed but disabled; run `agent cron service install --force`")
     elif not status.heartbeat_fresh:
         add("warn", "cron service heartbeat: stale; run `agent cron service restart`")
     else:
