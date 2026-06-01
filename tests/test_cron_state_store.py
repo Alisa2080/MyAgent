@@ -1042,3 +1042,107 @@ def test_imported_jobs_json_job_runs_through_state_machine(monkeypatch, tmp_path
     assert imported_job["state"] == "scheduled"
     assert imported_job["lease_run_id"] is None
     assert imported_job["next_run_at"] != due_at
+
+
+def test_run_activity_columns_and_claim_defaults(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    from cron.jobs import create_job
+    from cron.state_store import StateStore
+
+    job = create_job(prompt="write report", schedule="30m", name="daily", deliver="local")
+    store = StateStore()
+
+    claimed = store.claim_due_jobs(now_text=job["next_run_at"], limit=1)[0]
+    run = store.get_run(claimed["run"]["id"])
+
+    assert run["heartbeat_at"] is not None
+    assert run["last_activity_at"] is not None
+    assert run["last_activity_desc"] == "claimed"
+    assert run["current_tool"] is None
+
+
+def test_update_run_activity_can_heartbeat_without_activity(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    from cron.jobs import create_job
+    from cron.state_store import StateStore
+
+    job = create_job(prompt="write report", schedule="30m", name="daily", deliver="local")
+    store = StateStore()
+    run_id = store.claim_due_jobs(now_text=job["next_run_at"], limit=1)[0]["run"]["id"]
+    started = store.mark_run_started(run_id)
+    original_activity = started["last_activity_at"]
+
+    updated = store.update_run_activity(run_id, heartbeat=True, activity=False)
+
+    assert updated["heartbeat_at"] is not None
+    assert updated["last_activity_at"] == original_activity
+    assert updated["last_activity_desc"] == "started"
+
+
+def test_terminal_run_ignores_late_activity(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    from cron.jobs import create_job
+    from cron.state_store import StateStore
+
+    job = create_job(prompt="write report", schedule="30m", name="daily", deliver="local")
+    store = StateStore()
+    run_id = store.claim_due_jobs(now_text=job["next_run_at"], limit=1)[0]["run"]["id"]
+    store.mark_run_started(run_id)
+    store.complete_run(
+        run_id,
+        success=True,
+        output_path="/tmp/out.md",
+        final_response="done",
+        error=None,
+        next_run_at=None,
+        completed=True,
+    )
+
+    assert store.update_run_activity(run_id, activity=True, last_activity_desc="agent_running") is None
+    assert store.get_run(run_id)["last_activity_desc"] == "completed"
+
+
+def test_resolve_job_timeouts_uses_job_then_env(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+    monkeypatch.setenv("AGENT_CRON_TIMEOUT", "77")
+
+    from cron.state_store import StateStore
+
+    store = StateStore()
+    assert store.resolve_job_timeouts({}) == {
+        "idle_timeout_seconds": 77,
+        "max_runtime_seconds": None,
+    }
+    assert store.resolve_job_timeouts({"idle_timeout_seconds": 12, "max_runtime_seconds": 30}) == {
+        "idle_timeout_seconds": 12,
+        "max_runtime_seconds": 30,
+    }
+
+
+def test_status_query_helpers_return_next_running_and_failed(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    from cron.jobs import create_job
+    from cron.state_store import StateStore
+
+    job = create_job(prompt="write report", schedule="30m", name="daily", deliver="local")
+    store = StateStore()
+    assert store.list_next_due_jobs(limit=1)[0]["id"] == job["id"]
+
+    run_id = store.claim_due_jobs(now_text=job["next_run_at"], limit=1)[0]["run"]["id"]
+    store.mark_run_started(run_id)
+    assert store.list_running_runs(limit=1)[0]["run_id"] == run_id
+
+    store.complete_run(
+        run_id,
+        success=False,
+        output_path=None,
+        final_response=None,
+        error="boom",
+        next_run_at=None,
+        completed=True,
+    )
+    assert store.latest_failed_run()["run_id"] == run_id

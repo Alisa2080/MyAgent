@@ -10,6 +10,7 @@ class JobRunResult:
     output_doc: str | None = None
     final_response: str | None = None
     error: str | None = None
+    exit_reason: str | None = None
 
 
 class JobRunner(Protocol):

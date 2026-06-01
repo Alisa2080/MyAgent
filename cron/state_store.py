@@ -471,10 +471,10 @@ class StateStore:
             "lease_expires_at": job.get("lease_expires_at"),
             "paused_reason": job.get("paused_reason"),
             "paused_at": job.get("paused_at"),
-            "created_at": job.get("created_at") or now_text,
-            "updated_at": now_text,
             "idle_timeout_seconds": job.get("idle_timeout_seconds"),
             "max_runtime_seconds": job.get("max_runtime_seconds"),
+            "created_at": job.get("created_at") or now_text,
+            "updated_at": now_text,
         }
 
     def _can_preserve_legacy_delivery(self, existing: dict[str, Any] | None, job: dict[str, Any]) -> bool:
@@ -944,10 +944,13 @@ class StateStore:
                         id, job_id, scheduled_for, claimed_at, lease_expires_at,
                         started_at, finished_at, attempt, status, exit_reason,
                         output_path, final_response, error, delivery_status,
+                        heartbeat_at, last_activity_at, last_activity_desc, current_tool,
                         created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, NULL, NULL, ?, 'claimed', NULL, NULL, NULL, NULL, NULL, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, NULL, NULL, ?, 'claimed', NULL, NULL, NULL, NULL, NULL,
+                              ?, ?, 'claimed', NULL,
+                              ?, ?)
                     """,
-                    (run_id, job["id"], job["next_run_at"], now_actual, lease_expires_at, int(previous_attempts) + 1, now_actual, now_actual),
+                    (run_id, job["id"], job["next_run_at"], now_actual, lease_expires_at, int(previous_attempts) + 1, now_actual, now_actual, now_actual, now_actual),
                 )
                 conn.execute(
                     """
@@ -1006,11 +1009,13 @@ class StateStore:
                 id, job_id, scheduled_for, claimed_at, lease_expires_at,
                 started_at, finished_at, attempt, status, exit_reason,
                 output_path, final_response, error, delivery_status,
+                heartbeat_at, last_activity_at, last_activity_desc, current_tool,
                 created_at, updated_at
-            ) VALUES (?, ?, ?, ?, NULL, NULL, ?, ?, 'skipped', 'missed_run',
-                      NULL, NULL, NULL, NULL, ?, ?)
+            ) VALUES (?, ?, ?, ?, NULL, NULL, NULL, ?, 'skipped', 'missed_run',
+                      NULL, NULL, NULL, NULL, ?, ?, 'missed_run', NULL,
+                      ?, ?)
             """,
-            (run_id, job["id"], next_run_at, now_actual, now_actual, int(previous_attempts) + 1, now_actual, now_actual),
+            (run_id, job["id"], next_run_at, now_actual, int(previous_attempts) + 1, now_actual, now_actual, now_actual, now_actual),
         )
         conn.execute(
             """
@@ -1071,10 +1076,55 @@ class StateStore:
             cursor = conn.execute(
                 """
                 UPDATE runs
-                SET status = 'running', started_at = ?, updated_at = ?
+                SET status = 'running', started_at = ?,
+                    heartbeat_at = ?, last_activity_at = ?, last_activity_desc = 'started',
+                    current_tool = NULL, updated_at = ?
                 WHERE id = ? AND status = 'claimed'
                 """,
-                (now_text, now_text, run_id),
+                (now_text, now_text, now_text, now_text, run_id),
+            )
+        if not cursor.rowcount:
+            return None
+        return self.get_run(run_id)
+
+    def update_run_activity(
+        self,
+        run_id: str,
+        *,
+        heartbeat: bool = True,
+        activity: bool = False,
+        last_activity_desc: str | None = None,
+        current_tool: str | None = None,
+    ) -> dict[str, Any] | None:
+        now_text = utc_now().isoformat()
+        assignments: list[str] = []
+        values: list[Any] = []
+        if heartbeat or activity:
+            assignments.append("heartbeat_at = ?")
+            values.append(now_text)
+        if activity:
+            assignments.append("last_activity_at = ?")
+            values.append(now_text)
+        if last_activity_desc is not None:
+            assignments.append("last_activity_desc = ?")
+            values.append(last_activity_desc)
+        if current_tool is not None or activity:
+            assignments.append("current_tool = ?")
+            values.append(current_tool)
+        if not assignments:
+            return self.get_run(run_id)
+        assignments.append("updated_at = ?")
+        values.append(now_text)
+        values.append(run_id)
+        with self._connect() as conn:
+            cursor = conn.execute(
+                f"""
+                UPDATE runs
+                SET {", ".join(assignments)}
+                WHERE id = ?
+                  AND status IN ('claimed', 'running')
+                """,
+                values,
             )
         if not cursor.rowcount:
             return None
@@ -1128,6 +1178,7 @@ class StateStore:
         completed: bool,
         delivery_error: str | None = None,
         run_status: str | None = None,
+        exit_reason: str | None = None,
     ) -> dict[str, Any]:
         computed_status = run_status or ("succeeded" if success else "failed")
         job_state = "completed" if completed else "scheduled"
@@ -1188,10 +1239,22 @@ class StateStore:
                         """
                         UPDATE runs
                         SET status = ?, finished_at = ?, output_path = ?, final_response = ?,
-                            error = ?, updated_at = ?
+                            error = ?, exit_reason = ?, heartbeat_at = ?, last_activity_at = ?,
+                            last_activity_desc = 'completed', current_tool = NULL, updated_at = ?
                         WHERE id = ? AND status IN ('claimed', 'running')
                         """,
-                        (computed_status, now_text, output_path, final_response, error, now_text, run_id),
+                        (
+                            computed_status,
+                            now_text,
+                            output_path,
+                            final_response,
+                            error,
+                            None if success else exit_reason,
+                            now_text,
+                            now_text,
+                            now_text,
+                            run_id,
+                        ),
                     )
                     if updated_run.rowcount:
                         conn.execute(
@@ -1246,42 +1309,6 @@ class StateStore:
                 (delivery_status, utc_now().isoformat(), run_id),
             )
         return delivery_status
-
-    def update_run_activity(
-        self,
-        run_id: str,
-        *,
-        heartbeat: bool = False,
-        activity: bool = False,
-        last_activity_desc: str | None = None,
-        current_tool: str | None = None,
-    ) -> None:
-        """Update activity heartbeat and state for a run.
-
-        Args:
-            run_id: The run ID to update.
-            heartbeat: If True, update heartbeat_at timestamp.
-            activity: If True, update last_activity_at and last_activity_desc.
-            last_activity_desc: Human-readable description of the activity.
-            current_tool: Name of the tool currently being executed.
-        """
-        updates: dict[str, Any] = {"updated_at": utc_now().isoformat()}
-        if heartbeat:
-            updates["heartbeat_at"] = utc_now().isoformat()
-        if activity:
-            updates["last_activity_at"] = utc_now().isoformat()
-            if last_activity_desc is not None:
-                updates["last_activity_desc"] = last_activity_desc
-            if current_tool is not None:
-                updates["current_tool"] = current_tool
-
-        if len(updates) <= 1:
-            return
-
-        assignments = ", ".join(f"{key} = ?" for key in updates)
-        values = list(updates.values()) + [run_id]
-        with self._connect() as conn:
-            conn.execute(f"UPDATE runs SET {assignments} WHERE id = ?", values)
 
     def recover_expired_leases(self, *, now_text: str) -> int:
         now_actual = utc_now().isoformat()
@@ -1372,6 +1399,11 @@ class StateStore:
             )
 
     def resolve_job_timeouts(self, job: dict[str, Any]) -> dict[str, int | None]:
+        """Resolve idle_timeout_seconds and max_runtime_seconds for a job.
+
+        Job-level values take precedence over AGENT_CRON_TIMEOUT env var.
+        AGENT_CRON_TIMEOUT defaults to 600 seconds.
+        """
         def positive_or_zero(value: Any) -> int | None:
             if value is None or value == "":
                 return None
@@ -1395,6 +1427,7 @@ class StateStore:
         }
 
     def list_next_due_jobs(self, *, limit: int = 5) -> list[dict[str, Any]]:
+        """List upcoming scheduled jobs ordered by next_run_at."""
         with self._connect() as conn:
             rows = conn.execute(
                 """
@@ -1410,6 +1443,7 @@ class StateStore:
         return [self._row_to_job(row) for row in rows]
 
     def list_running_runs(self, *, limit: int = 5) -> list[dict[str, Any]]:
+        """List active runs (claimed or running) with job metadata."""
         with self._connect() as conn:
             rows = conn.execute(
                 """
@@ -1426,6 +1460,7 @@ class StateStore:
         return [dict(row) for row in rows]
 
     def latest_failed_run(self) -> dict[str, Any] | None:
+        """Get the most recent failed or abandoned run."""
         with self._connect() as conn:
             row = conn.execute(
                 """
@@ -1440,6 +1475,7 @@ class StateStore:
         return None if row is None else dict(row)
 
     def list_stale_running_runs(self, *, now_text: str | None = None, limit: int = 5) -> list[dict[str, Any]]:
+        """Detect runs that have exceeded lease, heartbeat, or idle timeout thresholds."""
         now_dt = _parse_time(now_text or utc_now().isoformat())
         if now_dt is None:
             return []
@@ -1464,4 +1500,3 @@ class StateStore:
             if len(stale) >= max(1, int(limit)):
                 break
         return stale
-

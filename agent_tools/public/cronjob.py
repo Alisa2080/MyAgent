@@ -46,6 +46,14 @@ class CronJobInput(BaseModel):
     context_from: list[str] | None = Field(default=None, description="Job ids whose latest output is injected.")
     enabled_toolsets: list[str] | None = Field(default=None, description="Explicit unattended toolset grants.")
     workdir: str | None = Field(default=None, description="Absolute project directory for this job.")
+    idle_timeout_seconds: int | None = Field(
+        default=None,
+        description="Idle timeout in seconds; 0 disables idle timeout. Defaults to AGENT_CRON_TIMEOUT.",
+    )
+    max_runtime_seconds: int | None = Field(
+        default=None,
+        description="Optional hard runtime cap in seconds; 0 or omitted disables the cap.",
+    )
 
 
 _INVISIBLE_CHARS = {
@@ -154,6 +162,18 @@ def _validate_script_path(script: str | None) -> tuple[str | None, dict[str, Any
             "error": "script path escapes the cron scripts directory.",
         }
     return raw, None
+
+
+def _validate_timeout_field(name: str, value: Any) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    try:
+        seconds = int(value)
+    except (TypeError, ValueError):
+        return {"success": False, "code": "invalid_timeout", "error": f"{name} must be an integer number of seconds."}
+    if seconds < 0:
+        return {"success": False, "code": "invalid_timeout", "error": f"{name} must be >= 0."}
+    return None
 
 
 def _format_job(job: dict[str, Any]) -> dict[str, Any]:
@@ -289,6 +309,14 @@ def _cronjob_impl(
             delivery_error = _validate_delivery(deliver, origin=origin)
             if delivery_error:
                 return delivery_error
+
+            idle_timeout_error = _validate_timeout_field("idle_timeout_seconds", kwargs.get("idle_timeout_seconds"))
+            if idle_timeout_error:
+                return idle_timeout_error
+            max_runtime_error = _validate_timeout_field("max_runtime_seconds", kwargs.get("max_runtime_seconds"))
+            if max_runtime_error:
+                return max_runtime_error
+
             job = create_job(
                 prompt=prompt,
                 schedule=schedule,
@@ -304,6 +332,8 @@ def _cronjob_impl(
                 context_from=context_from,
                 enabled_toolsets=kwargs.get("enabled_toolsets"),
                 workdir=kwargs.get("workdir"),
+                idle_timeout_seconds=kwargs.get("idle_timeout_seconds"),
+                max_runtime_seconds=kwargs.get("max_runtime_seconds"),
             )
             return {
                 "success": True,
@@ -359,6 +389,13 @@ def _cronjob_impl(
             if "repeat" in updates:
                 updates["repeat"] = _normalize_repeat(updates["repeat"])
 
+            idle_timeout_error = _validate_timeout_field("idle_timeout_seconds", updates.get("idle_timeout_seconds"))
+            if idle_timeout_error:
+                return idle_timeout_error
+            max_runtime_error = _validate_timeout_field("max_runtime_seconds", updates.get("max_runtime_seconds"))
+            if max_runtime_error:
+                return max_runtime_error
+
             if _deliver_mentions_origin(updates.get("deliver")):
                 origin = _runtime_origin_identity(runtime, origin_thread_id)
                 if origin is None:
@@ -401,6 +438,8 @@ def cronjob(
     context_from: list[str] | None = None,
     enabled_toolsets: list[str] | None = None,
     workdir: str | None = None,
+    idle_timeout_seconds: int | None = None,
+    max_runtime_seconds: int | None = None,
 ) -> ToolMessage:
     """Manage unattended scheduled cron jobs with local, origin, or webhook delivery."""
     result = run_cronjob_action(
@@ -423,6 +462,8 @@ def cronjob(
         context_from=context_from,
         enabled_toolsets=enabled_toolsets,
         workdir=workdir,
+        idle_timeout_seconds=idle_timeout_seconds,
+        max_runtime_seconds=max_runtime_seconds,
     )
     if result.get("success"):
         return tool_success(

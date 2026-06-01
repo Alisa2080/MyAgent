@@ -153,6 +153,20 @@ def _normalize_enabled_toolsets(value: Any) -> list[str] | None:
     return normalized or None
 
 
+def _normalize_timeout_seconds(value: Any, *, allow_zero: bool = True) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, str) and not value.strip():
+        return None
+    try:
+        seconds = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("timeout seconds must be an integer") from exc
+    if seconds < 0 or (seconds == 0 and not allow_zero):
+        raise ValueError("timeout seconds must be >= 0")
+    return seconds
+
+
 def _normalize_delivery_config(job: dict[str, Any]) -> dict[str, Any]:
     from cron.delivery_registry import default_delivery_registry
     from cron.delivery_targets import DeliveryIdentity
@@ -265,6 +279,9 @@ def _normalize_updates(
         normalized_updates["schedule"] = parsed_schedule
         normalized_updates["schedule_display"] = parsed_schedule.get("display")
         normalized_updates["next_run_at"] = compute_next_run(parsed_schedule)
+    for key in ("idle_timeout_seconds", "max_runtime_seconds"):
+        if key in normalized_updates:
+            normalized_updates[key] = _normalize_timeout_seconds(normalized_updates[key])
     return normalized_updates
 
 
@@ -322,6 +339,8 @@ def create_job(
     context_from: str | list[str] | None = None,
     enabled_toolsets: list[str] | str | None = None,
     workdir: str | None = None,
+    idle_timeout_seconds: int | str | None = None,
+    max_runtime_seconds: int | str | None = None,
 ) -> dict[str, Any]:
     parsed_schedule = parse_schedule(schedule)
     repeat_times = repeat
@@ -354,6 +373,8 @@ def create_job(
         "model": model or None,
         "provider": provider or None,
         "base_url": base_url or None,
+        "idle_timeout_seconds": _normalize_timeout_seconds(idle_timeout_seconds),
+        "max_runtime_seconds": _normalize_timeout_seconds(max_runtime_seconds),
         "created_at": current.isoformat(),
     }
     job = _normalize_delivery_config(job)

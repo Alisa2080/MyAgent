@@ -240,6 +240,50 @@ def cron_status() -> CronCommandResult:
         f"Job states: {count_text}",
         f"Delivery adapters: {', '.join(default_delivery_registry().adapter_keys())}",
     ]
+
+    next_due = state_store.list_next_due_jobs(limit=5)
+    if next_due:
+        lines.append("Next due:")
+        for job in next_due:
+            lines.append(
+                f"  {job.get('id')} {job.get('name') or '-'} at {job.get('next_run_at')}"
+            )
+    
+    # Add running runs info
+    running_runs = state_store.list_running_runs(limit=10)
+    if running_runs:
+        lines.append(f"Running jobs: {len(running_runs)}")
+        for run in running_runs:
+            activity_desc = run.get("last_activity_desc") or "unknown"
+            current_tool = run.get("current_tool") or "-"
+            heartbeat = run.get("heartbeat_at") or "-"
+            lines.append(
+                f"  run={run['run_id']} job={run['job_name'] or run['job_id']} "
+                f"activity={activity_desc} tool={current_tool} heartbeat={heartbeat}"
+            )
+    else:
+        lines.append("Running jobs: 0")
+    
+    # Add stale runs info
+    stale_runs = state_store.list_stale_running_runs(limit=10)
+    if stale_runs:
+        lines.append(f"Stale runs (will be abandoned): {len(stale_runs)}")
+        for run in stale_runs:
+            lines.append(
+                f"  run={run['run_id']} job={run['job_name'] or run['job_id']} "
+                f"reason={run.get('stale_reason')}"
+            )
+
+    failed_run = state_store.latest_failed_run()
+    if failed_run:
+        lines.append(
+            "Last failed run: "
+            f"job={failed_run.get('job_id') or '-'} "
+            f"run={failed_run.get('run_id') or '-'} "
+            f"exit={failed_run.get('exit_reason') or '-'} "
+            f"error={failed_run.get('error') or '-'}"
+        )
+    
     if mode == "subprocess":
         from cron.runner_subprocess import subprocess_timeout_diagnostic
 
