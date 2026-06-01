@@ -19,8 +19,10 @@ def test_missing_linux_adapter_install_returns_exit_code_2(monkeypatch, tmp_path
     monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
 
     from cron.service_manager import install_service, platform_module
+    from cron.service_platforms.systemd_user import SystemdUserCronService
 
     monkeypatch.setattr(platform_module, "system", lambda: "Linux")
+    monkeypatch.setattr(SystemdUserCronService, "supported", lambda self: False)
 
     result = install_service(interval_seconds=60, lease_seconds=180, force=False)
 

@@ -70,7 +70,12 @@ class SystemdUserCronService:
         self.command_runner = command_runner
 
     def supported(self) -> bool:
-        return shutil.which("systemctl") is not None
+        if shutil.which("systemctl") is None:
+            return False
+        code, _stdout, _stderr = self._run_raw(
+            ["systemctl", "--user", "show-environment"]
+        )
+        return code == 0
 
     def _run_raw(self, args: list[str]) -> tuple[int, str, str]:
         try:

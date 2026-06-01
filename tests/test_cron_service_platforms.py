@@ -1,6 +1,52 @@
 from __future__ import annotations
 
 
+def test_systemd_supported_requires_user_systemd(monkeypatch):
+    from cron.service_platforms.systemd_user import SystemdUserCronService
+
+    calls = []
+    monkeypatch.setattr(
+        "cron.service_platforms.systemd_user.shutil.which",
+        lambda name: "/usr/bin/systemctl",
+    )
+
+    def fake_run(args):
+        calls.append(args)
+        return 0, "PATH=/usr/bin\n", ""
+
+    service = SystemdUserCronService(command_runner=fake_run)
+
+    assert service.supported() is True
+    assert calls == [["systemctl", "--user", "show-environment"]]
+
+
+def test_systemd_supported_rejects_missing_user_systemd(monkeypatch):
+    from cron.service_platforms.systemd_user import SystemdUserCronService
+
+    monkeypatch.setattr(
+        "cron.service_platforms.systemd_user.shutil.which",
+        lambda name: "/usr/bin/systemctl",
+    )
+
+    service = SystemdUserCronService(command_runner=lambda args: (1, "", "no bus"))
+
+    assert service.supported() is False
+
+
+def test_systemd_supported_rejects_user_systemd_probe_exception(monkeypatch):
+    from cron.service_platforms.systemd_user import SystemdUserCronService
+
+    monkeypatch.setattr(
+        "cron.service_platforms.systemd_user.shutil.which",
+        lambda name: "/usr/bin/systemctl",
+    )
+
+    def fake_run(args):
+        raise OSError("no user bus")
+
+    assert SystemdUserCronService(command_runner=fake_run).supported() is False
+
+
 def test_systemd_install_writes_unit_and_enables(monkeypatch, tmp_path):
     from cron.service_manager import ServiceInstallConfig
     from cron.service_platforms.systemd_user import SystemdUserCronService
