@@ -315,6 +315,7 @@ def cron_service_status() -> CronCommandResult:
     ready = (
         status.supported
         and status.installed
+        and status.enabled
         and status.active
         and status.heartbeat_fresh
     )

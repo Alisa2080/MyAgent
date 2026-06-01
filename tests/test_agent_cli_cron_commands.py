@@ -1131,3 +1131,35 @@ def test_cron_service_status_renders_composed_status(monkeypatch):
     assert "PID: 123" in result.text
     assert "Heartbeat: fresh" in result.text
     assert "Last tick: due=1 ran=1 succeeded=1 failed=0 skipped=0" in result.text
+
+
+def test_cron_service_status_not_ready_when_disabled(monkeypatch):
+    import agent_cli.cron_commands as cron_commands
+    from cron.service_manager import ServiceStatus
+
+    monkeypatch.setattr(
+        "cron.service_manager.compose_service_status",
+        lambda: ServiceStatus(
+            platform="systemd-user",
+            supported=True,
+            installed=True,
+            enabled=False,
+            active=True,
+            pid=123,
+            detail="active",
+            error=None,
+            heartbeat_fresh=True,
+            process_state="running",
+            leader_state="leader",
+            last_heartbeat_at="2026-06-01T10:00:00+00:00",
+            last_tick=None,
+            last_error=None,
+            exit_reason=None,
+        ),
+    )
+
+    result = cron_commands.cron_service_status()
+
+    assert result.exit_code == 0
+    assert "Service manager: systemd-user installed active disabled" in result.text
+    assert "Automatic scheduling: not-ready" in result.text

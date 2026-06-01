@@ -912,3 +912,15 @@ def test_main_cron_service_status_dispatches(monkeypatch, tmp_path, capsys):
 
     assert code == 0
     assert "service status" in capsys.readouterr().out
+
+
+def test_main_cron_service_requires_nested_command(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("AGENT_CLI_HOME", str(tmp_path))
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    import agent_cli.main as main_module
+
+    code = main_module.main(["cron", "service"])
+
+    assert code == 2
+    assert "Missing cron service command" in capsys.readouterr().out

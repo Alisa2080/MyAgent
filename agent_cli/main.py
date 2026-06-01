@@ -368,6 +368,11 @@ def _run_cron_command(args: argparse.Namespace):
         )
     if subcommand == "service":
         service_command = getattr(args, "cron_service_command", None)
+        if service_command is None:
+            return cron_commands.CronCommandResult(
+                "Missing cron service command. Use one of: install, uninstall, start, stop, restart, status, logs.",
+                exit_code=2,
+            )
         if service_command == "install":
             return cron_commands.install_cron_service(
                 interval_seconds=args.interval,
