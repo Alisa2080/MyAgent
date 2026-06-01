@@ -17,6 +17,44 @@ from pathlib import Path
 import pytest
 
 
+class TestWorkerSmoke:
+    def test_smoke_writes_success_without_real_runner(self, tmp_path):
+        output_path = tmp_path / "result.json"
+        input_path = tmp_path / "input.json"
+        input_path.write_text(
+            json.dumps({"version": 1, "smoke": True}),
+            encoding="utf-8",
+        )
+
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "cron.runner_worker",
+                "--smoke",
+                "--input",
+                str(input_path),
+                "--output",
+                str(output_path),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            env={**subprocess.os.environ, "AGENT_CRON_HOME": str(tmp_path)},
+        )
+
+        assert result.returncode == 0, result.stderr
+        data = json.loads(output_path.read_text(encoding="utf-8"))
+        assert data == {
+            "version": 1,
+            "success": True,
+            "output_doc": "runner_worker smoke ok",
+            "final_response": "runner_worker smoke ok",
+            "error": None,
+            "exit_reason": None,
+        }
+
+
 class TestWorkerArgParsing:
     def test_help_flag_exits_successfully(self, tmp_path):
         result = subprocess.run(

@@ -41,10 +41,39 @@ def _failure_result(error: str) -> dict[str, Any]:
     }
 
 
+def _success_result(message: str) -> dict[str, Any]:
+    return {
+        "version": _PROTOCOL_VERSION,
+        "success": True,
+        "output_doc": message,
+        "final_response": message,
+        "error": None,
+        "exit_reason": None,
+    }
+
+
+def _run_smoke(input_path: Path, output_path: Path) -> int:
+    try:
+        payload = json.loads(input_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        _write_result(output_path, _failure_result(f"Smoke input error: {exc}"))
+        return 0
+    if payload.get("version") != _PROTOCOL_VERSION or payload.get("smoke") is not True:
+        _write_result(output_path, _failure_result("Smoke input payload is invalid"))
+        return 0
+    _write_result(output_path, _success_result("runner_worker smoke ok"))
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         prog="cron.runner_worker",
         description="Child-process cron job runner.",
+    )
+    parser.add_argument(
+        "--smoke",
+        action="store_true",
+        help="Run protocol smoke without executing a job",
     )
     parser.add_argument("--input", required=True, help="Path to input JSON file")
     parser.add_argument("--output", required=True, help="Path to output JSON file")
@@ -52,6 +81,9 @@ def main() -> int:
 
     input_path = Path(args.input)
     output_path = Path(args.output)
+
+    if args.smoke:
+        return _run_smoke(input_path, output_path)
 
     # ------------------------------------------------------------------
     # Load input

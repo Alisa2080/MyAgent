@@ -13,6 +13,69 @@ from unittest.mock import patch
 import pytest
 
 
+def test_worker_protocol_smoke_succeeds_and_cleans_tmp(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    from cron.paths import get_runner_tmp_dir
+    from cron.runner_subprocess import worker_protocol_smoke
+
+    result = worker_protocol_smoke(timeout_seconds=10)
+
+    assert result.ok is True
+    assert result.error is None
+    assert list(get_runner_tmp_dir().iterdir()) == []
+
+
+def test_runner_tmp_residuals_report_old_directory(monkeypatch, tmp_path):
+    import time
+
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+    from cron.paths import get_runner_tmp_dir
+    from cron.runner_subprocess import inspect_runner_tmp
+
+    old_dir = get_runner_tmp_dir() / "abcdef1234567890"
+    old_dir.mkdir(parents=True)
+    old_time = time.time() - (25 * 60 * 60)
+    os.utime(old_dir, (old_time, old_time))
+
+    summary = inspect_runner_tmp(stale_after_seconds=24 * 60 * 60)
+
+    assert summary.total == 1
+    assert summary.stale == 1
+    assert summary.oldest_age_seconds is not None
+    assert summary.oldest_age_seconds >= 24 * 60 * 60
+
+
+def test_cleanup_runner_tmp_removes_only_old_valid_dirs(monkeypatch, tmp_path):
+    import time
+
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+    from cron.paths import get_runner_tmp_dir
+    from cron.runner_subprocess import cleanup_runner_tmp
+
+    root = get_runner_tmp_dir()
+    old_valid = root / "abcdef1234567890"
+    fresh_valid = root / "1234567890abcdef"
+    old_smoke = root / "smoke-abcdef1234567890"
+    fresh_smoke = root / "smoke-1234567890abcdef"
+    invalid = root / "not-a-run-dir"
+    for path in (old_valid, fresh_valid, old_smoke, fresh_smoke, invalid):
+        path.mkdir(parents=True, exist_ok=True)
+    old_time = time.time() - (25 * 60 * 60)
+    os.utime(old_valid, (old_time, old_time))
+    os.utime(old_smoke, (old_time, old_time))
+
+    result = cleanup_runner_tmp(stale_after_seconds=24 * 60 * 60)
+
+    assert result.removed == 2
+    assert result.failed == 0
+    assert not old_valid.exists()
+    assert not old_smoke.exists()
+    assert fresh_valid.exists()
+    assert fresh_smoke.exists()
+    assert invalid.exists()
+
+
 # ----------------------------------------------------------------------
 # Timeout config
 # ----------------------------------------------------------------------

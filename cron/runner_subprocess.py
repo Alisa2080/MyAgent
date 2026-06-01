@@ -9,12 +9,14 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import sys
 import threading
+import time
 import uuid
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, BinaryIO
 
@@ -32,6 +34,10 @@ _SUBPROCESS_HEARTBEAT_SECONDS = 5.0
 _STDERR_MAX_BYTES = 10_000
 _STDOUT_MAX_BYTES = 10_000
 _COMBINED_SOFT_CAP = _STDERR_MAX_BYTES + _STDOUT_MAX_BYTES
+_SMOKE_TIMEOUT_DEFAULT = 10
+_TMP_STALE_AFTER_DEFAULT = 24 * 60 * 60
+_RUN_DIR_RE = re.compile(r"^[0-9a-f]{16}$")
+_SMOKE_DIR_PREFIX = "smoke-"
 
 
 def _parse_subprocess_timeout() -> int:
@@ -338,6 +344,142 @@ def _report_parent_activity(
             last_activity_desc=desc,
             current_tool=None,
         )
+
+
+@dataclass(frozen=True)
+class WorkerSmokeResult:
+    ok: bool
+    error: str | None = None
+
+
+@dataclass(frozen=True)
+class RunnerTmpSummary:
+    total: int
+    stale: int
+    oldest_age_seconds: int | None
+    path: Path
+
+
+@dataclass(frozen=True)
+class RunnerTmpCleanupResult:
+    removed: int
+    failed: int
+    remaining: int
+    path: Path
+
+
+def _is_runner_tmp_child(path: Path) -> bool:
+    return path.is_dir() and (
+        _RUN_DIR_RE.match(path.name) is not None
+        or path.name.startswith(_SMOKE_DIR_PREFIX)
+    )
+
+
+def _runner_tmp_children() -> list[Path]:
+    root = get_runner_tmp_dir()
+    if not root.exists():
+        return []
+    return [path for path in root.iterdir() if _is_runner_tmp_child(path)]
+
+
+def inspect_runner_tmp(
+    *,
+    stale_after_seconds: int = _TMP_STALE_AFTER_DEFAULT,
+) -> RunnerTmpSummary:
+    root = get_runner_tmp_dir()
+    now = time.time()
+    children = _runner_tmp_children()
+    ages = [max(0, int(now - child.stat().st_mtime)) for child in children]
+    stale_count = sum(1 for age in ages if age >= stale_after_seconds)
+    return RunnerTmpSummary(
+        total=len(children),
+        stale=stale_count,
+        oldest_age_seconds=max(ages) if ages else None,
+        path=root,
+    )
+
+
+def cleanup_runner_tmp(
+    *,
+    stale_after_seconds: int = _TMP_STALE_AFTER_DEFAULT,
+) -> RunnerTmpCleanupResult:
+    root = get_runner_tmp_dir()
+    now = time.time()
+    removed = 0
+    failed = 0
+    for child in _runner_tmp_children():
+        try:
+            age = max(0, int(now - child.stat().st_mtime))
+            if age < stale_after_seconds:
+                continue
+            shutil.rmtree(child)
+            removed += 1
+        except OSError:
+            failed += 1
+    remaining = len(_runner_tmp_children())
+    return RunnerTmpCleanupResult(
+        removed=removed,
+        failed=failed,
+        remaining=remaining,
+        path=root,
+    )
+
+
+def worker_protocol_smoke(
+    *,
+    timeout_seconds: int = _SMOKE_TIMEOUT_DEFAULT,
+) -> WorkerSmokeResult:
+    tmp_root = get_runner_tmp_dir()
+    tmp_root.parent.mkdir(parents=True, exist_ok=True)
+    secure_dir(tmp_root.parent)
+    tmp_root.mkdir(parents=True, exist_ok=True)
+    secure_dir(tmp_root)
+    smoke_dir = tmp_root / f"{_SMOKE_DIR_PREFIX}{uuid.uuid4().hex[:16]}"
+    smoke_dir.mkdir(parents=True, exist_ok=True)
+    secure_dir(smoke_dir)
+    input_path = smoke_dir / "input.json"
+    output_path = smoke_dir / "result.json"
+    try:
+        input_path.write_text(
+            json.dumps({"version": _RESULT_VERSION, "smoke": True}),
+            encoding="utf-8",
+        )
+        secure_file(input_path)
+        proc = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "cron.runner_worker",
+                "--smoke",
+                "--input",
+                str(input_path),
+                "--output",
+                str(output_path),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+        )
+        if proc.returncode != 0:
+            detail = (proc.stderr or proc.stdout or "").strip()
+            suffix = f": {detail}" if detail else ""
+            return WorkerSmokeResult(
+                False,
+                f"runner_worker smoke exited with code {proc.returncode}{suffix}",
+            )
+        parsed = _parse_result_file(output_path)
+        if not parsed.success:
+            return WorkerSmokeResult(False, parsed.error or "runner_worker smoke failed")
+        return WorkerSmokeResult(True)
+    except subprocess.TimeoutExpired:
+        return WorkerSmokeResult(
+            False,
+            f"runner_worker smoke timed out after {timeout_seconds}s",
+        )
+    except Exception as exc:
+        return WorkerSmokeResult(False, str(exc))
+    finally:
+        _cleanup_temp_dir(smoke_dir)
 
 
 # ----------------------------------------------------------------------
