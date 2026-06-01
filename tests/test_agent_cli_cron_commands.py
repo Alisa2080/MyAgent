@@ -864,6 +864,21 @@ def test_cron_run_dry_run_shows_resolved_execution_plan(monkeypatch, tmp_path):
     assert "Next scheduled:" in result.text
 
 
+def test_cron_run_dry_run_missing_job_returns_not_found(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    from agent_cli.cron_commands import run_cron_job
+
+    result = run_cron_job(
+        job_id="missing",
+        dry_run=True,
+        now_text="2026-05-29T10:00:00+00:00",
+    )
+
+    assert result.exit_code == 2
+    assert "Cron job not found: missing." in result.text
+
+
 def test_cron_create_and_edit_pass_concurrency_flags(monkeypatch):
     import agent_cli.main as main
 

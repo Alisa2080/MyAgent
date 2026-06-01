@@ -15,7 +15,7 @@ from cron.delivery_targets import DeliveryIdentity, DeliveryTargetError, parse_d
 
 SCHEMA_VERSION = 2
 JOB_STATES = {"scheduled", "running", "paused", "completed", "error"}
-RUN_STATUSES = {"claimed", "running", "succeeded", "failed", "skipped", "abandoned"}
+RUN_STATUSES = {"queued", "claimed", "running", "succeeded", "failed", "skipped", "abandoned"}
 DELIVERY_STATUSES = {"pending", "delivering", "delivered", "failed", "dead"}
 RETRY_DELAYS = (60, 300, 900, 3600, 21600)
 logger = logging.getLogger(__name__)
@@ -990,6 +990,12 @@ class StateStore:
             runs.append(run)
         return runs
 
+    def _run_effective_concurrency_key(self, run: dict[str, Any]) -> str:
+        key = str(run.get("concurrency_key") or "").strip()
+        if key:
+            return key
+        return f"job:{run['job_id']}"
+
     def _insert_run(
         self,
         conn: sqlite3.Connection,
@@ -1100,6 +1106,10 @@ class StateStore:
                 occupying = [run for run in active_runs if run["status"] in self.OCCUPYING_RUN_STATUSES]
                 queued = [run for run in active_runs if run["status"] == "queued"]
                 policy = job["concurrency_policy"]
+
+                if policy == "queue_one" and queued:
+                    self._advance_job_after_claim(conn, job, now_text)
+                    continue
 
                 if policy == "queue_one" and occupying:
                     if not queued:
@@ -1780,28 +1790,28 @@ class StateStore:
             conn.execute("BEGIN IMMEDIATE")
             rows = conn.execute(
                 """
-                SELECT * FROM runs
-                WHERE status = 'queued'
-                ORDER BY scheduled_for, created_at, id
+                SELECT runs.*,
+                       COALESCE(NULLIF(runs.concurrency_key, ''), NULLIF(jobs.concurrency_key, ''), 'job:' || jobs.id)
+                           AS effective_concurrency_key
+                FROM runs
+                JOIN jobs ON jobs.id = runs.job_id
+                WHERE runs.status = 'queued'
+                ORDER BY runs.scheduled_for, runs.created_at, runs.id
                 """
             ).fetchall()
             for row in rows:
                 if len(promoted) >= int(limit):
                     break
                 run = dict(row)
-                key = str(run.get("concurrency_key") or "")
+                key = str(run.get("effective_concurrency_key") or run.get("concurrency_key") or "")
                 if not key or key in promoted_keys:
                     continue
-                occupying = conn.execute(
-                    """
-                    SELECT id FROM runs
-                    WHERE concurrency_key = ?
-                      AND status IN ('claimed', 'running')
-                    LIMIT 1
-                    """,
-                    (key,),
-                ).fetchone()
-                if occupying is not None:
+                occupying = [
+                    active
+                    for active in self._active_runs_for_key(conn, key)
+                    if active["id"] != run["id"] and active["status"] in self.OCCUPYING_RUN_STATUSES
+                ]
+                if occupying:
                     continue
                 lease_expires_at = (now_dt + timedelta(seconds=self.lease_seconds)).isoformat()
                 conn.execute(
@@ -1832,6 +1842,8 @@ class StateStore:
                 updated_run = self._row_to_run(
                     conn.execute("SELECT * FROM runs WHERE id = ?", (run["id"],)).fetchone()
                 )
+                if not updated_run.get("concurrency_key"):
+                    updated_run["concurrency_key"] = key
                 job = self._row_to_job(
                     conn.execute("SELECT * FROM jobs WHERE id = ?", (run["job_id"],)).fetchone()
                 )
@@ -1874,6 +1886,8 @@ class StateStore:
         job = self.get_job(job_id)
         if now_dt is None:
             return {"job_id": job_id, "decision": "invalid_now", "error": f"Invalid now_text: {now_text}"}
+        if job is None:
+            raise KeyError(job_id)
         key = normalize_concurrency_key(job.get("concurrency_key"), str(job["id"]))
         policy = normalize_concurrency_policy(job.get("concurrency_policy"))
         timeouts = self.resolve_job_timeouts(job)
@@ -1910,7 +1924,7 @@ class StateStore:
         occupying = [run for run in active if run["status"] in self.OCCUPYING_RUN_STATUSES]
         queued = [run for run in active if run["status"] == "queued"]
         decision = "would_claim"
-        if policy == "queue_one" and occupying:
+        if policy == "queue_one" and (occupying or queued):
             decision = "would_queue"
         elif policy == "queue_all" and occupying:
             decision = "would_queue"
