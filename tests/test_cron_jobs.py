@@ -609,3 +609,55 @@ def test_update_job_normalizes_timeout_settings(monkeypatch, tmp_path):
 
     assert updated["idle_timeout_seconds"] == 0
     assert updated["max_runtime_seconds"] is None
+
+
+def test_create_job_defaults_concurrency(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    from cron.jobs import create_job
+
+    job = create_job(prompt="hello", schedule="every 5m")
+
+    assert job["concurrency_key"] == f"job:{job['id']}"
+    assert job["concurrency_policy"] == "queue_one"
+
+
+def test_create_job_accepts_explicit_concurrency(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    from cron.jobs import create_job
+
+    job = create_job(
+        prompt="hello",
+        schedule="every 5m",
+        concurrency_key="repo:/work/project",
+        concurrency_policy="skip_if_running",
+    )
+
+    assert job["concurrency_key"] == "repo:/work/project"
+    assert job["concurrency_policy"] == "skip_if_running"
+
+
+def test_create_job_rejects_unknown_concurrency_policy(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    from cron.jobs import create_job
+
+    with pytest.raises(ValueError, match="Unsupported concurrency_policy"):
+        create_job(
+            prompt="hello",
+            schedule="every 5m",
+            concurrency_policy="serialize",
+        )
+
+
+def test_update_job_normalizes_empty_concurrency_key(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    from cron.jobs import create_job, update_job
+
+    job = create_job(prompt="hello", schedule="every 5m", concurrency_key="repo:a")
+    updated = update_job(job["id"], {"concurrency_key": ""})
+
+    assert updated is not None
+    assert updated["concurrency_key"] == f"job:{job['id']}"

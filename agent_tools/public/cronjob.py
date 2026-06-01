@@ -54,6 +54,14 @@ class CronJobInput(BaseModel):
         default=None,
         description="Optional hard runtime cap in seconds; 0 or omitted disables the cap.",
     )
+    concurrency_key: str | None = Field(
+        default=None,
+        description="Concurrency key for grouping jobs. Defaults to job:<job_id>.",
+    )
+    concurrency_policy: Literal["queue_one", "queue_all", "replace_running", "skip_if_running"] | None = Field(
+        default=None,
+        description="Concurrency policy: queue_one, queue_all, replace_running, skip_if_running. Defaults to queue_one.",
+    )
 
 
 _INVISIBLE_CHARS = {
@@ -191,6 +199,8 @@ def _format_job(job: dict[str, Any]) -> dict[str, Any]:
         "enabled": job.get("enabled", True),
         "state": job.get("state"),
         "workdir": job.get("workdir"),
+        "concurrency_key": job.get("concurrency_key"),
+        "concurrency_policy": job.get("concurrency_policy"),
     }
 
 
@@ -334,6 +344,8 @@ def _cronjob_impl(
                 workdir=kwargs.get("workdir"),
                 idle_timeout_seconds=kwargs.get("idle_timeout_seconds"),
                 max_runtime_seconds=kwargs.get("max_runtime_seconds"),
+                concurrency_key=kwargs.get("concurrency_key"),
+                concurrency_policy=kwargs.get("concurrency_policy"),
             )
             return {
                 "success": True,
@@ -440,6 +452,8 @@ def cronjob(
     workdir: str | None = None,
     idle_timeout_seconds: int | None = None,
     max_runtime_seconds: int | None = None,
+    concurrency_key: str | None = None,
+    concurrency_policy: Literal["queue_one", "queue_all", "replace_running", "skip_if_running"] | None = None,
 ) -> ToolMessage:
     """Manage unattended scheduled cron jobs with local, origin, or webhook delivery."""
     result = run_cronjob_action(
@@ -464,6 +478,8 @@ def cronjob(
         workdir=workdir,
         idle_timeout_seconds=idle_timeout_seconds,
         max_runtime_seconds=max_runtime_seconds,
+        concurrency_key=concurrency_key,
+        concurrency_policy=concurrency_policy,
     )
     if result.get("success"):
         return tool_success(
