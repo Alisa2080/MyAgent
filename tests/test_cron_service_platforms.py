@@ -419,3 +419,139 @@ def test_systemd_logs_use_journalctl():
             "--no-pager",
         ]
     ]
+
+
+def test_launchd_install_writes_plist(monkeypatch, tmp_path):
+    import plistlib
+
+    from cron.service_manager import ServiceInstallConfig
+    from cron.service_platforms.launchd_user import (
+        LABEL,
+        LaunchdUserCronService,
+    )
+
+    plist_path = tmp_path / "LaunchAgents" / f"{LABEL}.plist"
+    stdout_path = tmp_path / "logs" / "cron.out.log"
+    stderr_path = tmp_path / "logs" / "cron.err.log"
+    monkeypatch.setattr(
+        "cron.service_platforms.launchd_user.launchd_plist_path",
+        lambda: plist_path,
+    )
+    monkeypatch.setattr(
+        "cron.service_platforms.launchd_user.launchd_log_paths",
+        lambda: (stdout_path, stderr_path),
+    )
+
+    result = LaunchdUserCronService(command_runner=lambda args: (0, "", "")).install(
+        ServiceInstallConfig(
+            interval_seconds=30,
+            lease_seconds=90,
+            force=False,
+            python_executable="/usr/bin/python3",
+        )
+    )
+
+    payload = plistlib.loads(plist_path.read_bytes())
+    assert result.exit_code == 0
+    assert payload["Label"] == "ai.langchain.agent.cron"
+    assert payload["RunAtLoad"] is True
+    assert payload["ProgramArguments"] == [
+        "/usr/bin/python3",
+        "-m",
+        "agent_cli.main",
+        "cron",
+        "serve",
+        "--interval",
+        "30",
+        "--lease-seconds",
+        "90",
+    ]
+    assert payload["StandardOutPath"] == str(stdout_path)
+    assert payload["StandardErrorPath"] == str(stderr_path)
+    assert stdout_path.parent.is_dir()
+    assert "agent cron service start" in result.message
+
+
+def test_launchd_start_bootstraps_and_kickstarts(monkeypatch, tmp_path):
+    from cron.service_platforms.launchd_user import (
+        LABEL,
+        LaunchdUserCronService,
+    )
+
+    calls = []
+    plist_path = tmp_path / f"{LABEL}.plist"
+    plist_path.write_text("plist", encoding="utf-8")
+    monkeypatch.setattr(
+        "cron.service_platforms.launchd_user.launchd_plist_path",
+        lambda: plist_path,
+    )
+    monkeypatch.setattr("cron.service_platforms.launchd_user._uid", lambda: 501)
+
+    def fake_run(args):
+        calls.append(args)
+        if args[:2] == ["launchctl", "bootstrap"]:
+            return 5, "", "service already loaded"
+        return 0, "started", ""
+
+    result = LaunchdUserCronService(command_runner=fake_run).start()
+
+    assert result.exit_code == 0
+    assert calls == [
+        ["launchctl", "bootstrap", "gui/501", str(plist_path)],
+        ["launchctl", "kickstart", "-k", "gui/501/ai.langchain.agent.cron"],
+    ]
+
+
+def test_launchd_start_requires_installed_plist(monkeypatch, tmp_path):
+    from cron.service_platforms.launchd_user import LaunchdUserCronService
+
+    monkeypatch.setattr(
+        "cron.service_platforms.launchd_user.launchd_plist_path",
+        lambda: tmp_path / "missing.plist",
+    )
+
+    result = LaunchdUserCronService(command_runner=lambda args: (0, "", "")).start()
+
+    assert result.exit_code == 2
+    assert "agent cron service install" in result.message
+
+
+def test_launchd_logs_read_stdout_and_stderr(monkeypatch, tmp_path):
+    from cron.service_platforms.launchd_user import LaunchdUserCronService
+
+    stdout_path = tmp_path / "cron.out.log"
+    stderr_path = tmp_path / "cron.err.log"
+    stdout_path.write_text("out1\nout2\nout3\n", encoding="utf-8")
+    stderr_path.write_text("err1\nerr2\n", encoding="utf-8")
+    monkeypatch.setattr(
+        "cron.service_platforms.launchd_user.launchd_log_paths",
+        lambda: (stdout_path, stderr_path),
+    )
+
+    result = LaunchdUserCronService(command_runner=lambda args: (0, "", "")).logs(
+        lines=2
+    )
+
+    assert result.exit_code == 0
+    assert result.message == (
+        "==> stdout <==\n"
+        "out2\n"
+        "out3\n\n"
+        "==> stderr <==\n"
+        "err1\n"
+        "err2"
+    )
+
+
+def test_launchd_logs_report_when_no_logs(monkeypatch, tmp_path):
+    from cron.service_platforms.launchd_user import LaunchdUserCronService
+
+    monkeypatch.setattr(
+        "cron.service_platforms.launchd_user.launchd_log_paths",
+        lambda: (tmp_path / "missing.out.log", tmp_path / "missing.err.log"),
+    )
+
+    result = LaunchdUserCronService(command_runner=lambda args: (0, "", "")).logs()
+
+    assert result.exit_code == 0
+    assert result.message == "No cron service logs yet."
