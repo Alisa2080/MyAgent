@@ -30,7 +30,7 @@ def _quote_systemd(value: str) -> str:
 
 
 def _quote_systemd_arg(value: str) -> str:
-    escaped = _quote_systemd(value)
+    escaped = _quote_systemd(value).replace("$", "$$")
     if not value or any(char.isspace() or char in {'"', "\\"} for char in value):
         return f'"{escaped}"'
     return escaped

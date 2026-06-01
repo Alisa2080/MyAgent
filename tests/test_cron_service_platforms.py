@@ -98,12 +98,12 @@ def test_systemd_unit_escapes_execstart_and_environment(monkeypatch):
         ServiceInstallConfig(
             interval_seconds=30,
             lease_seconds=90,
-            python_executable="/opt/My Python/bin/python%3",
+            python_executable="/opt/My Python/py$prod/bin/python%3",
         )
     )
 
     assert (
-        'ExecStart="/opt/My Python/bin/python%%3" -m agent_cli.main cron serve '
+        'ExecStart="/opt/My Python/py$$prod/bin/python%%3" -m agent_cli.main cron serve '
         "--interval 30 --lease-seconds 90"
     ) in unit
     assert (
