@@ -143,10 +143,26 @@ Linux uses user systemd when it is available. macOS uses a user LaunchAgent. The
 python -m agent_cli cron serve --interval 60 --lease-seconds 180
 ```
 
+Development installs keep the default in-process cron runner. For hosted or
+production cron services, set `AGENT_RUNTIME_PROFILE=hosted` or
+`AGENT_RUNTIME_PROFILE=prod` before installing the service; if
+`AGENT_CRON_RUNNER_MODE` is not already set, the installed user service will use
+`AGENT_CRON_RUNNER_MODE=subprocess`. This keeps the long-lived scheduler process
+separate from each job's agent execution.
+
 If scheduled jobs are not firing, run:
 
 ```bash
 python -m agent_cli cron doctor
+```
+
+`agent cron doctor` checks the effective profile, runner mode, subprocess
+worker smoke, timeout configuration, and runner temp directory. It reports stale
+runner temp directories by default. To explicitly remove stale runner temp
+directories older than 24 hours, run:
+
+```bash
+python -m agent_cli cron doctor --cleanup-runner-tmp
 ```
 
 If user-level services are unsupported on your platform, run the foreground scheduler directly:
