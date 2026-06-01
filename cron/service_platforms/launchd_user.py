@@ -76,7 +76,10 @@ class LaunchdUserCronService:
         self.command_runner = command_runner
 
     def supported(self) -> bool:
-        return shutil.which("launchctl") is not None
+        if shutil.which("launchctl") is None:
+            return False
+        code, _stdout, _stderr = self._run_raw(["launchctl", "print", launchd_domain()])
+        return code == 0
 
     def _run_raw(self, args: list[str]) -> tuple[int, str, str]:
         try:
@@ -159,13 +162,11 @@ class LaunchdUserCronService:
                 exit_code=2,
             )
 
-        bootstrap = self._result(
-            ["launchctl", "bootstrap", launchd_domain(), str(path)],
-            ok_codes=(0, 5),
-            fallback="loaded",
+        code, stdout, stderr = self._run_raw(
+            ["launchctl", "bootstrap", launchd_domain(), str(path)]
         )
-        if bootstrap.exit_code:
-            return bootstrap
+        if code != 0 and not _is_benign_bootstrap_code_5(code, stdout, stderr):
+            return _command_result(code, stdout, stderr, fallback="bootstrap failed")
         return self._result(
             ["launchctl", "kickstart", "-k", launchd_service_ref()],
             fallback="started",
@@ -173,11 +174,12 @@ class LaunchdUserCronService:
 
     def stop(self) -> ServiceCommandResult:
         path = launchd_plist_path()
-        return self._result(
-            ["launchctl", "bootout", launchd_domain(), str(path)],
-            ok_codes=(0, 5),
-            fallback="stopped",
+        code, stdout, stderr = self._run_raw(
+            ["launchctl", "bootout", launchd_domain(), str(path)]
         )
+        if code != 0 and not _is_benign_bootout_code_5(code, stdout, stderr):
+            return _command_result(code, stdout, stderr, fallback="bootout failed")
+        return ServiceCommandResult((stderr or stdout).strip() or "stopped")
 
     def restart(self) -> ServiceCommandResult:
         result = self.stop()
@@ -191,9 +193,14 @@ class LaunchdUserCronService:
         code, stdout, stderr = self._run_raw(
             ["launchctl", "print", launchd_service_ref()]
         )
-        active = code == 0
         pid = _parse_pid(stdout)
-        detail = "loaded" if active else "not loaded"
+        active = pid is not None
+        if code != 0:
+            detail = "not loaded"
+        elif active:
+            detail = "loaded"
+        else:
+            detail = _parse_state_detail(stdout) or "loaded"
         error = None if code == 0 else (stderr or stdout).strip() or None
         return ServiceRuntimeStatus(
             platform=self.key,
@@ -227,10 +234,63 @@ def _parse_pid(output: str) -> int | None:
     return pid if pid > 0 else None
 
 
+def _parse_state_detail(output: str) -> str | None:
+    for line in output.splitlines():
+        text = line.strip()
+        if text.startswith("state = "):
+            return text
+    return None
+
+
+def _is_benign_bootstrap_code_5(code: int, stdout: str, stderr: str) -> bool:
+    if code != 5:
+        return False
+    text = f"{stdout}\n{stderr}".lower()
+    return "already bootstrapped" in text or "already loaded" in text
+
+
+def _is_benign_bootout_code_5(code: int, stdout: str, stderr: str) -> bool:
+    if code != 5:
+        return False
+    text = f"{stdout}\n{stderr}".lower()
+    return any(
+        phrase in text
+        for phrase in (
+            "no such process",
+            "no such service",
+            "not loaded",
+        )
+    )
+
+
+def _command_result(
+    code: int,
+    stdout: str,
+    stderr: str,
+    *,
+    fallback: str,
+) -> ServiceCommandResult:
+    text = (stderr or stdout).strip()
+    return ServiceCommandResult(text or fallback, exit_code=0 if code == 0 else 1)
+
+
 def _tail_file(path: Path, lines: int) -> str | None:
+    chunks: list[bytes] = []
+    newline_count = 0
+    block_size = 8192
     try:
-        content = path.read_text(encoding="utf-8", errors="replace")
+        with path.open("rb") as handle:
+            handle.seek(0, os.SEEK_END)
+            position = handle.tell()
+            while position > 0 and newline_count <= lines:
+                read_size = min(block_size, position)
+                position -= read_size
+                handle.seek(position)
+                chunk = handle.read(read_size)
+                chunks.append(chunk)
+                newline_count += chunk.count(b"\n")
     except OSError:
         return None
+    content = b"".join(reversed(chunks)).decode("utf-8", errors="replace")
     selected = content.splitlines()[-lines:]
     return "\n".join(selected).strip() or None
