@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import json
+import os
 import sys
 from typing import Any
 
@@ -511,6 +512,16 @@ def _add_service_heartbeat_check(add) -> None:
         add("warn", "cron service heartbeat: stale; automatic scheduling may be stopped")
 
 
+def _pid_is_running(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+    return True
+
+
 def _add_service_manager_check(add) -> None:
     from cron.service_manager import compose_service_status
 
@@ -525,6 +536,8 @@ def _add_service_manager_check(add) -> None:
         add("warn", "cron service: installed but disabled; run `agent cron service install --force`")
     elif not status.heartbeat_fresh:
         add("warn", "cron service heartbeat: stale; run `agent cron service restart`")
+    elif status.pid and not _pid_is_running(status.pid):
+        add("warn", "cron service pid is not running; run `agent cron service restart`")
     else:
         add("ok", f"cron service: running ({status.platform})")
 

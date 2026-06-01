@@ -17,6 +17,9 @@ from cron.service_manager import (
 )
 
 LABEL = "ai.langchain.agent.cron"
+MISSING_INSTALL_MESSAGE = (
+    "cron service is not installed; run `agent cron service install`."
+)
 
 
 def _uid() -> int:
@@ -158,7 +161,7 @@ class LaunchdUserCronService:
         path = launchd_plist_path()
         if not path.exists():
             return ServiceCommandResult(
-                f"{path} is not installed; run `agent cron service install` first.",
+                MISSING_INSTALL_MESSAGE,
                 exit_code=2,
             )
 
@@ -176,6 +179,9 @@ class LaunchdUserCronService:
 
     def stop(self) -> ServiceCommandResult:
         path = launchd_plist_path()
+        if not path.exists():
+            return ServiceCommandResult(MISSING_INSTALL_MESSAGE, exit_code=2)
+
         code, stdout, stderr = self._run_raw(
             ["launchctl", "bootout", launchd_domain(), str(path)]
         )

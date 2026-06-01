@@ -249,6 +249,25 @@ def test_systemd_status_parses_failed_unit():
     assert status.detail == "failed; result=exit-code; exit_status=1"
 
 
+def test_systemd_start_stop_restart_require_installed_unit(monkeypatch, tmp_path):
+    from cron.service_platforms.systemd_user import SystemdUserCronService
+
+    monkeypatch.setattr(
+        "cron.service_platforms.systemd_user.systemd_unit_path",
+        lambda: tmp_path / "missing.service",
+    )
+
+    def fail_run(args):
+        raise AssertionError(f"systemctl should not be called: {args}")
+
+    service = SystemdUserCronService(command_runner=fail_run)
+
+    for action in (service.start, service.stop, service.restart):
+        result = action()
+        assert result.exit_code == 2
+        assert "agent cron service install" in result.message
+
+
 def test_systemd_install_removes_new_unit_when_daemon_reload_fails(monkeypatch, tmp_path):
     from cron.service_manager import ServiceInstallConfig
     from cron.service_platforms.systemd_user import SystemdUserCronService
@@ -669,6 +688,25 @@ def test_launchd_start_requires_installed_plist(monkeypatch, tmp_path):
     assert "agent cron service install" in result.message
 
 
+def test_launchd_stop_and_restart_require_installed_plist(monkeypatch, tmp_path):
+    from cron.service_platforms.launchd_user import LaunchdUserCronService
+
+    monkeypatch.setattr(
+        "cron.service_platforms.launchd_user.launchd_plist_path",
+        lambda: tmp_path / "missing.plist",
+    )
+
+    def fail_run(args):
+        raise AssertionError(f"launchctl should not be called: {args}")
+
+    service = LaunchdUserCronService(command_runner=fail_run)
+
+    for action in (service.stop, service.restart):
+        result = action()
+        assert result.exit_code == 2
+        assert "agent cron service install" in result.message
+
+
 def test_launchd_stop_boots_out_plist_from_domain(monkeypatch, tmp_path):
     from cron.service_platforms.launchd_user import (
         LABEL,
@@ -677,6 +715,7 @@ def test_launchd_stop_boots_out_plist_from_domain(monkeypatch, tmp_path):
 
     calls = []
     plist_path = tmp_path / f"{LABEL}.plist"
+    plist_path.write_text("plist", encoding="utf-8")
     monkeypatch.setattr(
         "cron.service_platforms.launchd_user.launchd_plist_path",
         lambda: plist_path,
@@ -707,6 +746,7 @@ def test_launchd_stop_rejects_non_benign_code_5(monkeypatch, tmp_path):
     )
 
     plist_path = tmp_path / f"{LABEL}.plist"
+    plist_path.write_text("plist", encoding="utf-8")
     monkeypatch.setattr(
         "cron.service_platforms.launchd_user.launchd_plist_path",
         lambda: plist_path,
@@ -736,6 +776,7 @@ def test_launchd_stop_accepts_generic_code_5_when_service_not_printable(
 
     calls = []
     plist_path = tmp_path / f"{LABEL}.plist"
+    plist_path.write_text("plist", encoding="utf-8")
     monkeypatch.setattr(
         "cron.service_platforms.launchd_user.launchd_plist_path",
         lambda: plist_path,
@@ -769,6 +810,7 @@ def test_launchd_stop_rejects_generic_code_5_when_service_still_printable(
 
     calls = []
     plist_path = tmp_path / f"{LABEL}.plist"
+    plist_path.write_text("plist", encoding="utf-8")
     monkeypatch.setattr(
         "cron.service_platforms.launchd_user.launchd_plist_path",
         lambda: plist_path,

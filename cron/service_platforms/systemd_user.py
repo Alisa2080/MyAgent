@@ -14,6 +14,9 @@ from cron.service_manager import (
 )
 
 SERVICE_NAME = "langchain-agent-cron.service"
+MISSING_INSTALL_MESSAGE = (
+    "cron service is not installed; run `agent cron service install`."
+)
 
 
 def systemd_unit_path() -> Path:
@@ -171,12 +174,18 @@ class SystemdUserCronService:
         return ServiceCommandResult(f"Uninstalled {SERVICE_NAME}.")
 
     def start(self) -> ServiceCommandResult:
+        if not systemd_unit_path().exists():
+            return ServiceCommandResult(MISSING_INSTALL_MESSAGE, exit_code=2)
         return self._run(["systemctl", "--user", "start", SERVICE_NAME])
 
     def stop(self) -> ServiceCommandResult:
+        if not systemd_unit_path().exists():
+            return ServiceCommandResult(MISSING_INSTALL_MESSAGE, exit_code=2)
         return self._run(["systemctl", "--user", "stop", SERVICE_NAME])
 
     def restart(self) -> ServiceCommandResult:
+        if not systemd_unit_path().exists():
+            return ServiceCommandResult(MISSING_INSTALL_MESSAGE, exit_code=2)
         return self._run(["systemctl", "--user", "restart", SERVICE_NAME])
 
     def status(self) -> ServiceRuntimeStatus:

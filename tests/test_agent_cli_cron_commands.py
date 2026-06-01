@@ -416,6 +416,7 @@ def test_cron_doctor_reports_running_service(monkeypatch, tmp_path):
         raising=False,
     )
     monkeypatch.setattr(cron_commands, "list_jobs", lambda include_disabled=False: [])
+    monkeypatch.setattr(cron_commands, "_pid_is_running", lambda pid: True)
     monkeypatch.setattr(
         "cron.service_manager.compose_service_status",
         lambda: ServiceStatus(
@@ -594,6 +595,41 @@ def test_cron_doctor_suggests_service_restart_when_heartbeat_stale(monkeypatch, 
     assert result.exit_code == 1
     assert "[warn] cron service heartbeat: stale; run `agent cron service restart`" in result.text
     assert "automatic scheduling may be stopped" not in result.text
+
+
+def test_cron_doctor_warns_when_service_pid_is_dead(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    from agent_cli import cron_commands
+    from cron.service_manager import ServiceStatus
+
+    monkeypatch.setattr(cron_commands, "list_jobs", lambda include_disabled=False: [])
+    monkeypatch.setattr(cron_commands, "_pid_is_running", lambda pid: False)
+    monkeypatch.setattr(
+        "cron.service_manager.compose_service_status",
+        lambda: ServiceStatus(
+            platform="systemd-user",
+            supported=True,
+            installed=True,
+            enabled=True,
+            active=True,
+            pid=99999,
+            detail="active",
+            error=None,
+            heartbeat_fresh=True,
+            process_state="running",
+            leader_state="leader",
+            last_heartbeat_at="2026-06-01T10:00:00+00:00",
+            last_tick=None,
+            last_error=None,
+            exit_reason=None,
+        ),
+    )
+
+    result = cron_commands.cron_doctor()
+
+    assert result.exit_code == 1
+    assert "[warn] cron service pid is not running; run `agent cron service restart`" in result.text
 
 
 def test_cron_doctor_suggests_force_install_when_service_disabled(monkeypatch, tmp_path):
@@ -819,6 +855,7 @@ def test_cron_doctor_accepts_multi_target_delivery(monkeypatch, tmp_path):
     from cron.service_manager import ServiceStatus
     from cron.service_state import write_service_status
 
+    monkeypatch.setattr(cron_commands, "_pid_is_running", lambda pid: True)
     monkeypatch.setattr(
         "cron.service_manager.compose_service_status",
         lambda: ServiceStatus(
