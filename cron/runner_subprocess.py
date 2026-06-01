@@ -38,6 +38,7 @@ _SMOKE_TIMEOUT_DEFAULT = 10
 _TMP_STALE_AFTER_DEFAULT = 24 * 60 * 60
 _RUN_DIR_RE = re.compile(r"^[0-9a-f]{16}$")
 _SMOKE_DIR_PREFIX = "smoke-"
+_SMOKE_DIR_RE = re.compile(r"^smoke-[0-9a-f]{16}$")
 
 
 def _parse_subprocess_timeout() -> int:
@@ -373,7 +374,7 @@ class RunnerTmpCleanupResult:
 def _is_runner_tmp_child(path: Path) -> bool:
     return path.is_dir() and (
         _RUN_DIR_RE.match(path.name) is not None
-        or path.name.startswith(_SMOKE_DIR_PREFIX)
+        or _SMOKE_DIR_RE.match(path.name) is not None
     )
 
 
@@ -391,10 +392,15 @@ def inspect_runner_tmp(
     root = get_runner_tmp_dir()
     now = time.time()
     children = _runner_tmp_children()
-    ages = [max(0, int(now - child.stat().st_mtime)) for child in children]
+    ages = []
+    for child in children:
+        try:
+            ages.append(max(0, int(now - child.stat().st_mtime)))
+        except FileNotFoundError:
+            continue
     stale_count = sum(1 for age in ages if age >= stale_after_seconds)
     return RunnerTmpSummary(
-        total=len(children),
+        total=len(ages),
         stale=stale_count,
         oldest_age_seconds=max(ages) if ages else None,
         path=root,

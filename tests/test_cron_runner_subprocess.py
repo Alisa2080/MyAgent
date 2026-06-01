@@ -62,6 +62,30 @@ def test_runner_tmp_residuals_report_old_directory(monkeypatch, tmp_path):
     assert summary.oldest_age_seconds >= 24 * 60 * 60
 
 
+def test_inspect_runner_tmp_skips_vanished_entries(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+    from cron.paths import get_runner_tmp_dir
+    from cron.runner_subprocess import inspect_runner_tmp
+
+    vanished = get_runner_tmp_dir() / "abcdef1234567890"
+    vanished.mkdir(parents=True)
+
+    def children_after_listing():
+        vanished.rmdir()
+        return [vanished]
+
+    monkeypatch.setattr(
+        "cron.runner_subprocess._runner_tmp_children",
+        children_after_listing,
+    )
+
+    summary = inspect_runner_tmp(stale_after_seconds=24 * 60 * 60)
+
+    assert summary.total == 0
+    assert summary.stale == 0
+    assert summary.oldest_age_seconds is None
+
+
 def test_cleanup_runner_tmp_removes_only_old_valid_dirs(monkeypatch, tmp_path):
     import time
 
@@ -90,6 +114,30 @@ def test_cleanup_runner_tmp_removes_only_old_valid_dirs(monkeypatch, tmp_path):
     assert fresh_valid.exists()
     assert fresh_smoke.exists()
     assert invalid.exists()
+
+
+def test_cleanup_runner_tmp_ignores_invalid_smoke_prefix_dir(monkeypatch, tmp_path):
+    import time
+
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+    from cron.paths import get_runner_tmp_dir
+    from cron.runner_subprocess import cleanup_runner_tmp
+
+    root = get_runner_tmp_dir()
+    valid_smoke = root / "smoke-abcdef1234567890"
+    invalid_smoke = root / "smoke-not-a-run-dir"
+    valid_smoke.mkdir(parents=True)
+    invalid_smoke.mkdir(parents=True)
+    old_time = time.time() - (25 * 60 * 60)
+    os.utime(valid_smoke, (old_time, old_time))
+    os.utime(invalid_smoke, (old_time, old_time))
+
+    result = cleanup_runner_tmp(stale_after_seconds=24 * 60 * 60)
+
+    assert result.removed == 1
+    assert result.failed == 0
+    assert not valid_smoke.exists()
+    assert invalid_smoke.exists()
 
 
 # ----------------------------------------------------------------------
