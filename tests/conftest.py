@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import sys
 import types
-import importlib.util
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -82,13 +81,31 @@ def _install_langchain_stubs(monkeypatch=None):
         setter("langchain_core.messages", mock_langchain_core.messages)
 
 
+def _is_real_package_installed(name: str) -> bool:
+    """Return True if *name* is a real importable package (not a MagicMock stub).
+
+    ``importlib.util.find_spec`` raises ``ValueError`` when the module is
+    already in ``sys.modules`` but its ``__spec__`` is ``None`` — which is
+    the case for MagicMock stubs.  We guard against that here.
+    """
+    existing = sys.modules.get(name)
+    if existing is not None:
+        # Already loaded: real if it has a genuine __spec__ with an origin.
+        spec = getattr(existing, "__spec__", None)
+        return spec is not None and getattr(spec, "origin", None) is not None
+    # Not yet loaded: ask importlib — safe because there's no stub in sys.modules.
+    import importlib.util
+    return importlib.util.find_spec(name) is not None
+
+
 def _install_optional_dep_stubs(monkeypatch=None):
+    """Install lightweight MagicMock stubs for optional packages that are not
+    installed in the current environment.  Skips stubbing when the real package
+    is already installed so that tests which exercise the actual functionality
+    (e.g. cron-expression parsing via ``croniter``) continue to work.
+    """
     setter = monkeypatch.setitem if monkeypatch is not None else sys.modules.setdefault
-    try:
-        dateutil_spec = importlib.util.find_spec("dateutil")
-    except ValueError:
-        dateutil_spec = None
-    if dateutil_spec is None:
+    if not _is_real_package_installed("dateutil"):
         if monkeypatch is not None:
             setter(sys.modules, "dateutil", MagicMock())
             setter(sys.modules, "dateutil.parser", MagicMock())

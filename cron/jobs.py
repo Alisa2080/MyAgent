@@ -257,6 +257,23 @@ def _coerce_repeat_state(value: Any) -> dict[str, Any]:
     return {"times": None, "completed": 0}
 
 
+def _normalize_timeout_field(value: Any) -> int | None:
+    """Coerce a timeout field value to int (>=0) or None.
+
+    - None / empty string / whitespace → None
+    - Numeric string or int → int; 0 is allowed (means "disabled / no timeout")
+    """
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        return int(text)
+    except (TypeError, ValueError):
+        return None
+
+
 def _normalize_updates(
     updates: dict[str, Any],
     existing_job: dict[str, Any] | None = None,
