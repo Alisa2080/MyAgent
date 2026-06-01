@@ -1677,6 +1677,80 @@ class StateStore:
             ).fetchone()
         return None if row is None else dict(row)
 
+    def promote_queued_runs(
+        self,
+        *,
+        now_text: str,
+        limit: int = 20,
+    ) -> list[dict[str, Any]]:
+        now_dt = _parse_time(now_text)
+        if now_dt is None or int(limit) <= 0:
+            return []
+        promoted: list[dict[str, Any]] = []
+        promoted_keys: set[str] = set()
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            rows = conn.execute(
+                """
+                SELECT * FROM runs
+                WHERE status = 'queued'
+                ORDER BY scheduled_for, created_at, id
+                """
+            ).fetchall()
+            for row in rows:
+                if len(promoted) >= int(limit):
+                    break
+                run = dict(row)
+                key = str(run.get("concurrency_key") or "")
+                if not key or key in promoted_keys:
+                    continue
+                occupying = conn.execute(
+                    """
+                    SELECT id FROM runs
+                    WHERE concurrency_key = ?
+                      AND status IN ('claimed', 'running')
+                    LIMIT 1
+                    """,
+                    (key,),
+                ).fetchone()
+                if occupying is not None:
+                    continue
+                lease_expires_at = (now_dt + timedelta(seconds=self.lease_seconds)).isoformat()
+                conn.execute(
+                    """
+                    UPDATE runs
+                    SET status = 'claimed',
+                        claimed_at = ?,
+                        lease_expires_at = ?,
+                        heartbeat_at = ?,
+                        last_activity_at = ?,
+                        last_activity_desc = 'claimed',
+                        updated_at = ?
+                    WHERE id = ? AND status = 'queued'
+                    """,
+                    (now_text, lease_expires_at, now_text, now_text, now_text, run["id"]),
+                )
+                conn.execute(
+                    """
+                    UPDATE jobs
+                    SET state = 'running',
+                        lease_run_id = ?,
+                        lease_expires_at = ?,
+                        updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (run["id"], lease_expires_at, now_text, run["job_id"]),
+                )
+                updated_run = self._row_to_run(
+                    conn.execute("SELECT * FROM runs WHERE id = ?", (run["id"],)).fetchone()
+                )
+                job = self._row_to_job(
+                    conn.execute("SELECT * FROM jobs WHERE id = ?", (run["job_id"],)).fetchone()
+                )
+                promoted.append({"job": job, "run": updated_run})
+                promoted_keys.add(key)
+        return promoted
+
     def list_stale_running_runs(self, *, now_text: str | None = None, limit: int = 5) -> list[dict[str, Any]]:
         """Detect runs that have exceeded lease, heartbeat, or idle timeout thresholds."""
         now_dt = _parse_time(now_text or utc_now().isoformat())

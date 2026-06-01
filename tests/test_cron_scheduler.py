@@ -831,3 +831,46 @@ def test_process_claimed_abandons_run_marked_stale_before_runner(monkeypatch, tm
 
     # The result should indicate failure due to stale detection
     assert result.success is False or "abandoned" in result.error.lower() or "idle_timeout" in result.error.lower()
+
+
+def test_tick_promotes_queued_before_claiming_due_jobs(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    from cron.jobs import create_job, update_job
+    from cron.scheduler import tick
+    from cron.state_store import StateStore
+    from cron.contracts import JobRunResult
+    import cron.state_store as state_store_module
+
+    first = create_job(
+        prompt="first",
+        schedule="every 5m",
+        concurrency_key="repo:a",
+        concurrency_policy="queue_all",
+    )
+    second = create_job(
+        prompt="second",
+        schedule="every 5m",
+        concurrency_key="repo:a",
+        concurrency_policy="queue_all",
+    )
+    update_job(first["id"], {"next_run_at": "2026-05-29T10:00:00+00:00"})
+    update_job(second["id"], {"next_run_at": "2026-05-29T10:00:00+00:00"})
+
+    tick_dt = datetime(2026, 5, 29, 10, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(state_store_module, "utc_now", lambda: tick_dt)
+
+    results = []
+
+    def runner(job):
+        results.append(job["id"])
+        return JobRunResult(success=True, output_doc="ok", final_response="ok")
+
+    tick(now_text="2026-05-29T10:00:00+00:00", job_runner=runner)
+    tick_dt = datetime(2026, 5, 29, 10, 1, tzinfo=timezone.utc)
+    monkeypatch.setattr(state_store_module, "utc_now", lambda: tick_dt)
+    tick(now_text="2026-05-29T10:01:00+00:00", job_runner=runner)
+
+    assert len(results) == 2
+    runs = StateStore().list_runs(statuses={"succeeded"}, limit=10)
+    assert len(runs) == 2

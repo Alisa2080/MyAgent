@@ -1265,3 +1265,80 @@ def test_claim_due_jobs_replace_running_abandons_active_run(monkeypatch, tmp_pat
     assert len(abandoned) == 1
     assert abandoned[0]["exit_reason"] == "replaced_by_newer_run"
     assert abandoned[0]["replaced_by_run_id"] == active[-1]["id"]
+
+
+def test_promote_queued_runs_claims_one_per_key(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    import cron.state_store as state_store_module
+    from cron.state_store import StateStore
+
+    due_dt = datetime(2026, 5, 29, 10, 1, tzinfo=timezone.utc)
+    monkeypatch.setattr(state_store_module, "utc_now", lambda: due_dt)
+
+    store = StateStore()
+    # Create three jobs: two for repo:a (will queue), one for repo:b
+    # Due order: a1 first (claimed), a2 second (queued), b1 third (claimed)
+    for i, (job_id, key) in enumerate([
+        ("a1", "repo:a"),
+        ("a2", "repo:a"),
+        ("b1", "repo:b"),
+    ]):
+        store.create_job({
+            "id": job_id,
+            "name": f"job {job_id}",
+            "prompt": f"job {job_id}",
+            "schedule": {"kind": "interval", "minutes": 5},
+            "schedule_display": "every 5m",
+            "enabled": True,
+            "state": "scheduled",
+            "next_run_at": "2026-05-29T10:00:00+00:00",
+            "repeat": {"times": None, "completed": 0},
+            "deliver": "local",
+            "concurrency_key": key,
+            "concurrency_policy": "queue_all",
+            "created_at": f"2026-05-29T10:00:00+00:0{i}",
+        })
+
+    store.claim_due_jobs(now_text="2026-05-29T10:00:00+00:00", limit=10)
+
+    # Complete the repo:a claimed run (a1's run) to free up the key
+    a_claimed = next(r for r in store.list_runs(limit=20)
+                      if r["status"] == "claimed" and r.get("concurrency_key") == "repo:a")
+    store.complete_run(
+        a_claimed["id"],
+        success=True,
+        output_path=None,
+        final_response="ok",
+        error=None,
+        next_run_at=None,
+        completed=False,
+    )
+
+    promoted = store.promote_queued_runs(
+        now_text="2026-05-29T10:01:00+00:00",
+        limit=10,
+    )
+
+    # Only repo:a should be promoted (repo:a had a queued run and now the key is free)
+    # repo:b should NOT be promoted (it already had a claimed run, no queued run for it)
+    promoted_keys = [item["run"]["concurrency_key"] for item in promoted]
+    assert promoted_keys == ["repo:a"]
+
+
+def test_promote_queued_runs_skips_key_with_running_run(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    from cron.state_store import StateStore
+
+    store = StateStore()
+    _due_job(store, job_id="a1", key="repo:a", policy="queue_all")
+    _due_job(store, job_id="a2", key="repo:a", policy="queue_all")
+
+    store.claim_due_jobs(now_text="2026-05-29T10:00:00+00:00", limit=10)
+    promoted = store.promote_queued_runs(
+        now_text="2026-05-29T10:01:00+00:00",
+        limit=10,
+    )
+
+    assert promoted == []
