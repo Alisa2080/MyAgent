@@ -860,3 +860,55 @@ def test_main_cron_test_delivery_requires_target(monkeypatch, tmp_path, capsys):
     captured = capsys.readouterr()
     assert code == 2
     assert "--target" in captured.err
+
+
+def test_main_cron_service_install_dispatches(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("AGENT_CLI_HOME", str(tmp_path))
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    import agent_cli.main as main_module
+    from agent_cli.cron_commands import CronCommandResult
+
+    captured = {}
+
+    def fake_install(**kwargs):
+        captured.update(kwargs)
+        return CronCommandResult("installed", exit_code=0)
+
+    monkeypatch.setattr(main_module.cron_commands, "install_cron_service", fake_install)
+
+    code = main_module.main(
+        [
+            "cron",
+            "service",
+            "install",
+            "--interval",
+            "30",
+            "--lease-seconds",
+            "90",
+            "--force",
+        ]
+    )
+
+    assert code == 0
+    assert captured == {"interval_seconds": 30.0, "lease_seconds": 90, "force": True}
+    assert "installed" in capsys.readouterr().out
+
+
+def test_main_cron_service_status_dispatches(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("AGENT_CLI_HOME", str(tmp_path))
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    import agent_cli.main as main_module
+    from agent_cli.cron_commands import CronCommandResult
+
+    monkeypatch.setattr(
+        main_module.cron_commands,
+        "cron_service_status",
+        lambda: CronCommandResult("service status", exit_code=0),
+    )
+
+    code = main_module.main(["cron", "service", "status"])
+
+    assert code == 0
+    assert "service status" in capsys.readouterr().out

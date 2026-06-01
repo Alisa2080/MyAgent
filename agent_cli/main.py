@@ -166,6 +166,23 @@ def build_parser() -> argparse.ArgumentParser:
     cron_serve.add_argument("--lease-seconds", type=int, default=180)
     cron_serve.add_argument("--once", action="store_true")
 
+    cron_service = cron_subparsers.add_parser("service", parents=[public_options])
+    cron_service_subparsers = cron_service.add_subparsers(dest="cron_service_command")
+
+    cron_service_install = cron_service_subparsers.add_parser(
+        "install",
+        parents=[public_options],
+    )
+    cron_service_install.add_argument("--interval", type=float, default=60.0)
+    cron_service_install.add_argument("--lease-seconds", type=int, default=180)
+    cron_service_install.add_argument("--force", action="store_true")
+
+    for service_action in ("uninstall", "start", "stop", "restart", "status"):
+        cron_service_subparsers.add_parser(service_action, parents=[public_options])
+
+    cron_service_logs = cron_service_subparsers.add_parser("logs", parents=[public_options])
+    cron_service_logs.add_argument("--lines", type=int, default=100)
+
     cron_test_delivery = cron_subparsers.add_parser("test-delivery", parents=[public_options])
     cron_test_delivery.add_argument("--target", required=True)
     cron_test_delivery.add_argument("--session-id", dest="session_id")
@@ -349,6 +366,26 @@ def _run_cron_command(args: argparse.Namespace):
             lease_seconds=args.lease_seconds,
             once=args.once,
         )
+    if subcommand == "service":
+        service_command = getattr(args, "cron_service_command", None)
+        if service_command == "install":
+            return cron_commands.install_cron_service(
+                interval_seconds=args.interval,
+                lease_seconds=args.lease_seconds,
+                force=bool(getattr(args, "force", False)),
+            )
+        if service_command == "uninstall":
+            return cron_commands.uninstall_cron_service()
+        if service_command == "start":
+            return cron_commands.start_cron_service()
+        if service_command == "stop":
+            return cron_commands.stop_cron_service()
+        if service_command == "restart":
+            return cron_commands.restart_cron_service()
+        if service_command == "status":
+            return cron_commands.cron_service_status()
+        if service_command == "logs":
+            return cron_commands.cron_service_logs(lines=args.lines)
     if subcommand == "test-delivery":
         return cron_commands.test_delivery(
             target=args.target,

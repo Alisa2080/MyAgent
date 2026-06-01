@@ -237,6 +237,111 @@ def serve_cron(
     return CronCommandResult("Cron service exited.", exit_code=exit_code)
 
 
+def _cron_service_result(result) -> CronCommandResult:
+    return CronCommandResult(result.message, exit_code=result.exit_code)
+
+
+def install_cron_service(
+    *,
+    interval_seconds: float,
+    lease_seconds: int,
+    force: bool = False,
+) -> CronCommandResult:
+    from cron.service_manager import install_service
+
+    return _cron_service_result(
+        install_service(
+            interval_seconds=interval_seconds,
+            lease_seconds=lease_seconds,
+            force=force,
+        )
+    )
+
+
+def uninstall_cron_service() -> CronCommandResult:
+    from cron.service_manager import uninstall_service
+
+    return _cron_service_result(uninstall_service())
+
+
+def start_cron_service() -> CronCommandResult:
+    from cron.service_manager import start_service
+
+    return _cron_service_result(start_service())
+
+
+def stop_cron_service() -> CronCommandResult:
+    from cron.service_manager import stop_service
+
+    return _cron_service_result(stop_service())
+
+
+def restart_cron_service() -> CronCommandResult:
+    from cron.service_manager import restart_service
+
+    return _cron_service_result(restart_service())
+
+
+def cron_service_logs(*, lines: int = 100) -> CronCommandResult:
+    from cron.service_manager import service_logs
+
+    return _cron_service_result(service_logs(lines=lines))
+
+
+def _service_manager_summary_line(status) -> str:
+    if not status.supported:
+        return "Service manager: unsupported"
+    installed = "installed" if status.installed else "not-installed"
+    active = "active" if status.active else "inactive"
+    enabled = "enabled" if status.enabled else "disabled"
+    return f"Service manager: {status.platform} {installed} {active} {enabled}"
+
+
+def _last_tick_line(last_tick: dict[str, Any]) -> str:
+    return (
+        "Last tick: "
+        f"due={last_tick.get('due', 0)} "
+        f"ran={last_tick.get('ran', 0)} "
+        f"succeeded={last_tick.get('succeeded', 0)} "
+        f"failed={last_tick.get('failed', 0)} "
+        f"skipped={last_tick.get('skipped', 0)}"
+    )
+
+
+def cron_service_status() -> CronCommandResult:
+    from cron.service_manager import compose_service_status
+
+    status = compose_service_status()
+    ready = (
+        status.supported
+        and status.installed
+        and status.active
+        and status.heartbeat_fresh
+    )
+    lines = [
+        _service_manager_summary_line(status),
+        f"Automatic scheduling: {'enabled' if ready else 'not-ready'}",
+    ]
+    if status.pid:
+        lines.append(f"PID: {status.pid}")
+    lines.append(f"Heartbeat: {'fresh' if status.heartbeat_fresh else 'stale-or-missing'}")
+    if status.process_state:
+        lines.append(f"Process state: {status.process_state}")
+    if status.leader_state:
+        lines.append(f"Leader state: {status.leader_state}")
+    if status.last_heartbeat_at:
+        lines.append(f"Last heartbeat: {status.last_heartbeat_at}")
+    if status.last_tick:
+        lines.append(_last_tick_line(status.last_tick))
+    if status.last_error:
+        lines.append(f"Last service error: {status.last_error}")
+    if status.exit_reason:
+        lines.append(f"Exit reason: {status.exit_reason}")
+    if status.error:
+        lines.append(f"Platform error: {status.error}")
+    return CronCommandResult("\n".join(lines), exit_code=0 if status.supported else 2)
+
+
 def _service_status_lines() -> list[str]:
     from cron.leader import SchedulerLeaderLease
     from cron.service_state import read_service_status, service_status_path
