@@ -1366,6 +1366,106 @@ def test_test_delivery_dead_target_returns_exit_code_2(monkeypatch, tmp_path):
     assert "status=dead" in result.text
 
 
+def _register_env_recording_feishu(monkeypatch, sent_envs):
+    import gateway.registry as gateway_registry
+    from gateway.contracts import SendResult
+
+    class FakeFeishuAdapter:
+        key = "feishu"
+
+        def validate_target(self, target):
+            return SendResult(True)
+
+        def token_smoke(self):
+            return SendResult(True)
+
+        def send_text(self, target, message):
+            sent_envs.append(
+                {
+                    "FEISHU_APP_ID": os.environ.get("FEISHU_APP_ID"),
+                    "FEISHU_APP_SECRET": os.environ.get("FEISHU_APP_SECRET"),
+                    "target_id": target.target_id,
+                    "text": message.text,
+                }
+            )
+            missing = [
+                key
+                for key in ("FEISHU_APP_ID", "FEISHU_APP_SECRET")
+                if not os.environ.get(key)
+            ]
+            if missing:
+                return SendResult(
+                    False,
+                    error=f"missing required Feishu environment variables: {', '.join(missing)}",
+                )
+            return SendResult(True)
+
+    monkeypatch.setattr(gateway_registry, "_ADAPTER_FACTORIES", [])
+    monkeypatch.setattr(gateway_registry, "_DEFAULT_GATEWAY_REGISTRY", None)
+    gateway_registry.register_gateway_adapter_factory(lambda **kwargs: FakeFeishuAdapter())
+
+
+def test_test_delivery_uses_service_env_for_feishu(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+    monkeypatch.delenv("FEISHU_APP_ID", raising=False)
+    monkeypatch.delenv("FEISHU_APP_SECRET", raising=False)
+
+    from agent_cli import cron_commands
+    from cron.service_env import write_service_env
+
+    write_service_env(
+        {
+            "FEISHU_APP_ID": "service-app",
+            "FEISHU_APP_SECRET": "service-secret",
+        }
+    )
+    sent_envs = []
+    _register_env_recording_feishu(monkeypatch, sent_envs)
+
+    result = cron_commands.test_delivery(target="feishu:oc_service")
+
+    assert result.exit_code == 0
+    assert "status=delivered" in result.text
+    assert "service-app" not in result.text
+    assert "service-secret" not in result.text
+    assert len(sent_envs) == 1
+    assert sent_envs[0]["FEISHU_APP_ID"] == "service-app"
+    assert sent_envs[0]["FEISHU_APP_SECRET"] == "service-secret"
+    assert sent_envs[0]["target_id"] == "oc_service"
+    assert sent_envs[0]["text"].startswith(
+        "Cron job update: test-delivery\nstatus: ok\njob_id: test-delivery"
+    )
+    assert os.environ.get("FEISHU_APP_ID") is None
+    assert os.environ.get("FEISHU_APP_SECRET") is None
+
+
+def test_test_delivery_shell_env_overrides_service_env(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+    monkeypatch.setenv("FEISHU_APP_ID", "shell-app")
+    monkeypatch.setenv("FEISHU_APP_SECRET", "shell-secret")
+
+    from agent_cli import cron_commands
+    from cron.service_env import write_service_env
+
+    write_service_env(
+        {
+            "FEISHU_APP_ID": "service-app",
+            "FEISHU_APP_SECRET": "service-secret",
+        }
+    )
+    sent_envs = []
+    _register_env_recording_feishu(monkeypatch, sent_envs)
+
+    result = cron_commands.test_delivery(target="feishu:oc_shell")
+
+    assert result.exit_code == 0
+    assert "status=delivered" in result.text
+    assert sent_envs[0]["FEISHU_APP_ID"] == "shell-app"
+    assert sent_envs[0]["FEISHU_APP_SECRET"] == "shell-secret"
+    assert os.environ["FEISHU_APP_ID"] == "shell-app"
+    assert os.environ["FEISHU_APP_SECRET"] == "shell-secret"
+
+
 def test_cron_status_lists_registered_delivery_adapters(monkeypatch, tmp_path):
     monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
 

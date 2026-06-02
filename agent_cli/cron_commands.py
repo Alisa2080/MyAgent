@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 import json
 import os
@@ -300,6 +302,29 @@ def serve_cron(
 
 def _cron_service_result(result) -> CronCommandResult:
     return CronCommandResult(result.message, exit_code=result.exit_code)
+
+
+@contextmanager
+def _cron_delivery_env() -> Iterator[None]:
+    from cron.service_env import read_service_env
+
+    service_values = read_service_env()
+    if not service_values:
+        yield
+        return
+
+    original = {key: os.environ.get(key) for key in service_values}
+    try:
+        for key, value in service_values.items():
+            if key not in os.environ:
+                os.environ[key] = value
+        yield
+    finally:
+        for key, value in original.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
 
 
 def install_cron_service(
@@ -1227,17 +1252,18 @@ def test_delivery(
             )
         job["origin"] = _cli_origin(session_id)
 
-    result = enqueue_result(
-        job,
-        JobRunResult(
-            success=True,
-            output_doc="# Test Delivery\n\nThis is a cron delivery test.",
-            final_response="This is a cron delivery test.",
-        ),
-        output_path="",
-        run_at=now(),
-    )
-    process_due(limit=20)
+    with _cron_delivery_env():
+        result = enqueue_result(
+            job,
+            JobRunResult(
+                success=True,
+                output_doc="# Test Delivery\n\nThis is a cron delivery test.",
+                final_response="This is a cron delivery test.",
+            ),
+            output_path="",
+            run_at=now(),
+        )
+        process_due(limit=20)
     if result is None:
         return CronCommandResult("No delivery event created.", exit_code=2)
     events = result if isinstance(result, list) else [result]
