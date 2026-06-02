@@ -2558,8 +2558,8 @@ def test_cron_tick_uses_service_env_for_feishu_delivery(monkeypatch, tmp_path):
     _register_env_recording_feishu(monkeypatch, sent_envs)
 
     run_time = datetime.fromisoformat("2026-06-02T18:10:00+08:00")
-    scheduler.now = lambda: run_time
-    state_store.utc_now = lambda: run_time
+    monkeypatch.setattr(scheduler, "now", lambda: run_time)
+    monkeypatch.setattr(state_store, "utc_now", lambda: run_time)
     job = create_job(
         "tick feishu output",
         "every 5m",
