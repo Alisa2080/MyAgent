@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import json
-from pathlib import Path
 from typing import Any, Callable, Protocol
 from urllib.parse import parse_qs, urlparse
 
@@ -97,8 +96,8 @@ def validate_wecom_webhook_url(url: str | None) -> str | None:
         return "wecom webhook URL must use http or https"
     if parsed.hostname != "qyapi.weixin.qq.com":
         return "wecom webhook URL host must be qyapi.weixin.qq.com"
-    if "/cgi-bin/webhook/send" not in parsed.path:
-        return "wecom webhook URL path must include /cgi-bin/webhook/send"
+    if parsed.path != "/cgi-bin/webhook/send":
+        return "wecom webhook URL path must be /cgi-bin/webhook/send"
     if not parse_qs(parsed.query).get("key"):
         return "wecom webhook URL requires key query parameter"
     return None
@@ -163,11 +162,12 @@ class WeComDeliveryAdapter:
         return AdapterValidation(error is None, error)
 
     def deliver(self, event: dict[str, Any], job: dict[str, Any] | None, run: dict[str, Any] | None) -> DeliveryResult:
-        if not event.get("address"):
+        address_error = validate_wecom_webhook_url(event.get("address"))
+        if address_error:
             return DeliveryResult(
                 False,
                 retryable=False,
-                error="wecom delivery requires AGENT_CRON_WECOM_WEBHOOK_URL or explicit webhook URL",
+                error=address_error,
             )
         markdown = _format_wecom_markdown(event, job, run)
         payload = {"msgtype": "markdown", "markdown": {"content": markdown}}
@@ -183,9 +183,15 @@ class WeComDeliveryAdapter:
             parsed = json.loads(body or "{}")
         except json.JSONDecodeError:
             return DeliveryResult(True)
+        if not isinstance(parsed, dict):
+            return DeliveryResult(True)
         errcode = parsed.get("errcode", 0)
         if errcode in (0, "0", None):
             return DeliveryResult(True)
         errmsg = str(parsed.get("errmsg") or body or "wecom delivery failed")
-        retryable = errcode in _RETRYABLE_WECOM_ERRCODES
+        try:
+            normalized_errcode = int(errcode)
+        except (TypeError, ValueError):
+            normalized_errcode = None
+        retryable = normalized_errcode in _RETRYABLE_WECOM_ERRCODES
         return DeliveryResult(False, retryable=retryable, error=f"WeCom errcode {errcode}: {errmsg}")

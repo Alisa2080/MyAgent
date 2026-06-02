@@ -170,7 +170,7 @@ def test_dispatcher_can_skip_stale_recovery(monkeypatch, tmp_path):
 def test_default_registry_active_dispatch_keys_exclude_local_and_origin():
     from cron.delivery_registry import default_delivery_registry
 
-    assert default_delivery_registry().active_adapter_keys() == ["webhook"]
+    assert default_delivery_registry().active_adapter_keys() == ["webhook", "wecom"]
 
 
 def test_dispatcher_leaves_origin_events_for_origin_poller(monkeypatch, tmp_path):

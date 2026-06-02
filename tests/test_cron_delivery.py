@@ -384,6 +384,114 @@ def test_wecom_adapter_treats_non_json_2xx_as_delivered(monkeypatch, tmp_path):
     assert DeliveryStore().get(event["id"])["status"] == "delivered"
 
 
+def test_process_due_injects_webhook_sender_into_default_wecom_adapter(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+    sent = []
+    url = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=abc"
+
+    from cron.delivery import JobRunResult, enqueue_result, process_due
+    from cron.delivery_store import DeliveryStore
+
+    def fake_post(post_url, payload, timeout=10):
+        sent.append((post_url, payload, timeout))
+        return 200, '{"errcode":0,"errmsg":"ok"}'
+
+    event = enqueue_result(
+        {"id": "job-default-wecom", "name": "Daily", "deliver": f"wecom:{url}"},
+        JobRunResult(success=True, output_doc="# out", final_response="done"),
+        "/tmp/out.md",
+        "2026-05-28T10:00:00+00:00",
+    )
+
+    summary = process_due(limit=10, webhook_sender=fake_post)
+
+    assert summary["delivered"] == 1
+    assert sent[0][0] == url
+    assert sent[0][1]["msgtype"] == "markdown"
+    assert DeliveryStore().get(event["id"])["status"] == "delivered"
+
+
+def test_wecom_adapter_treats_non_dict_json_2xx_as_delivered():
+    from cron.delivery_adapters import WeComDeliveryAdapter
+
+    adapter = WeComDeliveryAdapter(sender=lambda url, payload, timeout=10: (200, '["ok"]'))
+    result = adapter.deliver(
+        {
+            "id": "event-1",
+            "address": "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=abc",
+            "payload_json": '{"job_id":"job-1","job_name":"Daily","status":"ok"}',
+        },
+        None,
+        None,
+    )
+
+    assert result.delivered is True
+
+
+def test_wecom_adapter_retries_string_temporary_errcode():
+    from cron.delivery_adapters import WeComDeliveryAdapter
+
+    adapter = WeComDeliveryAdapter(sender=lambda url, payload, timeout=10: (200, '{"errcode":"45009","errmsg":"rate limited"}'))
+    result = adapter.deliver(
+        {
+            "id": "event-1",
+            "address": "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=abc",
+            "payload_json": '{"job_id":"job-1","job_name":"Daily","status":"ok"}',
+        },
+        None,
+        None,
+    )
+
+    assert result.delivered is False
+    assert result.retryable is True
+    assert "rate limited" in result.error
+
+
+def test_wecom_adapter_validates_persisted_event_address_before_sending(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+    sent = []
+
+    from cron.delivery_adapters import WeComDeliveryAdapter
+    from cron.delivery_dispatcher import DeliveryDispatcher
+    from cron.delivery_registry import default_delivery_registry
+    from cron.state_store import StateStore
+
+    def fake_post(post_url, payload, timeout=10):
+        sent.append((post_url, payload, timeout))
+        return 200, '{"errcode":0,"errmsg":"ok"}'
+
+    store = StateStore()
+    event = store.enqueue_delivery_event(
+        job_id="job-invalid-wecom",
+        run_id=None,
+        job_name="Daily",
+        run_at="2026-05-28T10:00:00+00:00",
+        target="wecom:https://qyapi.weixin.qq.com/cgi-bin/webhook/send-extra?key=abc",
+        target_type="platform",
+        adapter_key="wecom",
+        address="https://qyapi.weixin.qq.com/cgi-bin/webhook/send-extra?key=abc",
+        thread_id=None,
+        origin=None,
+        final_response="done",
+        output_path="/tmp/out.md",
+        payload={"job_id": "job-invalid-wecom", "job_name": "Daily", "status": "ok"},
+        status="pending",
+    )
+    registry = default_delivery_registry()
+    registry.register(WeComDeliveryAdapter(sender=fake_post))
+
+    summary = DeliveryDispatcher(store=store, registry=registry).dispatch_due(
+        limit=10,
+        adapter_keys={"wecom"},
+    )
+
+    stored = store.get_delivery_event(event["id"])
+    assert summary["dead"] == 1
+    assert stored["status"] == "dead"
+    assert "path must be /cgi-bin/webhook/send" in stored["last_error"]
+    assert sent == []
+
+
 def test_registered_platform_adapter_enqueues_and_dispatches_without_core_branch(monkeypatch, tmp_path):
     monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
 

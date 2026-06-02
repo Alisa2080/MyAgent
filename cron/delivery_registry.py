@@ -89,7 +89,7 @@ def build_delivery_registry(*, webhook_sender=None, extra_adapters=None) -> Deli
     registry.register(LocalDeliveryAdapter())
     registry.register(OriginDeliveryAdapter())
     registry.register(WebhookDeliveryAdapter(sender=webhook_sender))
-    registry.register(WeComDeliveryAdapter())
+    registry.register(WeComDeliveryAdapter(sender=webhook_sender))
     for adapter in extra_adapters or []:
         registry.register(adapter)
     for factory in list(_ADAPTER_FACTORIES):
