@@ -90,3 +90,43 @@ def test_stats_and_stale_delivering(monkeypatch, tmp_path):
 
     assert stats["delivering"] == 1
     assert stale[0]["id"] == event["id"]
+
+
+def test_list_events_filters_by_job_and_run(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    from cron.delivery_store import DeliveryStore
+
+    store = DeliveryStore()
+    first = store.enqueue(
+        job_id="job-1",
+        run_id="run-1",
+        job_name="Daily",
+        run_at=None,
+        target="webhook:https://example.invalid/first",
+        target_type="webhook",
+        target_id="https://example.invalid/first",
+        final_response="done",
+        output_path=None,
+        payload={"type": "cron_result", "name": "first"},
+    )
+    second = store.enqueue(
+        job_id="job-2",
+        run_id="run-2",
+        job_name="Weekly",
+        run_at=None,
+        target="webhook:https://example.invalid/second",
+        target_type="webhook",
+        target_id="https://example.invalid/second",
+        final_response="done",
+        output_path=None,
+        payload={"type": "cron_result", "name": "second"},
+    )
+
+    job_events = store.list_events(job_id="job-1")
+    run_events = store.list_events(run_id="run-2")
+    limited_events = store.list_events(limit=1)
+
+    assert [event["id"] for event in job_events] == [first["id"]]
+    assert [event["id"] for event in run_events] == [second["id"]]
+    assert len(limited_events) == 1

@@ -103,23 +103,6 @@ def run_service_once(now_text: str, job_runner):
     return service, tick_result, exit_code
 
 
-def list_delivery_events(*, job_id: str, limit: int = 10) -> list[dict[str, Any]]:
-    from cron.state_store import StateStore
-
-    store = StateStore()
-    with store._connect() as conn:
-        rows = conn.execute(
-            """
-            SELECT * FROM delivery_events
-            WHERE job_id = ?
-            ORDER BY created_at DESC
-            LIMIT ?
-            """,
-            (job_id, limit),
-        ).fetchall()
-    return [dict(row) for row in rows]
-
-
 def create_due_job(
     *,
     prompt: str = "write report",
@@ -149,6 +132,7 @@ def create_due_job(
 
 def test_service_executes_due_job_saves_output_and_delivers_webhook(isolated_cron_home):
     from cron.service_state import read_service_status
+    from cron.delivery_store import DeliveryStore
     from cron.state_store import StateStore
 
     sender = ScriptedWebhookSender([(200, "ok")])
@@ -162,8 +146,9 @@ def test_service_executes_due_job_saves_output_and_delivers_webhook(isolated_cro
     service, tick_result, exit_code = run_service_once(BASE_TIME, runner)
 
     store = StateStore()
+    delivery_store = DeliveryStore()
     runs = store.runs_for_job(job["id"])
-    events = list_delivery_events(job_id=job["id"], limit=10)
+    events = delivery_store.list_events(job_id=job["id"], limit=10)
     service_status = read_service_status()
 
     assert exit_code == 0
