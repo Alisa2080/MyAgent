@@ -502,6 +502,128 @@ def test_wecom_adapter_validates_persisted_event_address_before_sending(monkeypa
     assert sent == []
 
 
+def test_feishu_delivery_target_requires_explicit_chat(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+    monkeypatch.setenv("FEISHU_APP_ID", "cli_xxx")
+    monkeypatch.setenv("FEISHU_APP_SECRET", "secret")
+
+    from cron.jobs import create_job
+
+    with pytest.raises(ValueError, match="feishu delivery requires explicit target: feishu:<chat_id>"):
+        create_job(prompt="write report", schedule="30m", deliver="feishu")
+
+
+def test_feishu_delivery_target_stores_chat_id(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+    monkeypatch.setenv("FEISHU_APP_ID", "cli_xxx")
+    monkeypatch.setenv("FEISHU_APP_SECRET", "secret")
+
+    from cron.jobs import create_job
+
+    job = create_job(prompt="write report", schedule="30m", deliver="feishu:oc_123")
+
+    target = job["delivery_targets"][0]
+    assert target["raw"] == "feishu:oc_123"
+    assert target["target_type"] == "platform"
+    assert target["adapter_key"] == "feishu"
+    assert target["address"] == "oc_123"
+
+
+def test_feishu_delivery_dispatches_through_gateway(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+    monkeypatch.setenv("FEISHU_APP_ID", "cli_xxx")
+    monkeypatch.setenv("FEISHU_APP_SECRET", "secret")
+
+    from cron.delivery import JobRunResult, enqueue_result, process_due
+    from cron.delivery_store import DeliveryStore
+    import gateway.registry as gateway_registry
+    from gateway.contracts import SendResult
+
+    sent = []
+
+    class FakeFeishuAdapter:
+        key = "feishu"
+
+        def validate_target(self, target):
+            return SendResult(ok=True)
+
+        def send_text(self, target, message):
+            sent.append((target, message))
+            return SendResult(ok=True)
+
+    gateway_registry.clear_gateway_adapter_factories()
+    gateway_registry.register_gateway_adapter_factory(lambda **kwargs: FakeFeishuAdapter())
+    try:
+        event = enqueue_result(
+            {"id": "job-1", "name": "Daily", "deliver": "feishu:oc_123"},
+            JobRunResult(success=True, output_doc="# out", final_response="done"),
+            "/tmp/out.md",
+            "2026-06-02T10:00:00+00:00",
+        )
+        summary = process_due(limit=10)
+    finally:
+        gateway_registry.clear_gateway_adapter_factories()
+
+    assert summary["delivered"] == 1
+    assert DeliveryStore().get(event["id"])["status"] == "delivered"
+    target, message = sent[0]
+    assert target.platform == "feishu"
+    assert target.target_type == "chat_id"
+    assert target.target_id == "oc_123"
+    assert "Daily" in message.text
+    assert "job-1" in message.text
+    assert "done" in message.text
+    assert "/tmp/out.md" in message.text
+
+
+def test_feishu_delivery_retryable_and_dead_results(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+    monkeypatch.setenv("FEISHU_APP_ID", "cli_xxx")
+    monkeypatch.setenv("FEISHU_APP_SECRET", "secret")
+
+    from cron.delivery import JobRunResult, enqueue_result
+    from cron.delivery_dispatcher import DeliveryDispatcher
+    from cron.delivery_store import DeliveryStore
+    from cron.state_store import StateStore
+    import gateway.registry as gateway_registry
+    from gateway.contracts import SendResult
+
+    class FakeFeishuAdapter:
+        key = "feishu"
+
+        def __init__(self, result):
+            self.result = result
+
+        def validate_target(self, target):
+            return SendResult(ok=True)
+
+        def send_text(self, target, message):
+            return self.result
+
+    for result, expected_status in [
+        (SendResult(ok=False, error="temporary", retryable=True), "failed"),
+        (SendResult(ok=False, error="chat not found", retryable=False), "dead"),
+    ]:
+
+        def factory(**kwargs):
+            return FakeFeishuAdapter(result)
+
+        gateway_registry.clear_gateway_adapter_factories()
+        gateway_registry.register_gateway_adapter_factory(factory)
+        try:
+            event = enqueue_result(
+                {"id": f"job-{expected_status}", "name": "Daily", "deliver": "feishu:oc_123"},
+                JobRunResult(success=True, output_doc="# out", final_response="done"),
+                "/tmp/out.md",
+                "2026-06-02T10:00:00+00:00",
+            )
+            DeliveryDispatcher(store=StateStore()).dispatch_due(limit=10, adapter_keys={"feishu"})
+        finally:
+            gateway_registry.clear_gateway_adapter_factories()
+        stored = DeliveryStore().get(event["id"])
+        assert stored["status"] == expected_status
+
+
 def test_registered_platform_adapter_enqueues_and_dispatches_without_core_branch(monkeypatch, tmp_path):
     monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
 

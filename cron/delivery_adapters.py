@@ -199,3 +199,91 @@ class WeComDeliveryAdapter:
             normalized_errcode = None
         retryable = normalized_errcode in _RETRYABLE_WECOM_ERRCODES
         return DeliveryResult(False, retryable=retryable, error=f"WeCom errcode {errcode}: {errmsg}")
+
+
+_FEISHU_MAX_TEXT_CHARS = 3900
+
+
+def _shorten_feishu_text(text: Any, max_chars: int) -> str:
+    value = "" if text is None else str(text)
+    if max_chars <= 0:
+        return ""
+    if len(value) <= max_chars:
+        return value
+    marker = "\n\n...(truncated; full output saved locally)"
+    if max_chars <= len(marker):
+        return marker[:max_chars]
+    return value[: max_chars - len(marker)].rstrip() + marker
+
+
+def _feishu_status(payload: dict[str, Any], run: dict[str, Any] | None) -> str:
+    if payload.get("status"):
+        return str(payload["status"])
+    if run and run.get("status"):
+        return str(run["status"])
+    if payload.get("error"):
+        return "error"
+    return "success"
+
+
+def _format_feishu_text(event: dict[str, Any], job: dict[str, Any] | None, run: dict[str, Any] | None) -> str:
+    payload = json.loads(event["payload_json"])
+    job_name = payload.get("job_name") or (job or {}).get("name") or event.get("job_name") or "(unnamed)"
+    job_id = payload.get("job_id") or event.get("job_id") or (job or {}).get("id") or "-"
+    run_id = payload.get("run_id") or event.get("run_id") or (run or {}).get("id") or "-"
+    status = _feishu_status(payload, run)
+    output_path = payload.get("output_path") or event.get("output_path") or (run or {}).get("output_path")
+    detail = payload.get("final_response") or payload.get("error") or ""
+
+    lines = [
+        f"Cron job update: {job_name}",
+        f"status: {status}",
+        f"job_id: {job_id}",
+    ]
+    if run_id:
+        lines.append(f"run_id: {run_id}")
+    if output_path:
+        lines.append(f"output_path: {output_path}")
+    body_limit = _FEISHU_MAX_TEXT_CHARS - len("\n".join(lines)) - 20
+    body = _shorten_feishu_text(detail, body_limit)
+    return _shorten_feishu_text("\n".join(lines + ["", body]), _FEISHU_MAX_TEXT_CHARS)
+
+
+class FeishuDeliveryAdapter:
+    key = "feishu"
+    active_dispatch = True
+
+    def validate(self, target: Any, job: dict[str, Any]) -> AdapterValidation:
+        if not target.address:
+            return AdapterValidation(False, "feishu delivery requires explicit target: feishu:<chat_id>")
+
+        from gateway.contracts import PlatformMessageTarget
+        from gateway.registry import default_gateway_registry
+
+        adapter = default_gateway_registry().get("feishu")
+        if adapter is None:
+            return AdapterValidation(False, "feishu gateway adapter is not registered")
+        result = adapter.validate_target(
+            PlatformMessageTarget(platform="feishu", target_type="chat_id", target_id=str(target.address))
+        )
+        return AdapterValidation(result.ok, result.error)
+
+    def deliver(self, event: dict[str, Any], job: dict[str, Any] | None, run: dict[str, Any] | None) -> DeliveryResult:
+        if not event.get("address"):
+            return DeliveryResult(
+                False,
+                retryable=False,
+                error="feishu delivery requires explicit target: feishu:<chat_id>",
+            )
+
+        from gateway.contracts import OutboundMessage, PlatformMessageTarget
+        from gateway.registry import default_gateway_registry
+
+        adapter = default_gateway_registry().get("feishu")
+        if adapter is None:
+            return DeliveryResult(False, retryable=False, error="feishu gateway adapter is not registered")
+        result = adapter.send_text(
+            PlatformMessageTarget(platform="feishu", target_type="chat_id", target_id=str(event["address"])),
+            OutboundMessage(text=_format_feishu_text(event, job, run)),
+        )
+        return DeliveryResult(result.ok, retryable=result.retryable, error=result.error)
