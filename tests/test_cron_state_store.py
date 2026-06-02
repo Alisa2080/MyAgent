@@ -13,7 +13,7 @@ def test_state_store_initializes_schema(monkeypatch, tmp_path):
     store = StateStore()
 
     assert store.path.name == "cron.sqlite3"
-    assert store.schema_version() == 2
+    assert store.schema_version() == 3
     assert store.job_counts_by_state() == {}
     assert store.delivery_stats()["pending"] == 0
 
@@ -74,7 +74,7 @@ def test_state_store_migrates_legacy_delivery_schema(monkeypatch, tmp_path):
     store = StateStore()
     event = store.get_delivery_event("event-1")
 
-    assert store.schema_version() == 2
+    assert store.schema_version() == 3
     assert event["adapter_key"] == "webhook"
     assert event["address"] == "https://example.invalid/hook"
     assert "run_id" in event
@@ -1584,3 +1584,102 @@ def test_promote_queued_runs_skips_key_with_running_run(monkeypatch, tmp_path):
     )
 
     assert promoted == []
+
+
+def test_state_store_initializes_manual_run_columns(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+    from cron.state_store import StateStore
+
+    store = StateStore()
+    with store._connect() as conn:
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(runs)").fetchall()}
+
+    assert "trigger_type" in columns
+    assert "preserve_schedule" in columns
+    assert store.schema_version() == 3
+
+
+def test_state_store_migrates_manual_run_columns(monkeypatch, tmp_path):
+    import sqlite3
+
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+    db_path = tmp_path / "cron" / "cron.sqlite3"
+    db_path.parent.mkdir(parents=True)
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("CREATE TABLE schema_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+        conn.execute("INSERT INTO schema_meta(key, value) VALUES ('schema_version', '2')")
+        conn.execute(
+            """
+            CREATE TABLE jobs (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                prompt TEXT NOT NULL,
+                schedule_json TEXT NOT NULL,
+                schedule_display TEXT,
+                enabled INTEGER NOT NULL,
+                state TEXT NOT NULL,
+                next_run_at TEXT,
+                last_run_at TEXT,
+                last_status TEXT,
+                last_error TEXT,
+                last_delivery_error TEXT,
+                repeat_json TEXT NOT NULL,
+                deliver TEXT NOT NULL,
+                delivery_targets_json TEXT,
+                origin_json TEXT,
+                workdir TEXT,
+                script TEXT,
+                context_from_json TEXT,
+                skills_json TEXT,
+                enabled_toolsets_json TEXT,
+                model TEXT,
+                provider TEXT,
+                base_url TEXT,
+                concurrency_key TEXT,
+                lease_run_id TEXT,
+                lease_expires_at TEXT,
+                paused_reason TEXT,
+                paused_at TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE runs (
+                id TEXT PRIMARY KEY,
+                job_id TEXT NOT NULL,
+                scheduled_for TEXT NOT NULL,
+                claimed_at TEXT NOT NULL,
+                lease_expires_at TEXT,
+                started_at TEXT,
+                finished_at TEXT,
+                attempt INTEGER NOT NULL,
+                status TEXT NOT NULL,
+                exit_reason TEXT,
+                output_path TEXT,
+                final_response TEXT,
+                error TEXT,
+                delivery_status TEXT,
+                heartbeat_at TEXT,
+                last_activity_at TEXT,
+                last_activity_desc TEXT,
+                current_tool TEXT,
+                concurrency_key TEXT,
+                concurrency_policy TEXT,
+                replaced_by_run_id TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+
+    from cron.state_store import StateStore
+
+    store = StateStore()
+    with store._connect() as conn:
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(runs)").fetchall()}
+
+    assert columns >= {"trigger_type", "preserve_schedule"}
+    assert store.schema_version() == 3

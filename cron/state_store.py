@@ -13,7 +13,7 @@ from typing import Any
 from cron.paths import ensure_cron_dirs, get_cron_dir, get_jobs_file, secure_file
 from cron.delivery_targets import DeliveryIdentity, DeliveryTargetError, parse_delivery_targets
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 JOB_STATES = {"scheduled", "running", "paused", "completed", "error"}
 RUN_STATUSES = {"queued", "claimed", "running", "succeeded", "failed", "skipped", "abandoned"}
 DELIVERY_STATUSES = {"pending", "delivering", "delivered", "failed", "dead"}
@@ -128,6 +128,8 @@ class StateStore:
                     concurrency_key TEXT,
                     concurrency_policy TEXT,
                     replaced_by_run_id TEXT,
+                    trigger_type TEXT NOT NULL DEFAULT 'scheduled',
+                    preserve_schedule INTEGER NOT NULL DEFAULT 0,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 )
@@ -247,6 +249,11 @@ class StateStore:
                 "replaced_by_run_id": "TEXT",
             },
         )
+        run_columns = self._table_columns(conn, "runs")
+        if "trigger_type" not in run_columns:
+            conn.execute("ALTER TABLE runs ADD COLUMN trigger_type TEXT NOT NULL DEFAULT 'scheduled'")
+        if "preserve_schedule" not in run_columns:
+            conn.execute("ALTER TABLE runs ADD COLUMN preserve_schedule INTEGER NOT NULL DEFAULT 0")
         self._ensure_columns(
             conn,
             "delivery_events",
@@ -1038,6 +1045,8 @@ class StateStore:
         lease_expires_at: str | None,
         exit_reason: str | None = None,
         replaced_by_run_id: str | None = None,
+        trigger_type: str = "scheduled",
+        preserve_schedule: bool = False,
     ) -> dict[str, Any]:
         previous_attempts = conn.execute(
             "SELECT COUNT(*) AS count FROM runs WHERE job_id = ?",
@@ -1051,9 +1060,10 @@ class StateStore:
                 output_path, final_response, error, delivery_status,
                 heartbeat_at, last_activity_at, last_activity_desc, current_tool,
                 concurrency_key, concurrency_policy, replaced_by_run_id,
+                trigger_type, preserve_schedule,
                 created_at, updated_at
             ) VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, NULL, NULL, NULL, NULL,
-                      ?, ?, ?, NULL, ?, ?, ?, ?, ?)
+                      ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 run_id,
@@ -1071,6 +1081,8 @@ class StateStore:
                 job["concurrency_key"],
                 job["concurrency_policy"],
                 replaced_by_run_id,
+                trigger_type,
+                1 if preserve_schedule else 0,
                 now_text,
                 now_text,
             ),
