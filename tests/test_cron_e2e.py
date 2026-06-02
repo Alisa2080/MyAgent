@@ -297,3 +297,132 @@ def test_fresh_service_recovers_stale_run_and_promotes_queued_run(isolated_cron_
     assert tick_result.ran == 1
     assert service.status["owner_id"] == "e2e-service"
     assert service.status["last_tick"]["ran"] == 1
+
+
+def test_skip_if_running_policy_is_enforced_through_service_tick(isolated_cron_home):
+    from cron.state_store import StateStore
+
+    first = create_due_job(
+        prompt="first skip",
+        deliver="local",
+        concurrency_key="repo:skip",
+        concurrency_policy="skip_if_running",
+    )
+    second = create_due_job(
+        prompt="second skip",
+        deliver="local",
+        concurrency_key="repo:skip",
+        concurrency_policy="skip_if_running",
+    )
+    store = StateStore()
+    first_run = store.claim_due_jobs(now_text=BASE_TIME, limit=1)[0]["run"]
+
+    runner = RecordingRunner()
+    service, tick_result, exit_code = run_service_once(BASE_TIME, runner)
+
+    skipped = [
+        run for run in store.runs_for_job(second["id"]) if run["status"] == "skipped"
+    ]
+    assert exit_code == 0
+    assert tick_result.ran == 0
+    assert runner.calls == []
+    assert len(skipped) == 1
+    assert skipped[0]["exit_reason"] == "concurrency_skip"
+    assert store.get_run(first_run["id"])["status"] == "claimed"
+    assert service.status["last_tick"]["ran"] == 0
+    assert first["id"] != second["id"]
+
+
+def test_replace_running_policy_replaces_old_run_and_executes_newer_through_service_tick(
+    isolated_cron_home,
+):
+    from cron.state_store import StateStore
+
+    first = create_due_job(
+        prompt="first replace",
+        deliver="local",
+        concurrency_key="repo:replace",
+        concurrency_policy="replace_running",
+    )
+    second = create_due_job(
+        prompt="second replace",
+        deliver="local",
+        concurrency_key="repo:replace",
+        concurrency_policy="replace_running",
+    )
+    store = StateStore()
+    first_run = store.claim_due_jobs(now_text=BASE_TIME, limit=1)[0]["run"]
+
+    runner = RecordingRunner(
+        output_doc="# replacement",
+        final_response="replacement done",
+    )
+    service, tick_result, exit_code = run_service_once(BASE_TIME, runner)
+
+    first_after = store.get_run(first_run["id"])
+    second_runs = store.runs_for_job(second["id"])
+    succeeded = [run for run in second_runs if run["status"] == "succeeded"]
+    assert exit_code == 0
+    assert first_after["status"] == "abandoned"
+    assert first_after["exit_reason"] == "replaced_by_newer_run"
+    assert len(succeeded) == 1
+    assert first_after["replaced_by_run_id"] == succeeded[0]["id"]
+    assert [call["id"] for call in runner.calls] == [second["id"]]
+    assert tick_result.ran == 1
+    assert service.status["last_tick"]["ran"] == 1
+    assert first["id"] != second["id"]
+
+
+def test_queue_all_policy_promotes_queued_run_after_key_is_free_through_service_tick(
+    isolated_cron_home,
+):
+    from cron.state_store import StateStore
+
+    first = create_due_job(
+        prompt="first queue",
+        deliver="local",
+        concurrency_key="repo:queue",
+        concurrency_policy="queue_all",
+    )
+    second = create_due_job(
+        prompt="second queue",
+        deliver="local",
+        concurrency_key="repo:queue",
+        concurrency_policy="queue_all",
+    )
+    store = StateStore()
+    first_run = store.claim_due_jobs(now_text=BASE_TIME, limit=1)[0]["run"]
+    store.claim_due_jobs(now_text=BASE_TIME, limit=10)
+    queued_before = [
+        run for run in store.runs_for_job(second["id"]) if run["status"] == "queued"
+    ]
+    assert len(queued_before) == 1
+
+    store.complete_run(
+        first_run["id"],
+        success=True,
+        output_path=None,
+        final_response="first complete",
+        error=None,
+        next_run_at=None,
+        completed=False,
+    )
+    runner = RecordingRunner(
+        output_doc="# queued promoted",
+        final_response="queued complete",
+    )
+    service, tick_result, exit_code = run_service_once(
+        "2026-06-02T10:01:00+00:00",
+        runner,
+    )
+
+    second_runs = store.runs_for_job(second["id"])
+    succeeded = [run for run in second_runs if run["status"] == "succeeded"]
+    assert exit_code == 0
+    assert len(succeeded) == 1
+    assert Path(succeeded[0]["output_path"]).exists()
+    assert [call["id"] for call in runner.calls] == [second["id"]]
+    assert tick_result.due == 1
+    assert tick_result.ran == 1
+    assert service.status["last_tick"]["ran"] == 1
+    assert first["id"] != second["id"]
