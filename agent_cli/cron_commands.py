@@ -1083,7 +1083,8 @@ def cron_doctor(
 def run_tick() -> CronCommandResult:
     from cron.leader import SchedulerLeaderLease
 
-    result = _get_cron_tick()()
+    with _cron_delivery_env():
+        result = _get_cron_tick()()
     lines = [
         (
             "Tick: "
