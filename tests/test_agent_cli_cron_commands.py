@@ -1491,6 +1491,27 @@ def test_cron_doctor_fails_active_feishu_job_missing_env(monkeypatch, tmp_path):
     assert "missing required Feishu environment variables: FEISHU_APP_ID, FEISHU_APP_SECRET" in result.text
 
 
+def test_cron_doctor_fails_active_feishu_job_missing_chat_id(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    from agent_cli.cron_commands import cron_doctor
+    from cron.jobs import create_job
+    from cron.state_store import StateStore
+
+    job = create_job(prompt="write report", schedule="30m", deliver="local")
+    with StateStore()._connect() as conn:
+        conn.execute(
+            "UPDATE jobs SET deliver = ?, delivery_targets_json = NULL WHERE id = ?",
+            ("feishu:", job["id"]),
+        )
+
+    result = cron_doctor()
+
+    assert result.exit_code == 2
+    assert f"active job {job['id']} delivery invalid" in result.text
+    assert "feishu delivery requires explicit target: feishu:<chat_id>" in result.text
+
+
 def test_cron_doctor_feishu_token_smoke_invalid_credentials_fails(monkeypatch, tmp_path):
     monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
 
@@ -1499,10 +1520,13 @@ def test_cron_doctor_feishu_token_smoke_invalid_credentials_fails(monkeypatch, t
     from cron.jobs import create_job
     from gateway.contracts import SendResult
 
+    validated_targets = []
+
     class FakeFeishuAdapter:
         key = "feishu"
 
         def validate_target(self, target):
+            validated_targets.append(target)
             return SendResult(True)
 
         def send_text(self, target, message):
@@ -1525,6 +1549,10 @@ def test_cron_doctor_feishu_token_smoke_invalid_credentials_fails(monkeypatch, t
         gateway_registry.clear_gateway_adapter_factories()
 
     assert result.exit_code == 2
+    assert validated_targets
+    assert validated_targets[-1].platform == "feishu"
+    assert validated_targets[-1].target_type == "chat_id"
+    assert validated_targets[-1].target_id == "oc_123"
     assert (
         f"active job {job['id']} feishu token smoke failed: "
         "feishu token API error 99991663: invalid app credentials"
