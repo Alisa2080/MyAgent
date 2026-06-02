@@ -199,6 +199,7 @@ def _complete_stale_run(
         next_run_at=next_run_at,
         completed=completed,
         exit_reason=_exit_reason_for_stale_reason(stale_reason),
+        advance_schedule=not bool(stale.get("preserve_schedule")),
     )
 
 
@@ -210,6 +211,7 @@ def _process_claimed(
     store = _store()
     job = dict(claimed["job"])
     run = dict(claimed["run"])
+    preserve_schedule = bool(run.get("preserve_schedule"))
     job_id = str(job["id"])
     run_id = run["id"]
     job["run_id"] = run_id
@@ -253,6 +255,7 @@ def _process_claimed(
                 error="run lease lost before delivery",
                 next_run_at=job.get("next_run_at"),
                 completed=False,
+                advance_schedule=not preserve_schedule,
             )
             return JobTickResult(job_id=job_id, success=False, error="run lease lost before delivery")
         output_path = save_job_output(job_id, result.output_doc, run_at=run_at)
@@ -272,6 +275,7 @@ def _process_claimed(
                 error="run lease lost before dispatch",
                 next_run_at=job.get("next_run_at"),
                 completed=False,
+                advance_schedule=not preserve_schedule,
             )
             return JobTickResult(job_id=job_id, success=False, output_path=output_path, error="run lease lost before dispatch")
         dispatched = process_due(limit=20, store=delivery_store)
@@ -299,6 +303,7 @@ def _process_claimed(
             completed=completed,
             delivery_error=delivery_error,
             exit_reason=result.exit_reason,
+            advance_schedule=not preserve_schedule,
         )
         try:
             from cron.activity_reporter import activity_reporter
@@ -324,6 +329,7 @@ def _process_claimed(
             next_run_at=next_run_at,
             completed=completed,
             exit_reason=getattr(exc, "exit_reason", None),
+            advance_schedule=not preserve_schedule,
         )
         return JobTickResult(job_id=job_id, success=False, error=str(exc))
 
@@ -488,7 +494,8 @@ def tick(
         result = TickResult()
         result.delivery = _process_delivery_maintenance(store, limit=20)
 
-        claimed = store.promote_queued_runs(now_text=run_at.isoformat(), limit=100)
+        claimed = store.claim_ready_manual_runs(limit=100)
+        claimed = claimed + store.promote_queued_runs(now_text=run_at.isoformat(), limit=max(0, 100 - len(claimed)))
         claimed = claimed + store.claim_due_jobs(now_text=run_at.isoformat(), limit=max(0, 100 - len(claimed)))
         result.due = len(claimed)
 

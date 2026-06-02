@@ -1097,6 +1097,33 @@ class StateStore:
             raise KeyError(run_id)
         return self._row_to_run(row)
 
+    def claim_ready_manual_runs(self, *, limit: int = 20) -> list[dict[str, Any]]:
+        claim_limit = max(0, int(limit))
+        if claim_limit == 0:
+            return []
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT runs.*, jobs.id AS job_id
+                FROM runs
+                JOIN jobs ON jobs.id = runs.job_id
+                WHERE runs.trigger_type = 'manual'
+                  AND runs.status = 'claimed'
+                  AND jobs.state = 'running'
+                  AND jobs.lease_run_id = runs.id
+                ORDER BY runs.claimed_at ASC, runs.id ASC
+                LIMIT ?
+                """,
+                (claim_limit,),
+            ).fetchall()
+            claimed = []
+            for row in rows:
+                run = self._row_to_run(row)
+                job = self.get_job(str(run["job_id"]))
+                if job is not None:
+                    claimed.append({"job": job, "run": run})
+            return claimed
+
     def claim_due_jobs(self, *, now_text: str, limit: int = 20) -> list[dict[str, Any]]:
         now_dt = _parse_time(now_text)
         claim_limit = max(0, int(limit))
@@ -1523,6 +1550,7 @@ class StateStore:
         delivery_error: str | None = None,
         run_status: str | None = None,
         exit_reason: str | None = None,
+        advance_schedule: bool = True,
     ) -> dict[str, Any]:
         computed_status = run_status or ("succeeded" if success else "failed")
         job_state = "completed" if completed else "scheduled"
@@ -1574,11 +1602,19 @@ class StateStore:
                         )
                 else:
                     job_row = conn.execute(
-                        "SELECT repeat_json FROM jobs WHERE id = ? AND lease_run_id = ? AND state = 'running'",
+                        "SELECT repeat_json, next_run_at, enabled FROM jobs WHERE id = ? AND lease_run_id = ? AND state = 'running'",
                         (job_id, run_id),
                     ).fetchone()
                     repeat = _json_loads(job_row["repeat_json"], {"times": None, "completed": 0}) if job_row else {"times": None, "completed": 0}
-                    repeat["completed"] = int(repeat.get("completed") or 0) + 1
+                    if advance_schedule:
+                        repeat["completed"] = int(repeat.get("completed") or 0) + 1
+                        next_job_state = job_state
+                        next_enabled = 0 if completed else 1
+                        next_job_next_run_at = next_run_at
+                    else:
+                        next_job_state = "scheduled"
+                        next_enabled = int(job_row["enabled"]) if job_row else 1
+                        next_job_next_run_at = job_row["next_run_at"] if job_row else next_run_at
                     updated_run = conn.execute(
                         """
                         UPDATE runs
@@ -1611,9 +1647,9 @@ class StateStore:
                             WHERE id = ? AND lease_run_id = ? AND state = 'running'
                             """,
                             (
-                                job_state,
-                                0 if completed else 1,
-                                next_run_at,
+                                next_job_state,
+                                next_enabled,
+                                next_job_next_run_at,
                                 _json_dumps(repeat),
                                 now_text,
                                 "ok" if success else "error",
