@@ -83,12 +83,13 @@ class DeliveryRegistry:
 
 
 def build_delivery_registry(*, webhook_sender=None, extra_adapters=None) -> DeliveryRegistry:
-    from cron.delivery_adapters import LocalDeliveryAdapter, OriginDeliveryAdapter, WebhookDeliveryAdapter
+    from cron.delivery_adapters import LocalDeliveryAdapter, OriginDeliveryAdapter, WebhookDeliveryAdapter, WeComDeliveryAdapter
 
     registry = DeliveryRegistry()
     registry.register(LocalDeliveryAdapter())
     registry.register(OriginDeliveryAdapter())
     registry.register(WebhookDeliveryAdapter(sender=webhook_sender))
+    registry.register(WeComDeliveryAdapter())
     for adapter in extra_adapters or []:
         registry.register(adapter)
     for factory in list(_ADAPTER_FACTORIES):

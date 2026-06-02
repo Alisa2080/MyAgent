@@ -117,6 +117,20 @@ def _parse_one(raw: str, *, origin: DeliveryIdentity | None) -> DeliveryTarget:
             adapter_key="webhook",
             address=raw.split(":", 1)[1].strip() or None,
         )
+    if lowered == "wecom":
+        return DeliveryTarget(
+            raw=raw,
+            target_type="platform",
+            adapter_key="wecom",
+            address=os.getenv("AGENT_CRON_WECOM_WEBHOOK_URL") or None,
+        )
+    if lowered.startswith("wecom:"):
+        return DeliveryTarget(
+            raw=raw,
+            target_type="platform",
+            adapter_key="wecom",
+            address=raw.split(":", 1)[1].strip() or None,
+        )
     if ":" in raw:
         platform, rest = raw.split(":", 1)
         chat_id, sep, thread_id = rest.partition(":")

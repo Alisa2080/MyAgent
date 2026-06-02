@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 
 class FakeSlackAdapter:
     key = "slack"
@@ -152,6 +154,234 @@ def test_bare_webhook_dispatch_uses_env_url(monkeypatch, tmp_path):
     assert summary["delivered"] == 1
     assert sent[0][0] == "https://example.invalid/env-hook"
     assert DeliveryStore().get(event["id"])["address"] == "https://example.invalid/env-hook"
+
+
+def test_bare_wecom_delivery_uses_env_url(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+    monkeypatch.setenv(
+        "AGENT_CRON_WECOM_WEBHOOK_URL",
+        "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=env-key",
+    )
+
+    from cron.jobs import create_job
+
+    job = create_job(prompt="write report", schedule="30m", deliver="wecom")
+
+    target = job["delivery_targets"][0]
+    assert target["raw"] == "wecom"
+    assert target["target_type"] == "platform"
+    assert target["adapter_key"] == "wecom"
+    assert target["address"] == "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=env-key"
+
+
+def test_explicit_wecom_delivery_overrides_env_url(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+    monkeypatch.setenv(
+        "AGENT_CRON_WECOM_WEBHOOK_URL",
+        "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=env-key",
+    )
+    explicit = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=explicit-key"
+
+    from cron.jobs import create_job
+
+    job = create_job(prompt="write report", schedule="30m", deliver=f"wecom:{explicit}")
+
+    target = job["delivery_targets"][0]
+    assert target["raw"] == f"wecom:{explicit}"
+    assert target["target_type"] == "platform"
+    assert target["adapter_key"] == "wecom"
+    assert target["address"] == explicit
+
+
+def test_bare_wecom_delivery_requires_env_url(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+    monkeypatch.delenv("AGENT_CRON_WECOM_WEBHOOK_URL", raising=False)
+
+    from cron.jobs import create_job
+
+    with pytest.raises(
+        ValueError,
+        match="wecom delivery requires AGENT_CRON_WECOM_WEBHOOK_URL or explicit webhook URL",
+    ):
+        create_job(prompt="write report", schedule="30m", deliver="wecom")
+
+
+def test_wecom_adapter_sends_markdown_payload(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+    sent = []
+    url = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=abc"
+
+    from cron.delivery import JobRunResult, enqueue_result
+    from cron.delivery_adapters import WeComDeliveryAdapter
+    from cron.delivery_dispatcher import DeliveryDispatcher
+    from cron.delivery_registry import default_delivery_registry
+    from cron.delivery_store import DeliveryStore
+    from cron.state_store import StateStore
+
+    def fake_post(post_url, payload, timeout=10):
+        sent.append((post_url, payload, timeout))
+        return 200, '{"errcode":0,"errmsg":"ok"}'
+
+    registry = default_delivery_registry()
+    registry.register(WeComDeliveryAdapter(sender=fake_post))
+    event = enqueue_result(
+        {"id": "job-1", "name": "Daily Report", "deliver": f"wecom:{url}"},
+        JobRunResult(success=True, output_doc="# out", final_response="done"),
+        "/tmp/out.md",
+        "2026-05-28T10:00:00+00:00",
+        registry=registry,
+    )
+
+    summary = DeliveryDispatcher(store=StateStore(), registry=registry).dispatch_due(
+        limit=10,
+        adapter_keys={"wecom"},
+    )
+
+    assert summary["delivered"] == 1
+    assert sent[0][0] == url
+    assert sent[0][2] == 10
+    payload = sent[0][1]
+    assert payload["msgtype"] == "markdown"
+    content = payload["markdown"]["content"]
+    assert "Daily Report" in content
+    assert "job-1" in content
+    assert "done" in content
+    assert "/tmp/out.md" in content
+    assert DeliveryStore().get(event["id"])["status"] == "delivered"
+
+
+def test_wecom_adapter_retries_http_429_and_5xx(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+    url = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=abc"
+
+    from cron.delivery import JobRunResult, enqueue_result
+    from cron.delivery_adapters import WeComDeliveryAdapter
+    from cron.delivery_dispatcher import DeliveryDispatcher
+    from cron.delivery_registry import default_delivery_registry
+    from cron.delivery_store import DeliveryStore
+    from cron.state_store import StateStore
+
+    for status in (429, 500):
+        sent = []
+
+        def fake_post(post_url, payload, timeout=10, status=status):
+            sent.append((post_url, payload, timeout))
+            return status, "temporary"
+
+        registry = default_delivery_registry()
+        registry.register(WeComDeliveryAdapter(sender=fake_post))
+        event = enqueue_result(
+            {"id": f"job-{status}", "name": "Daily", "deliver": f"wecom:{url}"},
+            JobRunResult(success=True, output_doc="# out", final_response="done"),
+            "/tmp/out.md",
+            "2026-05-28T10:00:00+00:00",
+            registry=registry,
+        )
+
+        summary = DeliveryDispatcher(store=StateStore(), registry=registry).dispatch_due(
+            limit=10,
+            adapter_keys={"wecom"},
+        )
+
+        stored = DeliveryStore().get(event["id"])
+        assert summary["failed"] == 1
+        assert stored["status"] == "failed"
+        assert stored["next_attempt_at"] is not None
+        assert f"HTTP {status}" in stored["last_error"]
+
+
+def test_wecom_adapter_dead_letters_http_400(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+    url = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=abc"
+
+    from cron.delivery import JobRunResult, enqueue_result
+    from cron.delivery_adapters import WeComDeliveryAdapter
+    from cron.delivery_dispatcher import DeliveryDispatcher
+    from cron.delivery_registry import default_delivery_registry
+    from cron.delivery_store import DeliveryStore
+    from cron.state_store import StateStore
+
+    registry = default_delivery_registry()
+    registry.register(WeComDeliveryAdapter(sender=lambda url, payload, timeout=10: (400, "bad request")))
+    event = enqueue_result(
+        {"id": "job-400", "name": "Daily", "deliver": f"wecom:{url}"},
+        JobRunResult(success=True, output_doc="# out", final_response="done"),
+        "/tmp/out.md",
+        "2026-05-28T10:00:00+00:00",
+        registry=registry,
+    )
+
+    summary = DeliveryDispatcher(store=StateStore(), registry=registry).dispatch_due(
+        limit=10,
+        adapter_keys={"wecom"},
+    )
+
+    stored = DeliveryStore().get(event["id"])
+    assert summary["dead"] == 1
+    assert stored["status"] == "dead"
+    assert "HTTP 400" in stored["last_error"]
+
+
+def test_wecom_adapter_handles_wecom_business_errors(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+    url = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=abc"
+
+    from cron.delivery import JobRunResult, enqueue_result
+    from cron.delivery_adapters import WeComDeliveryAdapter
+    from cron.delivery_dispatcher import DeliveryDispatcher
+    from cron.delivery_registry import default_delivery_registry
+    from cron.delivery_store import DeliveryStore
+    from cron.state_store import StateStore
+
+    registry = default_delivery_registry()
+    registry.register(WeComDeliveryAdapter(sender=lambda url, payload, timeout=10: (200, '{"errcode":40058,"errmsg":"bad webhook"}')))
+    event = enqueue_result(
+        {"id": "job-business", "name": "Daily", "deliver": f"wecom:{url}"},
+        JobRunResult(success=True, output_doc="# out", final_response="done"),
+        "/tmp/out.md",
+        "2026-05-28T10:00:00+00:00",
+        registry=registry,
+    )
+
+    summary = DeliveryDispatcher(store=StateStore(), registry=registry).dispatch_due(
+        limit=10,
+        adapter_keys={"wecom"},
+    )
+
+    stored = DeliveryStore().get(event["id"])
+    assert summary["dead"] == 1
+    assert stored["status"] == "dead"
+    assert "bad webhook" in stored["last_error"]
+
+
+def test_wecom_adapter_treats_non_json_2xx_as_delivered(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+    url = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=abc"
+
+    from cron.delivery import JobRunResult, enqueue_result
+    from cron.delivery_adapters import WeComDeliveryAdapter
+    from cron.delivery_dispatcher import DeliveryDispatcher
+    from cron.delivery_registry import default_delivery_registry
+    from cron.delivery_store import DeliveryStore
+    from cron.state_store import StateStore
+
+    registry = default_delivery_registry()
+    registry.register(WeComDeliveryAdapter(sender=lambda url, payload, timeout=10: (200, "ok")))
+    event = enqueue_result(
+        {"id": "job-non-json", "name": "Daily", "deliver": f"wecom:{url}"},
+        JobRunResult(success=True, output_doc="# out", final_response="done"),
+        "/tmp/out.md",
+        "2026-05-28T10:00:00+00:00",
+        registry=registry,
+    )
+
+    summary = DeliveryDispatcher(store=StateStore(), registry=registry).dispatch_due(
+        limit=10,
+        adapter_keys={"wecom"},
+    )
+
+    assert summary["delivered"] == 1
+    assert DeliveryStore().get(event["id"])["status"] == "delivered"
 
 
 def test_registered_platform_adapter_enqueues_and_dispatches_without_core_branch(monkeypatch, tmp_path):
