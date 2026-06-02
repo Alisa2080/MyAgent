@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -80,26 +81,37 @@ class ScriptedWebhookSender:
 
 def run_service_once(now_text: str, job_runner):
     from cron.service import CronService
+    import cron.delivery_store as delivery_store
     import cron.scheduler as scheduler
+    import cron.state_store as state_store
 
     tick_result = None
+    now = datetime.fromisoformat(now_text.replace("Z", "+00:00"))
+    original_state_utc_now = state_store.utc_now
+    original_delivery_utc_now = delivery_store.utc_now
 
     def tick_fn():
         nonlocal tick_result
         tick_result = scheduler.tick(now_text=now_text, job_runner=job_runner)
         return tick_result
 
-    service = CronService(
-        interval_seconds=1,
-        lease_seconds=60,
-        owner_id="e2e-service",
-        pid=4242,
-        hostname="e2e-host",
-        tick_fn=tick_fn,
-        clock=lambda: now_text,
-        sleeper=lambda _seconds: None,
-    )
-    exit_code = service.run(once=True)
+    try:
+        state_store.utc_now = lambda: now
+        delivery_store.utc_now = lambda: now
+        service = CronService(
+            interval_seconds=1,
+            lease_seconds=60,
+            owner_id="e2e-service",
+            pid=4242,
+            hostname="e2e-host",
+            tick_fn=tick_fn,
+            clock=lambda: now_text,
+            sleeper=lambda _seconds: None,
+        )
+        exit_code = service.run(once=True)
+    finally:
+        state_store.utc_now = original_state_utc_now
+        delivery_store.utc_now = original_delivery_utc_now
     return service, tick_result, exit_code
 
 
@@ -128,6 +140,36 @@ def create_due_job(
         job["id"],
         {"next_run_at": next_run_at, "state": "scheduled", "enabled": True},
     )
+
+
+def force_run_running(store, *, run_id: str, job_id: str, at_text: str) -> None:
+    at = datetime.fromisoformat(at_text.replace("Z", "+00:00"))
+    lease_expires_at = (at + timedelta(seconds=60)).isoformat()
+    with store._connect() as conn:
+        conn.execute(
+            """
+            UPDATE runs
+            SET status = 'running',
+                started_at = ?,
+                heartbeat_at = ?,
+                last_activity_at = ?,
+                last_activity_desc = 'running',
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (at_text, at_text, at_text, at_text, run_id),
+        )
+        conn.execute(
+            """
+            UPDATE jobs
+            SET state = 'running',
+                lease_run_id = ?,
+                lease_expires_at = ?,
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (run_id, lease_expires_at, at_text, job_id),
+        )
 
 
 def test_service_executes_due_job_saves_output_and_delivers_webhook(isolated_cron_home):
@@ -316,6 +358,12 @@ def test_skip_if_running_policy_is_enforced_through_service_tick(isolated_cron_h
     )
     store = StateStore()
     first_run = store.claim_due_jobs(now_text=BASE_TIME, limit=1)[0]["run"]
+    force_run_running(
+        store,
+        run_id=first_run["id"],
+        job_id=first_run["job_id"],
+        at_text=BASE_TIME,
+    )
 
     runner = RecordingRunner()
     service, tick_result, exit_code = run_service_once(BASE_TIME, runner)
@@ -328,7 +376,7 @@ def test_skip_if_running_policy_is_enforced_through_service_tick(isolated_cron_h
     assert runner.calls == []
     assert len(skipped) == 1
     assert skipped[0]["exit_reason"] == "concurrency_skip"
-    assert store.get_run(first_run["id"])["status"] == "claimed"
+    assert store.get_run(first_run["id"])["status"] == "running"
     assert service.status["last_tick"]["ran"] == 0
     assert first["id"] != second["id"]
 
@@ -352,6 +400,12 @@ def test_replace_running_policy_replaces_old_run_and_executes_newer_through_serv
     )
     store = StateStore()
     first_run = store.claim_due_jobs(now_text=BASE_TIME, limit=1)[0]["run"]
+    force_run_running(
+        store,
+        run_id=first_run["id"],
+        job_id=first_run["job_id"],
+        at_text=BASE_TIME,
+    )
 
     runner = RecordingRunner(
         output_doc="# replacement",
