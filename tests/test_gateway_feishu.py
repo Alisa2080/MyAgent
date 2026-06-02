@@ -235,6 +235,19 @@ def test_send_http_429_is_retryable(monkeypatch):
     assert "429" in (result.error or "")
 
 
+def test_send_http_400_with_retryable_feishu_api_code_is_retryable(monkeypatch):
+    monkeypatch.setenv("FEISHU_APP_ID", "app-id")
+    monkeypatch.setenv("FEISHU_APP_SECRET", "app-secret")
+    sender = FakeHttpSender([token_response(), (400, json.dumps({"code": 230020, "msg": "too many requests"}))])
+    adapter = FeishuPlatformAdapter(http_sender=sender)
+
+    result = adapter.send_text(feishu_target(), feishu_message())
+
+    assert result.ok is False
+    assert result.retryable is True
+    assert "230020" in (result.error or "")
+
+
 @pytest.mark.parametrize("status", [408, 500, 503])
 def test_send_retryable_http_statuses_are_retryable(monkeypatch, status):
     monkeypatch.setenv("FEISHU_APP_ID", "app-id")

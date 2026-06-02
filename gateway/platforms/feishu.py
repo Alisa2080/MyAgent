@@ -92,6 +92,14 @@ class FeishuPlatformAdapter:
         if self._is_retryable_http_status(status):
             return SendResult(False, error=f"feishu send HTTP {status}: {body}", retryable=True)
         if status < 200 or status >= 300:
+            parsed = self._parse_json(body)
+            if parsed is not None and self._is_retryable_send_code(parsed.get("code")):
+                msg = parsed.get("msg") or parsed.get("message") or "unknown error"
+                return SendResult(
+                    False,
+                    error=f"feishu send API error {parsed.get('code')}: {msg}",
+                    retryable=True,
+                )
             return SendResult(False, error=f"feishu send HTTP {status}: {body}", retryable=False)
 
         parsed = self._parse_json(body)

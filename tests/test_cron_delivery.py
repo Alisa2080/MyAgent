@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 import pytest
 
 
@@ -574,6 +576,49 @@ def test_feishu_delivery_dispatches_through_gateway(monkeypatch, tmp_path):
     assert "job-1" in message.text
     assert "done" in message.text
     assert "/tmp/out.md" in message.text
+
+
+def test_feishu_delivery_reuses_default_gateway_token_cache(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+    monkeypatch.setenv("FEISHU_APP_ID", "cli_xxx")
+    monkeypatch.setenv("FEISHU_APP_SECRET", "secret")
+
+    import gateway.platforms.feishu as feishu_platform
+    import gateway.registry as gateway_registry
+    from cron.delivery_adapters import FeishuDeliveryAdapter
+    from gateway.platforms.feishu import FeishuPlatformAdapter
+
+    calls = []
+
+    def fake_http_sender(url, payload, headers=None):
+        calls.append((url, payload, headers or {}))
+        if url == FeishuPlatformAdapter.TOKEN_URL:
+            return 200, json.dumps({"code": 0, "tenant_access_token": "cached-token", "expire": 7200})
+        if url == FeishuPlatformAdapter.SEND_URL:
+            return 200, json.dumps({"code": 0, "msg": "ok"})
+        raise AssertionError(f"unexpected Feishu URL: {url}")
+
+    gateway_registry.clear_gateway_adapter_factories()
+    monkeypatch.setattr(feishu_platform, "_default_http_sender", fake_http_sender)
+    adapter = FeishuDeliveryAdapter()
+    event = {
+        "id": "event-1",
+        "job_id": "job-1",
+        "job_name": "Daily",
+        "address": "oc_123",
+        "payload_json": json.dumps({"job_id": "job-1", "job_name": "Daily", "status": "ok"}),
+    }
+
+    try:
+        first = adapter.deliver(event, None, None)
+        second = adapter.deliver({**event, "id": "event-2"}, None, None)
+    finally:
+        gateway_registry.clear_gateway_adapter_factories()
+
+    assert first.delivered is True
+    assert second.delivered is True
+    token_calls = [call for call in calls if call[0] == FeishuPlatformAdapter.TOKEN_URL]
+    assert len(token_calls) == 1
 
 
 def test_feishu_delivery_retryable_and_dead_results(monkeypatch, tmp_path):
