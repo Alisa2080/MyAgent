@@ -184,13 +184,11 @@ def run_cron_job(
     dry_run: bool = False,
     now_text: str | None = None,
 ) -> CronCommandResult:
-    if not dry_run:
-        return simple_job_action("run", job_id=job_id)
     from cron.state_store import StateStore, utc_now
 
     store = StateStore()
     try:
-        plan = store.plan_job_claim(job_id, now_text=now_text or utc_now().isoformat())
+        plan = store.plan_manual_job_claim(job_id, now_text=now_text or utc_now().isoformat())
     except KeyError:
         return CronCommandResult(f"Cron job not found: {job_id}.", exit_code=2)
 
@@ -208,6 +206,8 @@ def run_cron_job(
     lines = [
         f"Dry run for cron job {job_id}",
         f"Decision: {plan['decision']}",
+        f"Manual run: yes",
+        f"Preserves periodic schedule: {'yes' if plan.get('preserve_schedule') else 'no'}",
         f"Due: {'yes' if plan.get('due') else 'no'}",
         f"Enabled: {job.get('enabled', '-')}",
         f"Next run: {plan.get('next_run_at') or '-'}",
@@ -219,6 +219,35 @@ def run_cron_job(
         f"Delivery targets: {', '.join(target_labels) if target_labels else '-'}",
         f"Active same-key runs: {plan.get('active_run_count', 0)}",
     ]
+    if not dry_run:
+        from cron.scheduler import tick
+
+        run_at = now_text or utc_now().isoformat()
+        try:
+            claimed = store.claim_manual_job(job_id, now_text=run_at)
+        except KeyError:
+            return CronCommandResult(f"Cron job not found: {job_id}.", exit_code=2)
+        except ValueError as exc:
+            return CronCommandResult(str(exc), exit_code=2)
+
+        run_id = str(claimed["run"]["id"])
+        tick_result = tick(now_text=run_at)
+        run = store.get_run(run_id) or claimed["run"]
+        output_path = run.get("output_path") or "-"
+        status = str(run.get("status") or "-")
+        lines = [
+            f"Ran cron job {job_id}.",
+            f"Run: {run_id}",
+            f"Status: {status}",
+            f"Output: {output_path}",
+            _delivery_tick_line(tick_result.delivery) or "Delivery: -",
+        ]
+        if run.get("error"):
+            lines.append(str(run["error"]).splitlines()[0])
+        if status in {"failed", "abandoned"}:
+            lines.append(f"Inspect delivery: python -m agent_cli cron deliveries {run_id}")
+        return CronCommandResult("\n".join(lines), exit_code=0 if status in {"succeeded", "skipped", "queued"} else 1)
+
     return CronCommandResult("\n".join(lines))
 
 

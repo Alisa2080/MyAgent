@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from contextlib import redirect_stderr, redirect_stdout
-from datetime import timedelta
+from datetime import datetime, timedelta
 import io
 import os
 from types import SimpleNamespace
@@ -2340,3 +2340,54 @@ def test_cron_doctor_warns_launchd_plist_has_stale_service_env(monkeypatch, tmp_
 
     assert "launchd service env is stale for FEISHU_APP_ID" in result.text
     assert "cron service install --force" in result.text
+
+
+def test_cron_run_uses_scheduler_path_and_records_run(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+    import cron.state_store as state_store
+    from cron.jobs import create_job
+    from cron.runner import JobRunResult
+    import cron.runner_client as runner_client
+
+    run_time = datetime.fromisoformat("2026-06-02T18:10:00+08:00")
+    state_store.utc_now = lambda: run_time
+
+    job = create_job("manual cli output", "every 5m", name="Manual CLI", deliver="local")
+
+    def fake_run_job(job_data):
+        return JobRunResult(
+            success=True,
+            output_doc="manual cli output",
+            final_response="manual cli response",
+            error=None,
+            exit_reason=None,
+        )
+
+    monkeypatch.setattr(runner_client, "run_job", fake_run_job)
+
+    result = _run_cli(["cron", "run", job["id"]])
+
+    assert result.exit_code == 0
+    assert "Run:" in result.text
+    assert "Status: succeeded" in result.text or "Status: ok" in result.text
+    assert "Output:" in result.text
+    runs = _run_cli(["cron", "runs", job["id"]])
+    assert "status=succeeded" in runs.text
+
+
+def test_cron_run_dry_run_reports_manual_schedule_preservation(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+    import cron.state_store as state_store
+    from cron.jobs import create_job
+
+    run_time = datetime.fromisoformat("2026-06-02T18:10:00+08:00")
+    state_store.utc_now = lambda: run_time
+
+    job = create_job("manual dry", "every 5m", name="Manual Dry", deliver="local")
+
+    result = _run_cli(["cron", "run", job["id"], "--dry-run"])
+
+    assert result.exit_code == 0
+    assert "Manual run: yes" in result.text
+    assert "Preserves periodic schedule: yes" in result.text
+    assert "Decision: would_claim" in result.text
