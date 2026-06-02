@@ -17,9 +17,9 @@ class DockerRuntimeDiagnostic:
 
 def _resolve_terminal_env(profile: str) -> str:
     try:
-        from agent_core.permissions.profiles import default_terminal_env
+        from agent_core.permissions.profiles import resolve_terminal_env
 
-        return default_terminal_env(profile)
+        return resolve_terminal_env(profile)
     except Exception:
         import os
 

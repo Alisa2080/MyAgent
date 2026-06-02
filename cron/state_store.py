@@ -2084,7 +2084,14 @@ class StateStore:
 
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
-            current = self._row_to_job(conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone())
+            current_row = conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
+            if current_row is None:
+                raise KeyError(job_id)
+            current = self._row_to_job(current_row)
+            if not current.get("enabled", True):
+                raise ValueError(f"Cannot run cron job {job_id}: disabled")
+            if str(current.get("state") or "") == "completed":
+                raise ValueError(f"Cannot run cron job {job_id}: completed")
             current["concurrency_key"] = job["concurrency_key"]
             current["concurrency_policy"] = job["concurrency_policy"]
             current["next_run_at"] = manual_scheduled_for
@@ -2170,7 +2177,7 @@ class StateStore:
                 trigger_type="manual",
                 preserve_schedule=True,
             )
-            conn.execute(
+            updated_job = conn.execute(
                 """
                 UPDATE jobs
                 SET state = 'running',
@@ -2182,6 +2189,8 @@ class StateStore:
                 """,
                 (original_next_run_at, run_id, lease_expires_at, now_text, job_id),
             )
+            if not updated_job.rowcount:
+                raise ValueError(f"Cannot run cron job {job_id}: not scheduled")
             claimed_job = self._row_to_job(conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone())
             claimed_job["concurrency_key"] = job["concurrency_key"]
             claimed_job["concurrency_policy"] = job["concurrency_policy"]

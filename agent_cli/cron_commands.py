@@ -235,20 +235,51 @@ def run_cron_job(
         run = store.get_run(run_id) or claimed["run"]
         output_path = run.get("output_path") or "-"
         status = str(run.get("status") or "-")
+        delivery_line, delivery_needs_inspection = _run_delivery_summary_line(store, run_id)
         lines = [
             f"Ran cron job {job_id}.",
             f"Run: {run_id}",
-            f"Status: {status}",
+            f"Status: {_display_run_status(status)}",
             f"Output: {output_path}",
-            _delivery_tick_line(tick_result.delivery) or "Delivery: -",
+            delivery_line or _delivery_tick_line(tick_result.delivery) or "Delivery: -",
         ]
         if run.get("error"):
             lines.append(str(run["error"]).splitlines()[0])
-        if status in {"failed", "abandoned"}:
+        if status in {"failed", "abandoned"} or delivery_needs_inspection:
             lines.append(f"Inspect delivery: python -m agent_cli cron deliveries {run_id}")
         return CronCommandResult("\n".join(lines), exit_code=0 if status in {"succeeded", "skipped", "queued"} else 1)
 
     return CronCommandResult("\n".join(lines))
+
+
+def _display_run_status(status: str) -> str:
+    return "ok" if status == "succeeded" else status
+
+
+def _run_delivery_summary_line(store, run_id: str) -> tuple[str | None, bool]:
+    events = store.list_delivery_events(run_id=run_id, limit=100)
+    if not events:
+        return None, False
+    counts = {"delivered": 0, "failed": 0, "pending": 0, "dead": 0}
+    for event in events:
+        status = str(event.get("status") or "")
+        if status == "delivered":
+            counts["delivered"] += 1
+        elif status == "dead":
+            counts["dead"] += 1
+        elif status == "failed":
+            counts["failed"] += 1
+        else:
+            counts["pending"] += 1
+    needs_inspection = bool(counts["failed"] or counts["pending"] or counts["dead"])
+    return (
+        "Delivery: "
+        f"delivered={counts['delivered']} "
+        f"failed={counts['failed']} "
+        f"pending={counts['pending']} "
+        f"dead={counts['dead']}",
+        needs_inspection,
+    )
 
 
 def serve_cron(
@@ -999,7 +1030,7 @@ def cron_doctor(
         shell_present = [key for key in required if os.getenv(key)]
         if missing_service_env:
             add(
-                "warn",
+                "fail",
                 "active Feishu cron jobs require service env; "
                 f"service env missing {', '.join(missing_service_env)}. "
                 "Set with `agent cron service env set FEISHU_APP_ID APP_ID_VALUE` and "

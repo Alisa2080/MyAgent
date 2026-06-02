@@ -4,6 +4,8 @@ from datetime import datetime, timezone
 import json
 import threading
 
+import pytest
+
 
 def test_state_store_initializes_schema(monkeypatch, tmp_path):
     monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
@@ -1736,3 +1738,19 @@ def test_claim_manual_job_creates_claimed_run_without_advancing_job(monkeypatch,
     assert run["scheduled_for"] == "2026-06-02T18:00:00+08:00"
     assert job["state"] == "running"
     assert job["next_run_at"] == "2026-06-02T19:00:00+08:00"
+
+
+def test_claim_manual_job_rejects_non_scheduled_job_without_orphan_run(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+    from cron.state_store import StateStore
+
+    store = StateStore()
+    _create_manual_claim_job(store, next_run_at="2026-06-02T19:00:00+08:00")
+    job = store.get_job("manual-job")
+    job["state"] = "running"
+    store.update_job("manual-job", job)
+
+    with pytest.raises(ValueError, match="not scheduled"):
+        store.claim_manual_job("manual-job", now_text="2026-06-02T18:00:00+08:00")
+
+    assert store.list_runs(job_id="manual-job") == []

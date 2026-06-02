@@ -1469,6 +1469,7 @@ def test_cron_doctor_fails_active_feishu_job_missing_env(monkeypatch, tmp_path):
     import gateway.registry as gateway_registry
     from agent_cli.cron_commands import cron_doctor
     from cron.jobs import create_job
+    from cron.service_env import write_service_env
     from gateway.contracts import SendResult
 
     class FakeFeishuAdapter:
@@ -1593,6 +1594,7 @@ def test_cron_doctor_feishu_token_smoke_invalid_credentials_fails(monkeypatch, t
     import gateway.registry as gateway_registry
     from agent_cli.cron_commands import cron_doctor
     from cron.jobs import create_job
+    from cron.service_env import write_service_env
     from gateway.contracts import SendResult
 
     validated_targets = []
@@ -1617,6 +1619,7 @@ def test_cron_doctor_feishu_token_smoke_invalid_credentials_fails(monkeypatch, t
     gateway_registry.clear_gateway_adapter_factories()
     gateway_registry.register_gateway_adapter_factory(lambda **kwargs: FakeFeishuAdapter())
     try:
+        write_service_env({"FEISHU_APP_ID": "app-id", "FEISHU_APP_SECRET": "secret"})
         job = create_job(prompt="write report", schedule="30m", deliver="feishu:oc_123")
 
         result = cron_doctor()
@@ -1640,6 +1643,7 @@ def test_cron_doctor_feishu_token_smoke_temporary_failure_warns(monkeypatch, tmp
     import gateway.registry as gateway_registry
     from agent_cli.cron_commands import cron_doctor
     from cron.jobs import create_job
+    from cron.service_env import write_service_env
     from gateway.contracts import SendResult
 
     class FakeFeishuAdapter:
@@ -1661,6 +1665,7 @@ def test_cron_doctor_feishu_token_smoke_temporary_failure_warns(monkeypatch, tmp
     gateway_registry.clear_gateway_adapter_factories()
     gateway_registry.register_gateway_adapter_factory(lambda **kwargs: FakeFeishuAdapter())
     try:
+        write_service_env({"FEISHU_APP_ID": "app-id", "FEISHU_APP_SECRET": "secret"})
         job = create_job(prompt="write report", schedule="30m", deliver="feishu:oc_123")
 
         result = cron_doctor()
@@ -2207,7 +2212,7 @@ def test_cron_doctor_warns_active_feishu_job_missing_service_env(monkeypatch, tm
     finally:
         gateway_registry.clear_gateway_adapter_factories()
 
-    assert result.exit_code == 1
+    assert result.exit_code == 2
     assert "service env missing FEISHU_APP_ID, FEISHU_APP_SECRET" in result.text
     assert "current shell Feishu env is set but cron service env is missing" in result.text
     assert "cron service env set FEISHU_APP_ID" in result.text
@@ -2375,6 +2380,48 @@ def test_cron_run_uses_scheduler_path_and_records_run(monkeypatch, tmp_path):
     assert "status=succeeded" in runs.text
 
 
+def test_cron_run_reports_run_specific_delivery_failure(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+    import cron.delivery_registry as delivery_registry
+    import cron.state_store as state_store
+    from cron.jobs import create_job
+    from cron.runner import JobRunResult
+    import cron.runner_client as runner_client
+
+    run_time = datetime.fromisoformat("2026-06-02T18:10:00+08:00")
+    state_store.utc_now = lambda: run_time
+
+    job = create_job(
+        "manual webhook output",
+        "every 5m",
+        name="Manual webhook",
+        deliver="webhook:https://example.invalid/hook",
+    )
+
+    def fake_run_job(job_data):
+        return JobRunResult(
+            success=True,
+            output_doc="manual webhook output",
+            final_response="manual webhook response",
+            error=None,
+            exit_reason=None,
+        )
+
+    def failing_registry(*, webhook_sender=None):
+        return delivery_registry.build_delivery_registry(
+            webhook_sender=lambda url, payload, timeout=10: (500, "down")
+        )
+
+    monkeypatch.setattr(runner_client, "run_job", fake_run_job)
+    monkeypatch.setattr(delivery_registry, "default_delivery_registry", failing_registry)
+
+    result = _run_cli(["cron", "run", job["id"]])
+
+    assert result.exit_code == 0
+    assert "Delivery: delivered=0 failed=1 pending=0 dead=0" in result.text
+    assert "Inspect delivery: python -m agent_cli cron deliveries" in result.text
+
+
 def test_cron_run_dry_run_reports_manual_schedule_preservation(monkeypatch, tmp_path):
     monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
     import cron.state_store as state_store
@@ -2444,6 +2491,17 @@ def test_cron_doctor_warns_when_docker_version_fails(monkeypatch, tmp_path):
     assert result.exit_code == 1
     assert "docker runtime: Docker command is available but 'docker version' failed." in result.text
     assert "Start Docker or fix permission to access the Docker daemon." in result.text
+
+
+def test_cron_doctor_respects_explicit_local_terminal_env(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+    monkeypatch.setenv("AGENT_RUNTIME_PROFILE", "prod")
+    monkeypatch.setenv("TERMINAL_ENV", "local")
+
+    result = _run_cli(["cron", "doctor"])
+
+    assert "docker runtime: not required for TERMINAL_ENV=local" in result.text
+    assert "docker command not found" not in result.text
 
 
 def test_cron_doctor_feishu_service_env_includes_restart_command(monkeypatch, tmp_path):
