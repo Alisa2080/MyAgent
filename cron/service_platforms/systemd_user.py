@@ -23,6 +23,13 @@ def systemd_unit_path() -> Path:
     return Path.home() / ".config" / "systemd" / "user" / SERVICE_NAME
 
 
+def read_installed_unit() -> str | None:
+    path = systemd_unit_path()
+    if not path.exists():
+        return None
+    return path.read_text(encoding="utf-8")
+
+
 def _run_command(args: list[str]) -> tuple[int, str, str]:
     result = subprocess.run(args, capture_output=True, text=True, timeout=15)
     return result.returncode, result.stdout or "", result.stderr or ""

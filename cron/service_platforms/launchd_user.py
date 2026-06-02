@@ -39,6 +39,13 @@ def launchd_plist_path() -> Path:
     return Path.home() / "Library" / "LaunchAgents" / f"{LABEL}.plist"
 
 
+def read_installed_plist() -> bytes | None:
+    path = launchd_plist_path()
+    if not path.exists():
+        return None
+    return path.read_bytes()
+
+
 def launchd_log_paths() -> tuple[Path, Path]:
     log_dir = get_cron_dir() / "logs"
     return log_dir / f"{LABEL}.out.log", log_dir / f"{LABEL}.err.log"

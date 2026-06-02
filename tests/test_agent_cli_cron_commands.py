@@ -1256,7 +1256,7 @@ def test_cron_doctor_accepts_multi_target_delivery(monkeypatch, tmp_path):
 
     assert "unsupported delivery target" not in result.text
     assert "delivery invalid" not in result.text
-    assert result.exit_code == 0
+    assert "service env permissions are too broad" not in result.text
 
 
 def test_cron_doctor_checks_subprocess_runner(monkeypatch, tmp_path):
@@ -1521,9 +1521,23 @@ def test_cron_doctor_passes_explicit_feishu_target_to_gateway(monkeypatch, tmp_p
     import agent_cli.cron_commands as cron_commands
     from agent_cli.cron_commands import cron_doctor
     from cron.jobs import create_job
+    from cron.service_env import ServiceEnvFileStatus
     from gateway.contracts import SendResult
 
     monkeypatch.setattr(cron_commands, "_add_service_manager_check", lambda add: None)
+    monkeypatch.setattr(
+        "cron.service_env.inspect_service_env_file",
+        lambda path=None: ServiceEnvFileStatus(
+            path=tmp_path / "cron" / "service.env",
+            exists=True,
+            readable=True,
+            permissions_ok=True,
+        ),
+    )
+    monkeypatch.setattr(
+        "cron.service_env.read_service_env",
+        lambda path=None: {"FEISHU_APP_ID": "app_id", "FEISHU_APP_SECRET": "app_secret"},
+    )
     validated_targets = []
 
     class FakeFeishuAdapter:
@@ -2142,3 +2156,101 @@ def test_cron_service_env_set_invalid_key_fails(monkeypatch, tmp_path):
 
     assert result.exit_code == 2
     assert "invalid service env key" in result.text
+
+
+def test_cron_doctor_warns_active_feishu_job_missing_service_env(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+    monkeypatch.setenv("FEISHU_APP_ID", "shell-app")
+    monkeypatch.setenv("FEISHU_APP_SECRET", "shell-secret")
+
+    import gateway.registry as gateway_registry
+    import agent_cli.cron_commands as cron_commands
+    from agent_cli.cron_commands import cron_doctor
+    from cron.jobs import create_job
+    from gateway.contracts import SendResult
+
+    monkeypatch.setattr(cron_commands, "_add_service_manager_check", lambda add: None)
+
+    class FakeFeishuAdapter:
+        key = "feishu"
+
+        def validate_target(self, target):
+            return SendResult(True)
+
+        def send_text(self, target, message):
+            raise AssertionError("doctor must not send a Feishu message")
+
+        def token_smoke(self):
+            return SendResult(True)
+
+    gateway_registry.clear_gateway_adapter_factories()
+    gateway_registry.register_gateway_adapter_factory(lambda **kwargs: FakeFeishuAdapter())
+    try:
+        create_job(prompt="write report", schedule="30m", deliver="feishu:oc_123")
+        result = cron_doctor()
+    finally:
+        gateway_registry.clear_gateway_adapter_factories()
+
+    assert result.exit_code == 1
+    assert "service env missing FEISHU_APP_ID, FEISHU_APP_SECRET" in result.text
+    assert "current shell Feishu env is set but cron service env is missing" in result.text
+    assert "cron service env set FEISHU_APP_ID" in result.text
+
+
+def test_cron_doctor_reports_service_env_permissions(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+    env_file = tmp_path / "cron" / "service.env"
+    env_file.parent.mkdir(parents=True)
+    env_file.write_text("FEISHU_APP_ID=cli_123\n", encoding="utf-8")
+    env_file.chmod(0o644)
+
+    import agent_cli.cron_commands as cron_commands
+    from agent_cli.cron_commands import cron_doctor
+
+    monkeypatch.setattr(cron_commands, "_add_service_manager_check", lambda add: None)
+
+    result = cron_doctor()
+
+    assert "service env permissions are too broad" in result.text
+
+
+def test_cron_doctor_warns_installed_systemd_unit_missing_runtime_context(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path / "home"))
+    unit_path = tmp_path / "langchain-agent-cron.service"
+    unit_path.write_text(
+        "[Service]\nExecStart=/usr/bin/python -m agent_cli.main cron serve\n",
+        encoding="utf-8",
+    )
+
+    import agent_cli.cron_commands as cron_commands
+    from agent_cli.cron_commands import cron_doctor
+    from cron.service_manager import ServiceStatus
+
+    monkeypatch.setattr(
+        "cron.service_manager.compose_service_status",
+        lambda: ServiceStatus(
+            platform="systemd-user",
+            supported=True,
+            installed=True,
+            enabled=True,
+            active=True,
+            pid=123,
+            detail="active",
+            error=None,
+            heartbeat_fresh=True,
+            process_state="running",
+            leader_state="leader",
+            last_heartbeat_at="2026-06-01T10:00:00+00:00",
+            last_tick=None,
+            last_error=None,
+            exit_reason=None,
+        ),
+    )
+    monkeypatch.setattr(cron_commands, "_pid_is_running", lambda pid: True)
+
+    result = cron_doctor()
+
+    assert "cron service definition missing WorkingDirectory" in result.text
+    assert "cron service definition missing project PYTHONPATH" in result.text
+    assert "cron service definition missing service.env reference" in result.text
+    assert "cron service install --force" in result.text

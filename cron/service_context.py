@@ -26,6 +26,8 @@ def detect_project_root(start: str | Path | None = None) -> Path | None:
             return candidate
     if (Path.cwd() / "pyproject.toml").exists() and (Path.cwd() / "agent_cli").exists():
         return Path.cwd().resolve()
+    if (Path.cwd() / "agent_cli").exists() and (Path.cwd() / "cron").exists():
+        return Path.cwd().resolve()
     return None
 
 
@@ -55,3 +57,31 @@ def build_service_runtime_context(*, module_path: str | Path | None = None) -> S
         pythonpath=compose_pythonpath(project_root),
         service_env_file=get_service_env_file(),
     )
+
+
+@dataclass(frozen=True)
+class InstalledServiceContextStatus:
+    installed: bool
+    working_directory_ok: bool
+    pythonpath_ok: bool
+    service_env_linked: bool
+    detail: str | None = None
+
+
+def inspect_text_service_context(
+    text: str,
+    *,
+    project_root: Path | None,
+    service_env_file: Path,
+    platform: str,
+) -> InstalledServiceContextStatus:
+    if not text:
+        return InstalledServiceContextStatus(False, False, False, False, "service definition missing")
+    expected_root = "" if project_root is None else str(project_root)
+    working_ok = bool(expected_root and expected_root in text and "WorkingDirectory" in text)
+    pythonpath_ok = bool(expected_root and "PYTHONPATH" in text and expected_root in text)
+    if platform == "systemd-user":
+        env_linked = f"EnvironmentFile=-{service_env_file}" in text
+    else:
+        env_linked = True
+    return InstalledServiceContextStatus(True, working_ok, pythonpath_ok, env_linked)

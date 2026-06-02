@@ -617,6 +617,38 @@ def _pid_is_running(pid: int) -> bool:
     return True
 
 
+def _add_service_definition_context_check(add, platform: str) -> None:
+    from cron.service_context import build_service_runtime_context, inspect_text_service_context
+
+    context = build_service_runtime_context()
+    text = None
+    if platform == "systemd-user":
+        from cron.service_platforms.systemd_user import read_installed_unit
+
+        text = read_installed_unit()
+    elif platform == "launchd-user":
+        from cron.service_platforms.launchd_user import read_installed_plist
+
+        raw = read_installed_plist()
+        text = raw.decode("utf-8", errors="replace") if raw is not None else None
+    else:
+        return
+    status = inspect_text_service_context(
+        text or "",
+        project_root=context.project_root,
+        service_env_file=context.service_env_file,
+        platform=platform,
+    )
+    if not status.installed:
+        return
+    if not status.working_directory_ok:
+        add("warn", "cron service definition missing WorkingDirectory; run `agent cron service install --force`")
+    if not status.pythonpath_ok:
+        add("warn", "cron service definition missing project PYTHONPATH; run `agent cron service install --force`")
+    if platform == "systemd-user" and not status.service_env_linked:
+        add("warn", "cron service definition missing service.env reference; run `agent cron service install --force`")
+
+
 def _add_service_manager_check(add) -> None:
     from cron.service_manager import compose_service_status
 
@@ -637,6 +669,8 @@ def _add_service_manager_check(add) -> None:
         add("warn", "cron service pid is not running; run `agent cron service restart`")
     else:
         add("ok", f"cron service: running ({status.platform})")
+    if status.installed:
+        _add_service_definition_context_check(add, status.platform)
 
 
 def cron_doctor(
@@ -786,12 +820,26 @@ def cron_doctor(
 
     _add_service_manager_check(add)
 
+    from cron.service_env import inspect_service_env_file, read_service_env
+
+    service_env_status = inspect_service_env_file()
+    service_env_values = read_service_env()
+    if not service_env_status.exists:
+        add("ok", f"service env file: not configured ({service_env_status.path})")
+    elif not service_env_status.readable:
+        add("fail", f"service env file unreadable: {service_env_status.error or service_env_status.path}")
+    elif not service_env_status.permissions_ok:
+        add("warn", f"service env permissions are too broad: {service_env_status.path}")
+    else:
+        add("ok", f"service env file: {service_env_status.path}")
+
     try:
         active_jobs = list_jobs(include_disabled=False)
     except Exception as exc:
         active_jobs = []
         add("fail", f"jobs could not be loaded: {exc}")
 
+    active_feishu_jobs: set[str] = set()
     for job in active_jobs:
         if not job.get("next_run_at"):
             add("warn", f"active job {job.get('id')} has no next_run_at")
@@ -825,6 +873,7 @@ def cron_doctor(
                 if wecom_error:
                     add("fail", f"active job {job.get('id')} wecom delivery invalid: {wecom_error}")
             if adapter_key == "feishu":
+                active_feishu_jobs.add(str(job.get("id")))
                 from gateway.contracts import PlatformMessageTarget
                 from gateway.registry import default_gateway_registry
 
@@ -854,6 +903,27 @@ def cron_doctor(
         if not validation.ok:
             add("fail", f"active job {job.get('id')} delivery invalid: {validation.error}")
             continue
+
+    if active_feishu_jobs:
+        required = ("FEISHU_APP_ID", "FEISHU_APP_SECRET")
+        missing_service_env = [key for key in required if not service_env_values.get(key)]
+        shell_present = [key for key in required if os.getenv(key)]
+        if missing_service_env:
+            add(
+                "warn",
+                "active Feishu cron jobs require service env; "
+                f"service env missing {', '.join(missing_service_env)}. "
+                "Set with `agent cron service env set FEISHU_APP_ID <app_id>` and "
+                "`agent cron service env set FEISHU_APP_SECRET <app_secret>`.",
+            )
+            if shell_present:
+                add(
+                    "warn",
+                    "current shell Feishu env is set but cron service env is missing; "
+                    "background service delivery uses service.env.",
+                )
+        else:
+            add("ok", "service env has Feishu credentials for active Feishu jobs")
 
     exit_code = 2 if failures else (1 if warnings else 0)
     return CronCommandResult("\n".join(lines), exit_code=exit_code)
