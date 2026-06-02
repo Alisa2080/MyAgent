@@ -56,14 +56,6 @@ class _TickLockBusy(Exception):
 
 
 @dataclass
-class JobTickResult:
-    job_id: str
-    success: bool
-    output_path: str | None = None
-    error: str | None = None
-
-
-@dataclass
 class DeliveryTickSummary:
     recovered_stale: int = 0
     claimed: int = 0
@@ -71,6 +63,15 @@ class DeliveryTickSummary:
     failed: int = 0
     dead: int = 0
     error: str | None = None
+
+
+@dataclass
+class JobTickResult:
+    job_id: str
+    success: bool
+    output_path: str | None = None
+    error: str | None = None
+    delivery: DeliveryTickSummary = field(default_factory=DeliveryTickSummary)
 
 
 @dataclass
@@ -273,7 +274,8 @@ def _process_claimed(
                 completed=False,
             )
             return JobTickResult(job_id=job_id, success=False, output_path=output_path, error="run lease lost before dispatch")
-        process_due(limit=20, store=delivery_store)
+        dispatched = process_due(limit=20, store=delivery_store)
+        delivery_summary = _delivery_summary_from_dispatch(dispatched)
         next_run_at, completed = _next_run_after_completion(job, run_at)
         delivery_error = None
         if delivery_events:
@@ -303,7 +305,13 @@ def _process_claimed(
             activity_reporter(run["id"], store, activity=True, last_activity_desc="completed")
         except Exception:
             logger.debug("Failed to report completed activity for run %s", run["id"])
-        return JobTickResult(job_id=job_id, success=result.success, output_path=output_path, error=result.error or delivery_error)
+        return JobTickResult(
+            job_id=job_id,
+            success=result.success,
+            output_path=output_path,
+            error=result.error or delivery_error,
+            delivery=delivery_summary,
+        )
     except Exception as exc:
         logger.exception("Cron job %s failed during tick.", job_id)
         next_run_at, completed = _next_run_after_completion(job, run_at)
@@ -333,7 +341,8 @@ def _process_job(
         from cron.delivery import enqueue_result, process_due
 
         delivery_event = enqueue_result(advanced, result, output_path, run_at)
-        process_due(limit=20)
+        dispatched = process_due(limit=20)
+        delivery_summary = _delivery_summary_from_dispatch(dispatched)
         if delivery_event:
             try:
                 delivery_event = DeliveryStore().get(delivery_event["id"])
@@ -352,6 +361,7 @@ def _process_job(
             success=result.success,
             output_path=output_path,
             error=result.error or delivery_error,
+            delivery=delivery_summary,
         )
     except Exception as exc:
         logger.exception("Cron job %s failed during tick.", job_id)
@@ -402,6 +412,28 @@ def _format_delivery_error(exc: Exception) -> str:
     return f"{type(exc).__name__}: {exc}"
 
 
+def _delivery_summary_from_dispatch(dispatched: dict[str, int]) -> DeliveryTickSummary:
+    return DeliveryTickSummary(
+        claimed=int(dispatched.get("claimed", 0) or 0),
+        delivered=int(dispatched.get("delivered", 0) or 0),
+        failed=int(dispatched.get("failed", 0) or 0),
+        dead=int(dispatched.get("dead", 0) or 0),
+    )
+
+
+def _merge_delivery_summary(
+    target: DeliveryTickSummary,
+    source: DeliveryTickSummary,
+) -> None:
+    target.recovered_stale += source.recovered_stale
+    target.claimed += source.claimed
+    target.delivered += source.delivered
+    target.failed += source.failed
+    target.dead += source.dead
+    if source.error and not target.error:
+        target.error = source.error
+
+
 def _process_delivery_maintenance(store: StateStore, *, limit: int = 20) -> DeliveryTickSummary:
     summary = DeliveryTickSummary()
     try:
@@ -420,11 +452,9 @@ def _process_delivery_maintenance(store: StateStore, *, limit: int = 20) -> Deli
         logger.exception("Cron delivery dispatch failed during tick.")
         return summary
 
-    summary.claimed = int(dispatched.get("claimed", 0) or 0)
-    summary.delivered = int(dispatched.get("delivered", 0) or 0)
-    summary.failed = int(dispatched.get("failed", 0) or 0)
-    summary.dead = int(dispatched.get("dead", 0) or 0)
-    return summary
+    dispatched_summary = _delivery_summary_from_dispatch(dispatched)
+    dispatched_summary.recovered_stale = summary.recovered_stale
+    return dispatched_summary
 
 
 def tick(
@@ -471,6 +501,8 @@ def tick(
         result.ran = len(result.results)
         result.succeeded = sum(1 for item in result.results if item.success)
         result.failed = sum(1 for item in result.results if not item.success)
+        for item in result.results:
+            _merge_delivery_summary(result.delivery, item.delivery)
         return result
     finally:
         lock.__exit__(None, None, None)

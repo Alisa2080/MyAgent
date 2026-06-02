@@ -10,6 +10,7 @@ import pytest
 
 BASE_TIME = "2026-06-02T10:00:00+00:00"
 WEBHOOK_URL = "https://example.invalid/hook"
+WECOM_URL = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=e2e"
 
 
 @pytest.fixture(autouse=True)
@@ -31,6 +32,19 @@ def install_webhook_sender(
         from cron.delivery_adapters import WebhookDeliveryAdapter
 
         return WebhookDeliveryAdapter(sender=sender)
+
+    delivery_registry.register_delivery_adapter_factory(factory)
+
+
+def install_wecom_sender(
+    sender: Callable[[str, dict[str, Any], int], tuple[int, str]],
+) -> None:
+    import cron.delivery_registry as delivery_registry
+
+    def factory(**kwargs):
+        from cron.delivery_adapters import WeComDeliveryAdapter
+
+        return WeComDeliveryAdapter(sender=sender)
 
     delivery_registry.register_delivery_adapter_factory(factory)
 
@@ -234,6 +248,114 @@ def test_service_retries_failed_delivery_on_no_due_tick(isolated_cron_home):
     assert len(runner.calls) == 1
     assert first_run["status"] == "succeeded"
     assert first_run["delivery_status"] in {"retrying", "failed"}
+    assert first_events[0]["status"] == "failed"
+    assert "HTTP 500" in (store.get_job(job["id"])["last_delivery_error"] or "")
+
+    delivery_store.update_event(
+        first_events[0]["id"],
+        next_attempt_at="2000-01-01T00:00:00+00:00",
+    )
+    _service2, second_tick, second_exit = run_service_once(
+        "2026-06-02T10:01:00+00:00",
+        runner,
+    )
+
+    second_run = store.get_run(first_run["id"])
+    second_events = delivery_store.list_events(job_id=job["id"], limit=10)
+    assert second_exit == 0
+    assert second_tick.due == 0
+    assert second_tick.ran == 0
+    assert len(runner.calls) == 1
+    assert second_tick.delivery.claimed >= 1
+    assert second_tick.delivery.delivered == 1
+    assert second_events[0]["status"] == "delivered"
+    assert second_run["delivery_status"] == "delivered"
+    assert store.get_job(job["id"])["last_delivery_error"] is None
+    assert len(sender.calls) == 2
+
+
+def test_service_executes_due_job_and_delivers_wecom_markdown(
+    isolated_cron_home,
+    monkeypatch,
+):
+    from cron.service_state import read_service_status
+    from cron.delivery_store import DeliveryStore
+    from cron.state_store import StateStore
+
+    monkeypatch.setenv("AGENT_CRON_WECOM_WEBHOOK_URL", WECOM_URL)
+    sender = ScriptedWebhookSender([(200, '{"errcode":0,"errmsg":"ok"}')])
+    install_wecom_sender(sender)
+    job = create_due_job(deliver="wecom")
+    runner = RecordingRunner(
+        output_doc="# WeCom E2E Output\nbody",
+        final_response="final wecom response",
+    )
+
+    service, tick_result, exit_code = run_service_once(BASE_TIME, runner)
+
+    store = StateStore()
+    delivery_store = DeliveryStore()
+    runs = store.runs_for_job(job["id"])
+    events = delivery_store.list_events(job_id=job["id"], limit=10)
+    service_status = read_service_status()
+    payload = sender.calls[0][1]
+    content = payload["markdown"]["content"]
+
+    assert exit_code == 0
+    assert tick_result.ran == 1
+    assert len(runner.calls) == 1
+    assert len(runs) == 1
+    assert runs[0]["status"] == "succeeded"
+    assert runs[0]["delivery_status"] == "delivered"
+    assert runs[0]["output_path"]
+    output_path = Path(runs[0]["output_path"])
+    assert output_path.exists()
+    assert len(events) == 1
+    assert events[0]["adapter_key"] == "wecom"
+    assert events[0]["status"] == "delivered"
+    assert events[0]["attempt_count"] == 1
+    assert events[0]["run_id"] == runs[0]["id"]
+    assert sender.calls[0][0] == WECOM_URL
+    assert payload["msgtype"] == "markdown"
+    assert "final wecom response" in content
+    assert job["id"] in content
+    assert runs[0]["id"] in content
+    assert str(output_path) in content
+    assert store.get_job(job["id"])["last_delivery_error"] is None
+    assert service.status["last_tick"]["delivery"]["delivered"] == 1
+    assert service_status["last_tick"]["delivery"]["delivered"] == 1
+
+
+def test_service_retries_failed_wecom_delivery_on_no_due_tick(
+    isolated_cron_home,
+    monkeypatch,
+):
+    from cron.delivery_store import DeliveryStore
+    from cron.state_store import StateStore
+
+    monkeypatch.setenv("AGENT_CRON_WECOM_WEBHOOK_URL", WECOM_URL)
+    sender = ScriptedWebhookSender(
+        [(500, "down"), (200, '{"errcode":0,"errmsg":"ok"}')]
+    )
+    install_wecom_sender(sender)
+    job = create_due_job(deliver="wecom")
+    runner = RecordingRunner(
+        output_doc="# retry wecom output",
+        final_response="retry wecom",
+    )
+    delivery_store = DeliveryStore()
+
+    _service1, first_tick, first_exit = run_service_once(BASE_TIME, runner)
+
+    store = StateStore()
+    first_run = store.runs_for_job(job["id"])[0]
+    first_events = delivery_store.list_events(job_id=job["id"], limit=10)
+    assert first_exit == 0
+    assert first_tick.ran == 1
+    assert len(runner.calls) == 1
+    assert first_run["status"] == "succeeded"
+    assert first_run["delivery_status"] in {"retrying", "failed"}
+    assert first_events[0]["adapter_key"] == "wecom"
     assert first_events[0]["status"] == "failed"
     assert "HTTP 500" in (store.get_job(job["id"])["last_delivery_error"] or "")
 
