@@ -17,10 +17,13 @@ WECOM_URL = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=e2e"
 def isolated_cron_home(monkeypatch, tmp_path):
     monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
     import cron.delivery_registry as delivery_registry
+    import gateway.registry as gateway_registry
 
     delivery_registry.clear_delivery_adapter_factories()
+    gateway_registry.clear_gateway_adapter_factories()
     yield tmp_path
     delivery_registry.clear_delivery_adapter_factories()
+    gateway_registry.clear_gateway_adapter_factories()
 
 
 def install_webhook_sender(
@@ -47,6 +50,12 @@ def install_wecom_sender(
         return WeComDeliveryAdapter(sender=sender)
 
     delivery_registry.register_delivery_adapter_factory(factory)
+
+
+def install_feishu_gateway_adapter(adapter) -> None:
+    import gateway.registry as gateway_registry
+
+    gateway_registry.register_gateway_adapter_factory(lambda **kwargs: adapter)
 
 
 class RecordingRunner:
@@ -91,6 +100,39 @@ class ScriptedWebhookSender:
         if self.responses:
             return self.responses.pop(0)
         return 200, "ok"
+
+
+class RecordingFeishuGatewayAdapter:
+    key = "feishu"
+
+    def __init__(self, results: list[Any] | None = None):
+        from gateway.contracts import SendResult
+
+        self.results = list(results or [])
+        self.default_result = SendResult(ok=True)
+        self.calls = []
+
+    def validate_target(self, target):
+        from gateway.contracts import SendResult
+
+        if target.platform != "feishu":
+            return SendResult(ok=False, error="feishu adapter only supports feishu targets")
+        if target.target_type != "chat_id":
+            return SendResult(ok=False, error="feishu delivery only supports chat_id targets")
+        if not target.target_id:
+            return SendResult(ok=False, error="feishu delivery requires a chat_id")
+        return SendResult(ok=True)
+
+    def token_smoke(self):
+        from gateway.contracts import SendResult
+
+        return SendResult(ok=True)
+
+    def send_text(self, target, message):
+        self.calls.append((target, message))
+        if self.results:
+            return self.results.pop(0)
+        return self.default_result
 
 
 def run_service_once(now_text: str, job_runner):
@@ -326,6 +368,58 @@ def test_service_executes_due_job_and_delivers_wecom_markdown(
     assert service_status["last_tick"]["delivery"]["delivered"] == 1
 
 
+def test_service_executes_due_job_and_delivers_feishu_text(isolated_cron_home):
+    from cron.service_state import read_service_status
+    from cron.delivery_store import DeliveryStore
+    from cron.state_store import StateStore
+    from gateway.contracts import PlatformMessageTarget, SendResult
+
+    adapter = RecordingFeishuGatewayAdapter([SendResult(ok=True)])
+    install_feishu_gateway_adapter(adapter)
+    job = create_due_job(deliver="feishu:oc_123")
+    runner = RecordingRunner(
+        output_doc="# Feishu E2E Output\nbody",
+        final_response="final feishu response",
+    )
+
+    service, tick_result, exit_code = run_service_once(BASE_TIME, runner)
+
+    store = StateStore()
+    delivery_store = DeliveryStore()
+    runs = store.runs_for_job(job["id"])
+    events = delivery_store.list_events(job_id=job["id"], limit=10)
+    service_status = read_service_status()
+    target, message = adapter.calls[0]
+
+    assert exit_code == 0
+    assert tick_result.ran == 1
+    assert len(runner.calls) == 1
+    assert len(runs) == 1
+    assert runs[0]["status"] == "succeeded"
+    assert runs[0]["delivery_status"] == "delivered"
+    assert runs[0]["output_path"]
+    output_path = Path(runs[0]["output_path"])
+    assert output_path.exists()
+    assert "# Feishu E2E Output" in output_path.read_text(encoding="utf-8")
+    assert len(events) == 1
+    assert events[0]["adapter_key"] == "feishu"
+    assert events[0]["status"] == "delivered"
+    assert events[0]["attempt_count"] == 1
+    assert events[0]["run_id"] == runs[0]["id"]
+    assert target == PlatformMessageTarget(
+        platform="feishu",
+        target_type="chat_id",
+        target_id="oc_123",
+    )
+    assert "final feishu response" in message.text
+    assert job["id"] in message.text
+    assert runs[0]["id"] in message.text
+    assert str(output_path) in message.text
+    assert store.get_job(job["id"])["last_delivery_error"] is None
+    assert service.status["last_tick"]["delivery"]["delivered"] == 1
+    assert service_status["last_tick"]["delivery"]["delivered"] == 1
+
+
 def test_service_retries_failed_wecom_delivery_on_no_due_tick(
     isolated_cron_home,
     monkeypatch,
@@ -380,6 +474,62 @@ def test_service_retries_failed_wecom_delivery_on_no_due_tick(
     assert second_run["delivery_status"] == "delivered"
     assert store.get_job(job["id"])["last_delivery_error"] is None
     assert len(sender.calls) == 2
+
+
+def test_service_retries_failed_feishu_delivery_on_no_due_tick(isolated_cron_home):
+    from cron.delivery_store import DeliveryStore
+    from cron.state_store import StateStore
+    from gateway.contracts import SendResult
+
+    adapter = RecordingFeishuGatewayAdapter(
+        [
+            SendResult(ok=False, error="temporary feishu", retryable=True),
+            SendResult(ok=True),
+        ]
+    )
+    install_feishu_gateway_adapter(adapter)
+    job = create_due_job(deliver="feishu:oc_123")
+    runner = RecordingRunner(
+        output_doc="# retry feishu output",
+        final_response="retry feishu",
+    )
+    delivery_store = DeliveryStore()
+
+    _service1, first_tick, first_exit = run_service_once(BASE_TIME, runner)
+
+    store = StateStore()
+    first_run = store.runs_for_job(job["id"])[0]
+    first_events = delivery_store.list_events(job_id=job["id"], limit=10)
+    assert first_exit == 0
+    assert first_tick.ran == 1
+    assert len(runner.calls) == 1
+    assert first_run["status"] == "succeeded"
+    assert first_run["delivery_status"] in {"retrying", "failed"}
+    assert first_events[0]["adapter_key"] == "feishu"
+    assert first_events[0]["status"] == "failed"
+    assert "temporary feishu" in (store.get_job(job["id"])["last_delivery_error"] or "")
+
+    delivery_store.update_event(
+        first_events[0]["id"],
+        next_attempt_at="2000-01-01T00:00:00+00:00",
+    )
+    _service2, second_tick, second_exit = run_service_once(
+        "2026-06-02T10:01:00+00:00",
+        runner,
+    )
+
+    second_run = store.get_run(first_run["id"])
+    second_events = delivery_store.list_events(job_id=job["id"], limit=10)
+    assert second_exit == 0
+    assert second_tick.due == 0
+    assert second_tick.ran == 0
+    assert len(runner.calls) == 1
+    assert second_tick.delivery.claimed >= 1
+    assert second_tick.delivery.delivered == 1
+    assert second_events[0]["status"] == "delivered"
+    assert second_run["delivery_status"] == "delivered"
+    assert store.get_job(job["id"])["last_delivery_error"] is None
+    assert len(adapter.calls) == 2
 
 
 def test_fresh_service_recovers_stale_run_and_promotes_queued_run(isolated_cron_home):
