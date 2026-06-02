@@ -291,6 +291,44 @@ def cron_service_logs(*, lines: int = 100) -> CronCommandResult:
     return _cron_service_result(service_logs(lines=lines))
 
 
+def cron_service_env_set(key: str, value: str) -> CronCommandResult:
+    from cron.service_env import set_service_env
+
+    try:
+        path = set_service_env(key, value)
+    except ValueError as exc:
+        return CronCommandResult(str(exc), exit_code=2)
+    return CronCommandResult(
+        f"Set service env {key} in {path}.\n"
+        "Restart an already-running service with `agent cron service restart`."
+    )
+
+
+def cron_service_env_unset(key: str) -> CronCommandResult:
+    from cron.service_env import get_service_env_file, unset_service_env
+
+    try:
+        removed = unset_service_env(key)
+    except ValueError as exc:
+        return CronCommandResult(str(exc), exit_code=2)
+    action = "Unset service env" if removed else "Service env key was not set"
+    return CronCommandResult(
+        f"{action} {key} in {get_service_env_file()}.\n"
+        "Restart an already-running service with `agent cron service restart`."
+    )
+
+
+def cron_service_env_list() -> CronCommandResult:
+    from cron.service_env import get_service_env_file, masked_service_env
+
+    values = masked_service_env()
+    if not values:
+        return CronCommandResult(f"No service env values set in {get_service_env_file()}.")
+    lines = [f"Service Env: {get_service_env_file()}"]
+    lines.extend(f"  {key}={values[key]}" for key in sorted(values))
+    return CronCommandResult("\n".join(lines))
+
+
 def _service_manager_summary_line(status) -> str:
     if not status.supported:
         return "Service manager: unsupported"

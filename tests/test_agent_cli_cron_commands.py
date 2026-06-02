@@ -2111,3 +2111,34 @@ def test_cron_service_status_not_ready_when_disabled(monkeypatch):
     assert result.exit_code == 0
     assert "Service manager: systemd-user installed active disabled" in result.text
     assert "Automatic scheduling: not-ready" in result.text
+
+
+def test_cron_service_env_set_list_unset(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    from agent_cli.main import run_cli
+
+    set_result = run_cli(["cron", "service", "env", "set", "FEISHU_APP_SECRET", "secret"])
+    assert set_result.exit_code == 0
+    assert "Set service env FEISHU_APP_SECRET" in set_result.text
+    assert "cron service restart" in set_result.text
+
+    list_result = run_cli(["cron", "service", "env", "list"])
+    assert list_result.exit_code == 0
+    assert "FEISHU_APP_SECRET=********" in list_result.text
+    assert "secret" not in list_result.text
+
+    unset_result = run_cli(["cron", "service", "env", "unset", "FEISHU_APP_SECRET"])
+    assert unset_result.exit_code == 0
+    assert "Unset service env FEISHU_APP_SECRET" in unset_result.text
+
+
+def test_cron_service_env_set_invalid_key_fails(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    from agent_cli.main import run_cli
+
+    result = run_cli(["cron", "service", "env", "set", "feishu-secret", "secret"])
+
+    assert result.exit_code == 2
+    assert "invalid service env key" in result.text

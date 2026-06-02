@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import io
 import os
 import sys
 from pathlib import Path
@@ -14,6 +15,7 @@ from agent_cli.checkpoints import CheckpointDependencyError, create_sqlite_check
 from agent_cli.background import BackgroundTaskRegistry, BackgroundTaskStore
 from agent_cli.commands import COMMAND_LOOKUP
 from agent_cli import cron_commands
+from agent_cli.cron_commands import CronCommandResult
 from agent_cli.config import (
     ConfigError,
     apply_profile_override,
@@ -45,6 +47,32 @@ def build_public_options_parser(*, add_help: bool = False) -> argparse.ArgumentP
     parser.add_argument("--model", default=None, help="Model display metadata for session list.")
     parser.add_argument("--profile", "-p", default=None, help="Use a named CLI profile.")
     return parser
+
+
+public_options = build_public_options_parser(add_help=False)
+
+
+class _RunCliResult:
+    def __init__(self, text: str, exit_code: int) -> None:
+        self.text = text
+        self.exit_code = exit_code
+
+
+def run_cli(argv: list[str]) -> _RunCliResult:
+    """Run CLI with the given argv and capture output. For testing only."""
+    old_stdout = sys.stdout
+    old_stderr = sys.stderr
+    sys.stdout = io.StringIO()
+    sys.stderr = io.StringIO()
+    try:
+        exit_code = main(argv)
+        stdout = sys.stdout.getvalue()
+        stderr = sys.stderr.getvalue()
+    finally:
+        sys.stdout = old_stdout
+        sys.stderr = old_stderr
+    return _RunCliResult(stdout + stderr, exit_code)
+
 
 
 def _pre_parse_public_options(argv: list[str] | None) -> dict[str, str | None]:
@@ -191,6 +219,18 @@ def build_parser() -> argparse.ArgumentParser:
 
     cron_service_logs = cron_service_subparsers.add_parser("logs", parents=[public_options])
     cron_service_logs.add_argument("--lines", type=int, default=100)
+
+    cron_service_env = cron_service_subparsers.add_parser("env", parents=[public_options])
+    cron_service_env_subparsers = cron_service_env.add_subparsers(dest="cron_service_env_command")
+
+    cron_service_env_set = cron_service_env_subparsers.add_parser("set", parents=[public_options])
+    cron_service_env_set.add_argument("key")
+    cron_service_env_set.add_argument("value")
+
+    cron_service_env_unset = cron_service_env_subparsers.add_parser("unset", parents=[public_options])
+    cron_service_env_unset.add_argument("key")
+
+    cron_service_env_subparsers.add_parser("list", parents=[public_options])
 
     cron_test_delivery = cron_subparsers.add_parser("test-delivery", parents=[public_options])
     cron_test_delivery.add_argument("--target", required=True)
@@ -382,7 +422,7 @@ def _run_cron_command(args: argparse.Namespace):
         service_command = getattr(args, "cron_service_command", None)
         if service_command is None:
             return cron_commands.CronCommandResult(
-                "Missing cron service command. Use one of: install, uninstall, start, stop, restart, status, logs.",
+                "Missing cron service command. Use one of: install, uninstall, start, stop, restart, status, logs, env.",
                 exit_code=2,
             )
         if service_command == "install":
@@ -404,6 +444,18 @@ def _run_cron_command(args: argparse.Namespace):
             return cron_commands.cron_service_status()
         if service_command == "logs":
             return cron_commands.cron_service_logs(lines=args.lines)
+        if service_command == "env":
+            env_command = getattr(args, "cron_service_env_command", None)
+            if env_command == "set":
+                return cron_commands.cron_service_env_set(args.key, args.value)
+            if env_command == "unset":
+                return cron_commands.cron_service_env_unset(args.key)
+            if env_command == "list":
+                return cron_commands.cron_service_env_list()
+            return cron_commands.CronCommandResult(
+                "Missing cron service env command. Use one of: set, unset, list.",
+                exit_code=2,
+            )
     if subcommand == "test-delivery":
         return cron_commands.test_delivery(
             target=args.target,
