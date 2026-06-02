@@ -216,3 +216,84 @@ def test_service_retries_failed_delivery_on_no_due_tick(isolated_cron_home):
     assert second_run["delivery_status"] == "delivered"
     assert store.get_job(job["id"])["last_delivery_error"] is None
     assert len(sender.calls) == 2
+
+
+def test_fresh_service_recovers_stale_run_and_promotes_queued_run(isolated_cron_home):
+    from cron.state_store import StateStore
+
+    stale_job = create_due_job(
+        prompt="stale",
+        deliver="local",
+        concurrency_key="repo:restart",
+        concurrency_policy="queue_all",
+        next_run_at="2026-06-02T09:00:00+00:00",
+    )
+    queued_job = create_due_job(
+        prompt="queued",
+        deliver="local",
+        concurrency_key="repo:restart",
+        concurrency_policy="queue_all",
+        next_run_at="2026-06-02T09:00:00+00:00",
+    )
+    store = StateStore(lease_seconds=60)
+    first_claim = store.claim_due_jobs(
+        now_text="2026-06-02T09:00:00+00:00",
+        limit=1,
+    )[0]
+    stale_run_id = first_claim["run"]["id"]
+    store.mark_run_started(stale_run_id)
+    store.claim_due_jobs(now_text="2026-06-02T09:00:00+00:00", limit=10)
+
+    with store._connect() as conn:
+        conn.execute(
+            """
+            UPDATE runs
+            SET heartbeat_at = ?, last_activity_at = ?, status = 'running'
+            WHERE id = ?
+            """,
+            (
+                "2026-06-02T09:00:00+00:00",
+                "2026-06-02T09:00:00+00:00",
+                stale_run_id,
+            ),
+        )
+        conn.execute(
+            """
+            UPDATE jobs
+            SET state = 'running', lease_run_id = ?, lease_expires_at = ?
+            WHERE id = ?
+            """,
+            (
+                stale_run_id,
+                "2026-06-02T09:01:00+00:00",
+                stale_job["id"],
+            ),
+        )
+
+    runner = RecordingRunner(
+        output_doc="# recovered queue",
+        final_response="queued done",
+    )
+    service, tick_result, exit_code = run_service_once(
+        "2026-06-02T10:00:00+00:00",
+        runner,
+    )
+
+    stale_run = store.get_run(stale_run_id)
+    queued_runs = store.runs_for_job(queued_job["id"])
+    succeeded = [run for run in queued_runs if run["status"] == "succeeded"]
+
+    assert exit_code == 0
+    assert stale_run["status"] in {"abandoned", "failed"}
+    assert stale_run["exit_reason"] in {
+        "lease_expired",
+        "idle_timeout",
+        "heartbeat_stale",
+    }
+    assert len(succeeded) == 1
+    assert Path(succeeded[0]["output_path"]).exists()
+    assert len(runner.calls) == 1
+    assert runner.calls[0]["id"] == queued_job["id"]
+    assert tick_result.ran == 1
+    assert service.status["owner_id"] == "e2e-service"
+    assert service.status["last_tick"]["ran"] == 1
