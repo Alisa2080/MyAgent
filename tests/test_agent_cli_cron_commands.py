@@ -1493,6 +1493,8 @@ def test_cron_doctor_fails_active_feishu_job_missing_env(monkeypatch, tmp_path):
 
 def test_cron_doctor_fails_active_feishu_job_missing_chat_id(monkeypatch, tmp_path):
     monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+    monkeypatch.setenv("FEISHU_APP_ID", "app-id")
+    monkeypatch.setenv("FEISHU_APP_SECRET", "app-secret")
 
     from agent_cli.cron_commands import cron_doctor
     from cron.jobs import create_job
@@ -1510,6 +1512,47 @@ def test_cron_doctor_fails_active_feishu_job_missing_chat_id(monkeypatch, tmp_pa
     assert result.exit_code == 2
     assert f"active job {job['id']} delivery invalid" in result.text
     assert "feishu delivery requires explicit target: feishu:<chat_id>" in result.text
+
+
+def test_cron_doctor_passes_explicit_feishu_target_to_gateway(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    import gateway.registry as gateway_registry
+    import agent_cli.cron_commands as cron_commands
+    from agent_cli.cron_commands import cron_doctor
+    from cron.jobs import create_job
+    from gateway.contracts import SendResult
+
+    monkeypatch.setattr(cron_commands, "_add_service_manager_check", lambda add: None)
+    validated_targets = []
+
+    class FakeFeishuAdapter:
+        key = "feishu"
+
+        def validate_target(self, target):
+            validated_targets.append(target)
+            return SendResult(True)
+
+        def send_text(self, target, message):
+            raise AssertionError("doctor must not send a Feishu message")
+
+        def token_smoke(self):
+            return SendResult(True)
+
+    gateway_registry.clear_gateway_adapter_factories()
+    gateway_registry.register_gateway_adapter_factory(lambda **kwargs: FakeFeishuAdapter())
+    try:
+        create_job(prompt="write report", schedule="30m", deliver="feishu:oc_123")
+
+        result = cron_doctor()
+    finally:
+        gateway_registry.clear_gateway_adapter_factories()
+
+    assert result.exit_code == 0
+    assert validated_targets
+    assert validated_targets[-1].platform == "feishu"
+    assert validated_targets[-1].target_type == "chat_id"
+    assert validated_targets[-1].target_id == "oc_123"
 
 
 def test_cron_doctor_feishu_token_smoke_invalid_credentials_fails(monkeypatch, tmp_path):
