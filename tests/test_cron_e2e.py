@@ -805,3 +805,131 @@ def test_manual_run_tick_saves_output_delivery_and_preserves_next_run(monkeypatc
     assert run["output_path"]
     assert updated_job["next_run_at"] == "2026-06-02T19:00:00+08:00"
     assert updated_job["repeat"]["completed"] == 0
+
+
+import pytest
+
+
+@pytest.mark.parametrize(
+    ("policy", "expected_status", "expected_exit"),
+    [
+        ("skip_if_running", "skipped", "manual_concurrency_skip"),
+        ("queue_one", "queued", None),
+        ("queue_all", "queued", None),
+    ],
+)
+def test_manual_run_respects_non_replace_concurrency(monkeypatch, tmp_path, policy, expected_status, expected_exit):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+    import cron.state_store as state_store
+    from cron.jobs import create_job, update_job
+    from cron.state_store import StateStore
+
+    run_time = datetime.fromisoformat("2026-06-02T18:00:00+08:00")
+    state_store.utc_now = lambda: run_time
+
+    store = StateStore()
+    job = create_job(
+        prompt="run",
+        schedule="every 5m",
+        name="Manual concurrency",
+        deliver="local",
+    )
+    job = update_job(
+        job["id"],
+        {
+            "next_run_at": "2026-06-02T19:00:00+08:00",
+            "state": "scheduled",
+            "enabled": True,
+            "concurrency_key": "manual-key",
+            "concurrency_policy": policy,
+        },
+    )
+    first = store.claim_manual_job(job["id"], now_text="2026-06-02T18:00:00+08:00")
+    second = store.claim_manual_job(job["id"], now_text="2026-06-02T18:01:00+08:00")
+
+    assert first["run"]["status"] == "claimed"
+    assert second["run"]["status"] == expected_status
+    assert second["run"]["exit_reason"] == expected_exit
+    assert second["run"]["trigger_type"] == "manual"
+    assert second["run"]["preserve_schedule"] == 1
+
+
+def test_manual_run_replace_running_abandons_active_run(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+    import cron.state_store as state_store
+    from cron.jobs import create_job, update_job
+    from cron.state_store import StateStore
+
+    run_time = datetime.fromisoformat("2026-06-02T18:00:00+08:00")
+    state_store.utc_now = lambda: run_time
+
+    store = StateStore()
+    job = create_job(
+        prompt="run",
+        schedule="every 5m",
+        name="Manual replace",
+        deliver="local",
+    )
+    job = update_job(
+        job["id"],
+        {
+            "next_run_at": "2026-06-02T19:00:00+08:00",
+            "state": "scheduled",
+            "enabled": True,
+            "concurrency_key": "manual-replace-key",
+            "concurrency_policy": "replace_running",
+        },
+    )
+    first = store.claim_manual_job(job["id"], now_text="2026-06-02T18:00:00+08:00")
+    second = store.claim_manual_job(job["id"], now_text="2026-06-02T18:01:00+08:00")
+
+    assert store.get_run(first["run"]["id"])["status"] == "abandoned"
+    assert store.get_run(first["run"]["id"])["exit_reason"] == "replaced_by_manual_run"
+    assert second["run"]["status"] == "claimed"
+
+
+def test_queued_manual_run_preserves_schedule_after_promotion(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+    import cron.state_store as state_store
+    from cron.jobs import create_job, update_job
+    from cron.runner import JobRunResult
+    from cron.scheduler import tick
+    from cron.state_store import StateStore
+
+    store = StateStore()
+    job = create_job(
+        prompt="run",
+        schedule="every 5m",
+        name="Manual queue promotion",
+        deliver="local",
+    )
+    job = update_job(
+        job["id"],
+        {
+            "next_run_at": "2026-06-02T19:00:00+08:00",
+            "state": "scheduled",
+            "enabled": True,
+            "concurrency_key": "manual-queue-key",
+            "concurrency_policy": "queue_all",
+        },
+    )
+    first = store.claim_manual_job(job["id"], now_text="2026-06-02T18:00:00+08:00")
+    second = store.claim_manual_job(job["id"], now_text="2026-06-02T18:01:00+08:00")
+    store.complete_run(
+        first["run"]["id"],
+        success=True,
+        output_path=None,
+        final_response="done",
+        error=None,
+        next_run_at="2026-06-02T19:00:00+08:00",
+        completed=False,
+        advance_schedule=False,
+    )
+
+    def runner(job):
+        return JobRunResult(True, "queued output", "queued response", None, None)
+
+    tick(now_text="2026-06-02T18:02:00+08:00", job_runner=runner)
+
+    assert store.get_run(second["run"]["id"])["status"] == "succeeded"
+    assert store.get_job(job["id"])["next_run_at"] == "2026-06-02T19:00:00+08:00"
