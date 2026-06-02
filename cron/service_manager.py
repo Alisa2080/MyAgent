@@ -5,6 +5,7 @@ import os
 import platform as platform_module
 import sys
 from dataclasses import dataclass, field
+from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Mapping, Protocol
 
@@ -24,6 +25,9 @@ class ServiceInstallConfig:
     force: bool = False
     python_executable: str = sys.executable
     environment_overrides: Mapping[str, str] = field(default_factory=dict)
+    working_directory: Path | None = None
+    pythonpath: str | None = None
+    service_env_file: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -148,11 +152,17 @@ def build_service_install_config(
             profile not in PRODUCTION_RUNTIME_PROFILES or runner_mode == "subprocess"
         ),
     )
+    from cron.service_context import build_service_runtime_context
+
+    runtime_context = build_service_runtime_context()
     config = ServiceInstallConfig(
         interval_seconds=interval_seconds,
         lease_seconds=lease_seconds,
         force=force,
         environment_overrides=MappingProxyType(overrides),
+        working_directory=runtime_context.working_directory,
+        pythonpath=runtime_context.pythonpath,
+        service_env_file=runtime_context.service_env_file,
     )
     return config, detail
 
