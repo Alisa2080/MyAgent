@@ -1683,3 +1683,56 @@ def test_state_store_migrates_manual_run_columns(monkeypatch, tmp_path):
 
     assert columns >= {"trigger_type", "preserve_schedule"}
     assert store.schema_version() == 3
+
+
+def _create_manual_claim_job(store, *, job_id="manual-job", next_run_at="2026-06-02T19:00:00+08:00", concurrency_policy="skip_if_running"):
+    from cron.jobs import create_job
+
+    job = create_job(
+        prompt="Say hello",
+        schedule="5m",
+        name="Manual job",
+        deliver="local",
+        origin={"source_type": "cli", "session_id": "manual-session", "thread_id": "manual-thread"},
+    )
+    job["id"] = job_id
+    job["next_run_at"] = next_run_at
+    job["concurrency_key"] = job_id
+    job["concurrency_policy"] = concurrency_policy
+    store.create_job(job)
+    return job
+
+
+def test_plan_manual_job_claim_ignores_due_time(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+    from cron.state_store import StateStore
+
+    store = StateStore()
+    _create_manual_claim_job(store, next_run_at="2026-06-02T19:00:00+08:00")
+
+    plan = store.plan_manual_job_claim("manual-job", now_text="2026-06-02T18:00:00+08:00")
+
+    assert plan["decision"] == "would_claim"
+    assert plan["manual"] is True
+    assert plan["due"] is True
+    assert plan["next_run_at"] == "2026-06-02T19:00:00+08:00"
+    assert plan["preserve_schedule"] is True
+
+
+def test_claim_manual_job_creates_claimed_run_without_advancing_job(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+    from cron.state_store import StateStore
+
+    store = StateStore()
+    _create_manual_claim_job(store, next_run_at="2026-06-02T19:00:00+08:00")
+
+    claimed = store.claim_manual_job("manual-job", now_text="2026-06-02T18:00:00+08:00")
+    run = claimed["run"]
+    job = store.get_job("manual-job")
+
+    assert run["status"] == "claimed"
+    assert run["trigger_type"] == "manual"
+    assert run["preserve_schedule"] == 1
+    assert run["scheduled_for"] == "2026-06-02T18:00:00+08:00"
+    assert job["state"] == "running"
+    assert job["next_run_at"] == "2026-06-02T19:00:00+08:00"

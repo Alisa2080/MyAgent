@@ -1945,14 +1945,20 @@ class StateStore:
             "next_due": dict(next_due) if next_due else None,
         }
 
-    def plan_job_claim(self, job_id: str, *, now_text: str) -> dict[str, Any]:
-        from cron.jobs import normalize_concurrency_key, normalize_concurrency_policy
+    def _plan_claim(
+        self,
+        job_id: str,
+        *,
+        now_text: str,
+        manual: bool,
+    ) -> dict[str, Any]:
         from cron.jobs import compute_next_run
+        from cron.jobs import normalize_concurrency_key, normalize_concurrency_policy
 
         now_dt = _parse_time(now_text)
         job = self.get_job(job_id)
         if now_dt is None:
-            return {"job_id": job_id, "decision": "invalid_now", "error": f"Invalid now_text: {now_text}"}
+            return {"job_id": job_id, "decision": "invalid_now", "error": f"Invalid now_text: {now_text}", "manual": manual}
         if job is None:
             raise KeyError(job_id)
         key = normalize_concurrency_key(job.get("concurrency_key"), str(job["id"]))
@@ -1961,31 +1967,25 @@ class StateStore:
         targets = job.get("delivery_targets")
         if targets is None:
             targets = self._delivery_targets_for_job(job, strict=False) or []
+        base = {
+            "job_id": job_id,
+            "job": job,
+            "manual": manual,
+            "preserve_schedule": manual,
+            "next_run_at": job.get("next_run_at"),
+            "next_scheduled_at": job.get("next_run_at"),
+            "concurrency_key": key,
+            "concurrency_policy": policy,
+            "timeouts": timeouts,
+            "delivery_targets": targets,
+        }
         if not job.get("enabled", True):
-            return {
-                "job_id": job_id,
-                "decision": "disabled",
-                "job": job,
-                "due": False,
-                "concurrency_key": key,
-                "concurrency_policy": policy,
-                "timeouts": timeouts,
-                "delivery_targets": targets,
-            }
+            return {**base, "decision": "disabled", "due": False}
+        if str(job.get("state") or "") == "completed":
+            return {**base, "decision": "completed", "due": False}
         due_at = _parse_time(job.get("next_run_at"))
-        if due_at is None or due_at > now_dt:
-            return {
-                "job_id": job_id,
-                "job": job,
-                "decision": "not_due",
-                "due": False,
-                "next_run_at": job.get("next_run_at"),
-                "next_scheduled_at": job.get("next_run_at"),
-                "concurrency_key": key,
-                "concurrency_policy": policy,
-                "timeouts": timeouts,
-                "delivery_targets": targets,
-            }
+        if not manual and (due_at is None or due_at > now_dt):
+            return {**base, "decision": "not_due", "due": False}
         with self._connect() as conn:
             active = self._active_runs_for_key(conn, key)
         occupying = [run for run in active if run["status"] in self.OCCUPYING_RUN_STATUSES]
@@ -1999,20 +1999,138 @@ class StateStore:
             decision = "would_skip"
         elif policy == "replace_running" and active:
             decision = "would_replace"
-        next_scheduled_at = None
-        if job.get("schedule", {}).get("kind") != "once":
+        next_scheduled_at = job.get("next_run_at")
+        if not manual and job.get("schedule", {}).get("kind") != "once":
             next_scheduled_at = compute_next_run(job["schedule"], job.get("next_run_at"))
         return {
-            "job_id": job_id,
-            "job": job,
+            **base,
             "decision": decision,
             "due": True,
-            "next_run_at": job.get("next_run_at"),
             "next_scheduled_at": next_scheduled_at,
-            "concurrency_key": key,
-            "concurrency_policy": policy,
-            "timeouts": timeouts,
-            "delivery_targets": targets,
             "active_run_count": len(active),
             "active_runs": active[:5],
         }
+
+    def plan_job_claim(self, job_id: str, *, now_text: str) -> dict[str, Any]:
+        return self._plan_claim(job_id, now_text=now_text, manual=False)
+
+    def plan_manual_job_claim(self, job_id: str, *, now_text: str) -> dict[str, Any]:
+        return self._plan_claim(job_id, now_text=now_text, manual=True)
+
+    def claim_manual_job(self, job_id: str, *, now_text: str) -> dict[str, Any]:
+        now_dt = _parse_time(now_text)
+        if now_dt is None:
+            raise ValueError(f"Invalid now_text: {now_text}")
+        plan = self.plan_manual_job_claim(job_id, now_text=now_text)
+        if plan["decision"] in {"disabled", "completed"}:
+            raise ValueError(f"Cannot run cron job {job_id}: {plan['decision']}")
+        job = dict(plan["job"])
+        job["concurrency_key"] = plan["concurrency_key"]
+        job["concurrency_policy"] = plan["concurrency_policy"]
+        original_next_run_at = job.get("next_run_at")
+        manual_scheduled_for = now_text
+
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            current = self._row_to_job(conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone())
+            current["concurrency_key"] = job["concurrency_key"]
+            current["concurrency_policy"] = job["concurrency_policy"]
+            current["next_run_at"] = manual_scheduled_for
+            active_runs = self._active_runs_for_key(conn, job["concurrency_key"])
+            occupying = [run for run in active_runs if run["status"] in self.OCCUPYING_RUN_STATUSES]
+            queued = [run for run in active_runs if run["status"] == "queued"]
+            policy = job["concurrency_policy"]
+            run_id = uuid.uuid4().hex
+            lease_expires_at = (now_dt + timedelta(seconds=self.lease_seconds)).isoformat()
+
+            if policy == "queue_one" and queued:
+                skipped = self._insert_run(
+                    conn,
+                    run_id=run_id,
+                    job=current,
+                    status="skipped",
+                    now_text=now_text,
+                    lease_expires_at=None,
+                    exit_reason="manual_queue_one_already_queued",
+                    trigger_type="manual",
+                    preserve_schedule=True,
+                )
+                skipped["job"] = job
+                return {"job": job, "run": skipped}
+            if policy in {"queue_one", "queue_all"} and occupying:
+                queued_run = self._insert_run(
+                    conn,
+                    run_id=run_id,
+                    job=current,
+                    status="queued",
+                    now_text=now_text,
+                    lease_expires_at=None,
+                    trigger_type="manual",
+                    preserve_schedule=True,
+                )
+                return {"job": job, "run": queued_run}
+            if policy == "skip_if_running" and active_runs:
+                skipped = self._insert_run(
+                    conn,
+                    run_id=run_id,
+                    job=current,
+                    status="skipped",
+                    now_text=now_text,
+                    lease_expires_at=None,
+                    exit_reason="manual_concurrency_skip",
+                    trigger_type="manual",
+                    preserve_schedule=True,
+                )
+                return {"job": job, "run": skipped}
+            if policy == "replace_running" and active_runs:
+                for active in active_runs:
+                    conn.execute(
+                        """
+                        UPDATE runs
+                        SET status = 'abandoned',
+                            finished_at = ?,
+                            exit_reason = 'replaced_by_manual_run',
+                            replaced_by_run_id = ?,
+                            updated_at = ?
+                        WHERE id = ? AND status IN ('queued', 'claimed', 'running')
+                        """,
+                        (now_text, run_id, now_text, active["id"]),
+                    )
+                    conn.execute(
+                        """
+                        UPDATE jobs
+                        SET state = 'scheduled',
+                            lease_run_id = NULL,
+                            lease_expires_at = NULL,
+                            updated_at = ?
+                        WHERE id = ? AND lease_run_id = ?
+                        """,
+                        (now_text, active["job_id"], active["id"]),
+                    )
+
+            claimed = self._insert_run(
+                conn,
+                run_id=run_id,
+                job=current,
+                status="claimed",
+                now_text=now_text,
+                lease_expires_at=lease_expires_at,
+                trigger_type="manual",
+                preserve_schedule=True,
+            )
+            conn.execute(
+                """
+                UPDATE jobs
+                SET state = 'running',
+                    next_run_at = ?,
+                    lease_run_id = ?,
+                    lease_expires_at = ?,
+                    updated_at = ?
+                WHERE id = ? AND state = 'scheduled'
+                """,
+                (original_next_run_at, run_id, lease_expires_at, now_text, job_id),
+            )
+            claimed_job = self._row_to_job(conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone())
+            claimed_job["concurrency_key"] = job["concurrency_key"]
+            claimed_job["concurrency_policy"] = job["concurrency_policy"]
+            return {"job": claimed_job, "run": claimed}
