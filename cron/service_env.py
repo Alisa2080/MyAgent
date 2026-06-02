@@ -42,14 +42,13 @@ def read_service_env(path: Path | None = None) -> dict[str, str]:
     if not env_path.exists():
         return {}
     result: dict[str, str] = {}
-    for raw_line in env_path.read_text(encoding="utf-8").splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#") or "=" not in line:
+    for line in env_path.read_text(encoding="utf-8").splitlines():
+        if not line.strip() or line.lstrip().startswith("#") or "=" not in line:
             continue
         key, value = line.split("=", 1)
         key = key.strip()
         if _KEY_RE.match(key):
-            result[key] = value.strip()
+            result[key] = value
     return result
 
 

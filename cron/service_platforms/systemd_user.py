@@ -46,16 +46,23 @@ def _quote_systemd_arg(value: str) -> str:
     return escaped
 
 
+def _quote_systemd_directive_value(value: str) -> str:
+    escaped = _quote_systemd(value)
+    if not value or any(char.isspace() or char in {'"', "\\"} for char in value):
+        return f'"{escaped}"'
+    return escaped
+
+
 def _format_working_directory(config: ServiceInstallConfig) -> str:
     if config.working_directory is None:
         return ""
-    return f"WorkingDirectory={_quote_systemd(str(config.working_directory))}\n"
+    return f"WorkingDirectory={_quote_systemd_directive_value(str(config.working_directory))}\n"
 
 
 def _format_environment_file(config: ServiceInstallConfig) -> str:
     if config.service_env_file is None:
         return ""
-    return f"EnvironmentFile=-{_quote_systemd(str(config.service_env_file))}\n"
+    return f"EnvironmentFile=-{_quote_systemd_directive_value(str(config.service_env_file))}\n"
 
 
 def _format_environment(config: ServiceInstallConfig) -> str:

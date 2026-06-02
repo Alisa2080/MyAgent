@@ -1,8 +1,26 @@
 from __future__ import annotations
 
+from contextlib import redirect_stderr, redirect_stdout
 from datetime import timedelta
+import io
 import os
 from types import SimpleNamespace
+
+
+class _RunCliResult:
+    def __init__(self, text: str, exit_code: int) -> None:
+        self.text = text
+        self.exit_code = exit_code
+
+
+def _run_cli(argv: list[str]) -> _RunCliResult:
+    from agent_cli.main import main
+
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+    with redirect_stdout(stdout), redirect_stderr(stderr):
+        exit_code = main(argv)
+    return _RunCliResult(stdout.getvalue() + stderr.getvalue(), exit_code)
 
 
 def test_create_defaults_to_origin_when_session_id_present(monkeypatch, tmp_path):
@@ -2130,29 +2148,27 @@ def test_cron_service_status_not_ready_when_disabled(monkeypatch):
 def test_cron_service_env_set_list_unset(monkeypatch, tmp_path):
     monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
 
-    from agent_cli.main import run_cli
-
-    set_result = run_cli(["cron", "service", "env", "set", "FEISHU_APP_SECRET", "secret"])
+    set_result = _run_cli(["cron", "service", "env", "set", "FEISHU_APP_SECRET", "secret"])
     assert set_result.exit_code == 0
     assert "Set service env FEISHU_APP_SECRET" in set_result.text
     assert "cron service restart" in set_result.text
+    assert "launchd" in set_result.text
 
-    list_result = run_cli(["cron", "service", "env", "list"])
+    list_result = _run_cli(["cron", "service", "env", "list"])
     assert list_result.exit_code == 0
     assert "FEISHU_APP_SECRET=********" in list_result.text
     assert "secret" not in list_result.text
 
-    unset_result = run_cli(["cron", "service", "env", "unset", "FEISHU_APP_SECRET"])
+    unset_result = _run_cli(["cron", "service", "env", "unset", "FEISHU_APP_SECRET"])
     assert unset_result.exit_code == 0
     assert "Unset service env FEISHU_APP_SECRET" in unset_result.text
+    assert "launchd" in unset_result.text
 
 
 def test_cron_service_env_set_invalid_key_fails(monkeypatch, tmp_path):
     monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
 
-    from agent_cli.main import run_cli
-
-    result = run_cli(["cron", "service", "env", "set", "feishu-secret", "secret"])
+    result = _run_cli(["cron", "service", "env", "set", "feishu-secret", "secret"])
 
     assert result.exit_code == 2
     assert "invalid service env key" in result.text
@@ -2227,6 +2243,10 @@ def test_cron_doctor_warns_installed_systemd_unit_missing_runtime_context(monkey
     from cron.service_manager import ServiceStatus
 
     monkeypatch.setattr(
+        "cron.service_platforms.systemd_user.systemd_unit_path",
+        lambda: unit_path,
+    )
+    monkeypatch.setattr(
         "cron.service_manager.compose_service_status",
         lambda: ServiceStatus(
             platform="systemd-user",
@@ -2253,4 +2273,70 @@ def test_cron_doctor_warns_installed_systemd_unit_missing_runtime_context(monkey
     assert "cron service definition missing WorkingDirectory" in result.text
     assert "cron service definition missing project PYTHONPATH" in result.text
     assert "cron service definition missing service.env reference" in result.text
+    assert "cron service install --force" in result.text
+
+
+def test_cron_doctor_warns_launchd_plist_has_stale_service_env(monkeypatch, tmp_path):
+    import plistlib
+
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path / "home"))
+    env_file = tmp_path / "home" / "cron" / "service.env"
+    env_file.parent.mkdir(parents=True)
+    env_file.write_text(
+        "FEISHU_APP_ID=new-app\nFEISHU_APP_SECRET=secret\n",
+        encoding="utf-8",
+    )
+    env_file.chmod(0o600)
+    project_root = tmp_path / "repo"
+    plist = plistlib.dumps(
+        {
+            "WorkingDirectory": str(project_root),
+            "EnvironmentVariables": {
+                "PYTHONPATH": str(project_root),
+                "FEISHU_APP_ID": "old-app",
+                "FEISHU_APP_SECRET": "secret",
+            },
+        }
+    )
+
+    import agent_cli.cron_commands as cron_commands
+    from agent_cli.cron_commands import cron_doctor
+    from cron.service_context import ServiceRuntimeContext
+    from cron.service_manager import ServiceStatus
+
+    monkeypatch.setattr(
+        "cron.service_context.build_service_runtime_context",
+        lambda: ServiceRuntimeContext(
+            project_root=project_root,
+            working_directory=project_root,
+            pythonpath=str(project_root),
+            service_env_file=env_file,
+        ),
+    )
+    monkeypatch.setattr(
+        "cron.service_manager.compose_service_status",
+        lambda: ServiceStatus(
+            platform="launchd-user",
+            supported=True,
+            installed=True,
+            enabled=True,
+            active=True,
+            pid=123,
+            detail="active",
+            error=None,
+            heartbeat_fresh=True,
+            process_state="running",
+            leader_state="leader",
+            last_heartbeat_at="2026-06-01T10:00:00+00:00",
+            last_tick=None,
+            last_error=None,
+            exit_reason=None,
+        ),
+    )
+    monkeypatch.setattr("cron.service_platforms.launchd_user.read_installed_plist", lambda: plist)
+    monkeypatch.setattr(cron_commands, "_pid_is_running", lambda pid: True)
+
+    result = cron_doctor()
+
+    assert "launchd service env is stale for FEISHU_APP_ID" in result.text
     assert "cron service install --force" in result.text

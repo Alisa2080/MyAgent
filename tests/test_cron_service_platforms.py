@@ -1081,6 +1081,28 @@ def test_systemd_unit_includes_workdir_pythonpath_and_env_file(tmp_path):
     assert "FEISHU_APP_SECRET" not in unit
 
 
+def test_systemd_unit_quotes_workdir_and_env_file_with_spaces(tmp_path):
+    from cron.service_manager import ServiceInstallConfig
+    from cron.service_platforms.systemd_user import render_unit
+
+    workdir = tmp_path / "repo with spaces $prod"
+    env_file = tmp_path / "home with spaces $prod" / "cron" / "service.env"
+
+    unit = render_unit(
+        ServiceInstallConfig(
+            interval_seconds=30,
+            lease_seconds=90,
+            working_directory=workdir,
+            pythonpath=str(workdir),
+            service_env_file=env_file,
+        )
+    )
+
+    assert f'WorkingDirectory="{workdir}"' in unit
+    assert f'EnvironmentFile=-"{env_file}"' in unit
+    assert "$$prod" not in unit
+
+
 def test_launchd_plist_includes_workdir_pythonpath_and_service_env(monkeypatch, tmp_path):
     import plistlib
 

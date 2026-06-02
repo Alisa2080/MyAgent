@@ -291,6 +291,13 @@ def cron_service_logs(*, lines: int = 100) -> CronCommandResult:
     return _cron_service_result(service_logs(lines=lines))
 
 
+def _service_env_restart_note() -> str:
+    return (
+        "Restart an already-running service with `agent cron service restart`.\n"
+        "On launchd, rerun `agent cron service install --force` after service env changes."
+    )
+
+
 def cron_service_env_set(key: str, value: str) -> CronCommandResult:
     from cron.service_env import set_service_env
 
@@ -300,7 +307,7 @@ def cron_service_env_set(key: str, value: str) -> CronCommandResult:
         return CronCommandResult(str(exc), exit_code=2)
     return CronCommandResult(
         f"Set service env {key} in {path}.\n"
-        "Restart an already-running service with `agent cron service restart`."
+        f"{_service_env_restart_note()}"
     )
 
 
@@ -314,7 +321,7 @@ def cron_service_env_unset(key: str) -> CronCommandResult:
     action = "Unset service env" if removed else "Service env key was not set"
     return CronCommandResult(
         f"{action} {key} in {get_service_env_file()}.\n"
-        "Restart an already-running service with `agent cron service restart`."
+        f"{_service_env_restart_note()}"
     )
 
 
@@ -618,27 +625,35 @@ def _pid_is_running(pid: int) -> bool:
 
 
 def _add_service_definition_context_check(add, platform: str) -> None:
-    from cron.service_context import build_service_runtime_context, inspect_text_service_context
+    from cron.service_context import (
+        build_service_runtime_context,
+        inspect_launchd_service_context,
+        inspect_text_service_context,
+    )
 
     context = build_service_runtime_context()
-    text = None
     if platform == "systemd-user":
         from cron.service_platforms.systemd_user import read_installed_unit
 
         text = read_installed_unit()
+        status = inspect_text_service_context(
+            text or "",
+            project_root=context.project_root,
+            service_env_file=context.service_env_file,
+            platform=platform,
+        )
     elif platform == "launchd-user":
+        from cron.service_env import read_service_env
         from cron.service_platforms.launchd_user import read_installed_plist
 
         raw = read_installed_plist()
-        text = raw.decode("utf-8", errors="replace") if raw is not None else None
+        status = inspect_launchd_service_context(
+            raw or b"",
+            project_root=context.project_root,
+            service_env_values=read_service_env(context.service_env_file),
+        )
     else:
         return
-    status = inspect_text_service_context(
-        text or "",
-        project_root=context.project_root,
-        service_env_file=context.service_env_file,
-        platform=platform,
-    )
     if not status.installed:
         return
     if not status.working_directory_ok:
@@ -647,6 +662,13 @@ def _add_service_definition_context_check(add, platform: str) -> None:
         add("warn", "cron service definition missing project PYTHONPATH; run `agent cron service install --force`")
     if platform == "systemd-user" and not status.service_env_linked:
         add("warn", "cron service definition missing service.env reference; run `agent cron service install --force`")
+    if platform == "launchd-user" and status.stale_service_env_keys:
+        add(
+            "warn",
+            "launchd service env is stale for "
+            f"{', '.join(status.stale_service_env_keys)}; "
+            "run `agent cron service install --force`",
+        )
 
 
 def _add_service_manager_check(add) -> None:

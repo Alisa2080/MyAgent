@@ -74,3 +74,14 @@ def test_service_env_permission_status_detects_broad_file(monkeypatch, tmp_path)
     assert status.exists is True
     if os.name != "nt":
         assert status.permissions_ok is False
+
+
+def test_service_env_preserves_single_line_value_whitespace(monkeypatch, tmp_path):
+    from cron import service_env
+
+    path = tmp_path / "service.env"
+    monkeypatch.setattr(service_env, "get_service_env_file", lambda: path)
+
+    service_env.set_service_env("FEISHU_APP_SECRET", "  spaced secret  ")
+
+    assert service_env.read_service_env()["FEISHU_APP_SECRET"] == "  spaced secret  "

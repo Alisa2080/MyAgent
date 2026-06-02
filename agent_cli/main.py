@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import io
 import os
 import sys
 from pathlib import Path
@@ -15,7 +14,6 @@ from agent_cli.checkpoints import CheckpointDependencyError, create_sqlite_check
 from agent_cli.background import BackgroundTaskRegistry, BackgroundTaskStore
 from agent_cli.commands import COMMAND_LOOKUP
 from agent_cli import cron_commands
-from agent_cli.cron_commands import CronCommandResult
 from agent_cli.config import (
     ConfigError,
     apply_profile_override,
@@ -47,32 +45,6 @@ def build_public_options_parser(*, add_help: bool = False) -> argparse.ArgumentP
     parser.add_argument("--model", default=None, help="Model display metadata for session list.")
     parser.add_argument("--profile", "-p", default=None, help="Use a named CLI profile.")
     return parser
-
-
-public_options = build_public_options_parser(add_help=False)
-
-
-class _RunCliResult:
-    def __init__(self, text: str, exit_code: int) -> None:
-        self.text = text
-        self.exit_code = exit_code
-
-
-def run_cli(argv: list[str]) -> _RunCliResult:
-    """Run CLI with the given argv and capture output. For testing only."""
-    old_stdout = sys.stdout
-    old_stderr = sys.stderr
-    sys.stdout = io.StringIO()
-    sys.stderr = io.StringIO()
-    try:
-        exit_code = main(argv)
-        stdout = sys.stdout.getvalue()
-        stderr = sys.stderr.getvalue()
-    finally:
-        sys.stdout = old_stdout
-        sys.stderr = old_stderr
-    return _RunCliResult(stdout + stderr, exit_code)
-
 
 
 def _pre_parse_public_options(argv: list[str] | None) -> dict[str, str | None]:
