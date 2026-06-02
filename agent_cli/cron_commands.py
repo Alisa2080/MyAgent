@@ -762,23 +762,14 @@ def cron_doctor(
             job.get("deliver"),
             origin=origin,
             job=job,
+            use_stored_targets=bool(job.get("delivery_targets")),
         )
-        if not validation.ok:
-            add("fail", f"active job {job.get('id')} delivery invalid: {validation.error}")
-            continue
         targets_to_validate = list(validation.targets)
-        for item in job.get("delivery_targets") or []:
-            targets_to_validate.append(item)
         seen_targets: set[tuple[str | None, str | None, str | None]] = set()
         for target in targets_to_validate:
-            if isinstance(target, dict):
-                target_type = target.get("target_type")
-                adapter_key = target.get("adapter_key")
-                address = target.get("address")
-            else:
-                target_type = target.target_type
-                adapter_key = target.adapter_key
-                address = target.address
+            target_type = target.target_type
+            adapter_key = target.adapter_key
+            address = target.address
             target_key = (
                 str(target_type) if target_type is not None else None,
                 str(adapter_key) if adapter_key is not None else None,
@@ -795,6 +786,9 @@ def cron_doctor(
                 wecom_error = validate_wecom_webhook_url(address)
                 if wecom_error:
                     add("fail", f"active job {job.get('id')} wecom delivery invalid: {wecom_error}")
+        if not validation.ok:
+            add("fail", f"active job {job.get('id')} delivery invalid: {validation.error}")
+            continue
 
     exit_code = 2 if failures else (1 if warnings else 0)
     return CronCommandResult("\n".join(lines), exit_code=exit_code)
