@@ -2480,6 +2480,61 @@ def test_cron_run_uses_scheduler_path_and_records_run(monkeypatch, tmp_path):
     assert "status=succeeded" in runs.text
 
 
+def test_cron_run_uses_service_env_for_feishu_delivery(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+    monkeypatch.delenv("FEISHU_APP_ID", raising=False)
+    monkeypatch.delenv("FEISHU_APP_SECRET", raising=False)
+
+    import cron.state_store as state_store
+    from cron.jobs import create_job
+    from cron.runner import JobRunResult
+    import cron.runner_client as runner_client
+    from cron.service_env import write_service_env
+
+    write_service_env(
+        {
+            "FEISHU_APP_ID": "service-app",
+            "FEISHU_APP_SECRET": "service-secret",
+        }
+    )
+    sent_envs = []
+    _register_env_recording_feishu(monkeypatch, sent_envs)
+
+    run_time = datetime.fromisoformat("2026-06-02T18:10:00+08:00")
+    state_store.utc_now = lambda: run_time
+    job = create_job(
+        "manual feishu output",
+        "every 5m",
+        name="Manual Feishu",
+        deliver="feishu:oc_service",
+    )
+
+    def fake_run_job(job_data):
+        return JobRunResult(
+            success=True,
+            output_doc="manual feishu output",
+            final_response="manual feishu response",
+            error=None,
+            exit_reason=None,
+        )
+
+    monkeypatch.setattr(runner_client, "run_job", fake_run_job)
+
+    result = _run_cli(["cron", "run", job["id"]])
+
+    assert result.exit_code == 0
+    assert "Status: ok" in result.text
+    assert "Delivery: delivered=1 failed=0 pending=0 dead=0" in result.text
+    assert "service-app" not in result.text
+    assert "service-secret" not in result.text
+    assert len(sent_envs) == 1
+    assert sent_envs[0]["FEISHU_APP_ID"] == "service-app"
+    assert sent_envs[0]["FEISHU_APP_SECRET"] == "service-secret"
+    assert sent_envs[0]["target_id"] == "oc_service"
+    assert os.environ.get("FEISHU_APP_ID") is None
+    assert os.environ.get("FEISHU_APP_SECRET") is None
+
+
 def test_cron_run_reports_run_specific_delivery_failure(monkeypatch, tmp_path):
     monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
     import cron.delivery_registry as delivery_registry

@@ -225,16 +225,17 @@ def run_cron_job(
         from cron.scheduler import tick
 
         run_at = now_text or utc_now().isoformat()
-        try:
-            claimed = store.claim_manual_job(job_id, now_text=run_at)
-        except KeyError:
-            return CronCommandResult(f"Cron job not found: {job_id}.", exit_code=2)
-        except ValueError as exc:
-            return CronCommandResult(str(exc), exit_code=2)
+        with _cron_delivery_env():
+            try:
+                claimed = store.claim_manual_job(job_id, now_text=run_at)
+            except KeyError:
+                return CronCommandResult(f"Cron job not found: {job_id}.", exit_code=2)
+            except ValueError as exc:
+                return CronCommandResult(str(exc), exit_code=2)
 
-        run_id = str(claimed["run"]["id"])
-        tick(now_text=run_at)
-        run = store.get_run(run_id) or claimed["run"]
+            run_id = str(claimed["run"]["id"])
+            tick(now_text=run_at)
+            run = store.get_run(run_id) or claimed["run"]
         output_path = run.get("output_path") or "-"
         status = str(run.get("status") or "-")
         delivery_line, delivery_needs_inspection = _run_delivery_summary_line(store, run_id)
