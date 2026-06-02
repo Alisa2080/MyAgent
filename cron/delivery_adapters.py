@@ -92,6 +92,10 @@ def validate_wecom_webhook_url(url: str | None) -> str | None:
     if not url:
         return "wecom delivery requires AGENT_CRON_WECOM_WEBHOOK_URL or explicit webhook URL"
     parsed = urlparse(str(url))
+    try:
+        parsed.port
+    except ValueError:
+        return "wecom webhook URL port is invalid"
     if parsed.scheme not in {"http", "https"}:
         return "wecom webhook URL must use http or https"
     if parsed.hostname != "qyapi.weixin.qq.com":

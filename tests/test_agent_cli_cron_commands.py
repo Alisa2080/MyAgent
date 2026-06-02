@@ -1491,6 +1491,30 @@ def test_cron_doctor_fails_active_wecom_job_with_malformed_url(monkeypatch, tmp_
     assert "wecom webhook URL host must be qyapi.weixin.qq.com" in result.text
 
 
+def test_cron_doctor_fails_active_wecom_job_with_invalid_port_url(monkeypatch, tmp_path):
+    valid_url = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=env-key"
+    invalid_url = "https://qyapi.weixin.qq.com:bad/cgi-bin/webhook/send?key=abc"
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+    monkeypatch.setenv("AGENT_CRON_WECOM_WEBHOOK_URL", valid_url)
+
+    from agent_cli.cron_commands import cron_doctor
+    from cron.jobs import create_job
+    from cron.state_store import StateStore
+
+    job = create_job(prompt="write report", schedule="30m", deliver="wecom")
+    with StateStore()._connect() as conn:
+        conn.execute(
+            "UPDATE jobs SET deliver = ?, delivery_targets_json = NULL WHERE id = ?",
+            (f"wecom:{invalid_url}", job["id"]),
+        )
+
+    result = cron_doctor()
+
+    assert result.exit_code == 2
+    assert f"active job {job['id']} delivery invalid" in result.text
+    assert "wecom webhook URL port is invalid" in result.text
+
+
 def test_cron_doctor_fails_stored_wecom_target_with_malformed_url(monkeypatch, tmp_path):
     import json
 

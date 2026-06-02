@@ -206,6 +206,16 @@ def test_bare_wecom_delivery_requires_env_url(monkeypatch, tmp_path):
         create_job(prompt="write report", schedule="30m", deliver="wecom")
 
 
+def test_wecom_delivery_rejects_invalid_port_url(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+    invalid_url = "https://qyapi.weixin.qq.com:bad/cgi-bin/webhook/send?key=abc"
+
+    from cron.jobs import create_job
+
+    with pytest.raises(ValueError, match="wecom webhook URL port is invalid"):
+        create_job(prompt="write report", schedule="30m", deliver=f"wecom:{invalid_url}")
+
+
 def test_wecom_adapter_sends_markdown_payload(monkeypatch, tmp_path):
     monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
     sent = []
