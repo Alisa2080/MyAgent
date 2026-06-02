@@ -532,8 +532,12 @@ def test_service_retries_failed_feishu_delivery_on_no_due_tick(isolated_cron_hom
     assert len(adapter.calls) == 2
 
 
-def test_fresh_service_recovers_stale_run_and_promotes_queued_run(isolated_cron_home):
+def test_fresh_service_recovers_stale_run_and_promotes_queued_run(isolated_cron_home, monkeypatch):
+    import cron.state_store as state_store
     from cron.state_store import StateStore
+
+    setup_now = datetime.fromisoformat("2026-06-02T09:00:30+00:00")
+    monkeypatch.setattr(state_store, "utc_now", lambda: setup_now)
 
     stale_job = create_due_job(
         prompt="stale",
