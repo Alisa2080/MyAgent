@@ -896,6 +896,9 @@ def test_queued_manual_run_preserves_schedule_after_promotion(monkeypatch, tmp_p
     from cron.scheduler import tick
     from cron.state_store import StateStore
 
+    run_time = datetime.fromisoformat("2026-06-02T18:02:00+08:00")
+    state_store.utc_now = lambda: run_time
+
     store = StateStore()
     job = create_job(
         prompt="run",

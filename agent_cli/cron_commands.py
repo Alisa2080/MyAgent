@@ -231,7 +231,7 @@ def run_cron_job(
             return CronCommandResult(str(exc), exit_code=2)
 
         run_id = str(claimed["run"]["id"])
-        tick_result = tick(now_text=run_at)
+        tick(now_text=run_at)
         run = store.get_run(run_id) or claimed["run"]
         output_path = run.get("output_path") or "-"
         status = str(run.get("status") or "-")
@@ -241,7 +241,7 @@ def run_cron_job(
             f"Run: {run_id}",
             f"Status: {_display_run_status(status)}",
             f"Output: {output_path}",
-            delivery_line or _delivery_tick_line(tick_result.delivery) or "Delivery: -",
+            delivery_line or "Delivery: -",
         ]
         if run.get("error"):
             lines.append(str(run["error"]).splitlines()[0])
@@ -962,7 +962,11 @@ def cron_doctor(
     active_feishu_jobs: set[str] = set()
     for job in active_jobs:
         if not job.get("next_run_at"):
-            add("warn", f"active job {job.get('id')} has no next_run_at")
+            add(
+                "warn",
+                f"active cron jobs missing next_run_at: {job.get('id')}. "
+                f"Inspect with `agent cron run {job.get('id')} --dry-run` or update the schedule.",
+            )
         origin = DeliveryIdentity.from_job_origin(job.get("origin"))
         validation = default_delivery_registry().validate_targets(
             job.get("deliver"),

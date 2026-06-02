@@ -2422,6 +2422,96 @@ def test_cron_run_reports_run_specific_delivery_failure(monkeypatch, tmp_path):
     assert "Inspect delivery: python -m agent_cli cron deliveries" in result.text
 
 
+def test_cron_run_does_not_report_unrelated_delivery_maintenance(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+    import cron.state_store as state_store
+    from cron.jobs import create_job
+    from cron.runner import JobRunResult
+    import cron.runner_client as runner_client
+    from cron.state_store import StateStore
+
+    run_time = datetime.fromisoformat("2026-06-02T18:10:00+08:00")
+    state_store.utc_now = lambda: run_time
+    store = StateStore()
+    store.enqueue_delivery_event(
+        job_id="other-job",
+        run_id="other-run",
+        job_name="Other",
+        run_at="2026-06-02T18:09:00+08:00",
+        target="local",
+        target_type="local",
+        adapter_key="local",
+        address=None,
+        thread_id=None,
+        origin=None,
+        final_response="other",
+        output_path=None,
+        payload={"message": "other"},
+        status="pending",
+    )
+    job = create_job("manual local output", "every 5m", name="Manual local", deliver="local")
+
+    def fake_run_job(job_data):
+        return JobRunResult(
+            success=True,
+            output_doc="manual local output",
+            final_response="manual local response",
+            error=None,
+            exit_reason=None,
+        )
+
+    monkeypatch.setattr(runner_client, "run_job", fake_run_job)
+
+    result = _run_cli(["cron", "run", job["id"]])
+
+    assert result.exit_code == 0
+    assert "Delivery tick:" not in result.text
+    assert "Delivery: delivered=1 failed=0 pending=0 dead=0" in result.text
+
+
+def test_cron_run_skipped_run_does_not_report_unrelated_delivery_maintenance(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+    import cron.state_store as state_store
+    from cron.jobs import create_job, update_job
+    from cron.state_store import StateStore
+
+    run_time = datetime.fromisoformat("2026-06-02T18:10:00+08:00")
+    state_store.utc_now = lambda: run_time
+    store = StateStore()
+    job = create_job("manual skip", "every 5m", name="Manual skip", deliver="local")
+    update_job(
+        job["id"],
+        {
+            "concurrency_key": "manual-skip-key",
+            "concurrency_policy": "skip_if_running",
+        },
+    )
+    store.claim_manual_job(job["id"], now_text="2026-06-02T18:09:00+08:00")
+    store.enqueue_delivery_event(
+        job_id="other-job",
+        run_id="other-run",
+        job_name="Other",
+        run_at="2026-06-02T18:09:00+08:00",
+        target="local",
+        target_type="local",
+        adapter_key="local",
+        address=None,
+        thread_id=None,
+        origin=None,
+        final_response="other",
+        output_path=None,
+        payload={"message": "other"},
+        status="pending",
+    )
+
+    result = _run_cli(["cron", "run", job["id"]])
+
+    assert result.exit_code == 0
+    assert "Status: skipped" in result.text
+    assert "Delivery: -" in result.text
+    assert "Delivery tick:" not in result.text
+
+
 def test_cron_run_dry_run_reports_manual_schedule_preservation(monkeypatch, tmp_path):
     monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
     import cron.state_store as state_store
@@ -2545,6 +2635,25 @@ def test_cron_doctor_warns_overdue_next_due_with_stale_service(monkeypatch, tmp_
     assert "next due job is overdue" in result.text
     assert "agent cron service start" in result.text
     assert "agent cron service restart" in result.text
+
+
+def test_cron_doctor_warns_active_job_missing_next_run_at(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+    from cron.jobs import create_job
+    from cron.state_store import StateStore
+
+    job = create_job("missing next", "every 5m", name="Missing next", deliver="local")
+    store = StateStore()
+    saved = store.get_job(job["id"])
+    saved["next_run_at"] = None
+    store.update_job(saved["id"], saved)
+
+    result = _run_cli(["cron", "doctor"])
+
+    assert result.exit_code == 1
+    assert "active cron jobs missing next_run_at" in result.text
+    assert job["id"] in result.text
+    assert "agent cron run" in result.text
 
 
 def test_cron_doctor_warns_recent_missed_runs(monkeypatch, tmp_path):
