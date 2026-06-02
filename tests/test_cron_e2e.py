@@ -170,3 +170,49 @@ def test_service_executes_due_job_saves_output_and_delivers_webhook(isolated_cro
     assert service.status["last_tick"]["ran"] == 1
     assert service.status["last_tick"]["delivery"]["error"] is None
     assert service_status["last_tick"]["ran"] == 1
+
+
+def test_service_retries_failed_delivery_on_no_due_tick(isolated_cron_home):
+    from cron.delivery_store import DeliveryStore
+    from cron.state_store import StateStore
+
+    sender = ScriptedWebhookSender([(500, "down"), (200, "ok")])
+    install_webhook_sender(sender)
+    job = create_due_job()
+    runner = RecordingRunner(output_doc="# retry output", final_response="retry me")
+    delivery_store = DeliveryStore()
+
+    _service1, first_tick, first_exit = run_service_once(BASE_TIME, runner)
+
+    store = StateStore()
+    first_run = store.runs_for_job(job["id"])[0]
+    first_events = delivery_store.list_events(job_id=job["id"], limit=10)
+    assert first_exit == 0
+    assert first_tick.ran == 1
+    assert len(runner.calls) == 1
+    assert first_run["status"] == "succeeded"
+    assert first_run["delivery_status"] in {"retrying", "failed"}
+    assert first_events[0]["status"] == "failed"
+    assert "HTTP 500" in (store.get_job(job["id"])["last_delivery_error"] or "")
+
+    delivery_store.update_event(
+        first_events[0]["id"],
+        next_attempt_at="2000-01-01T00:00:00+00:00",
+    )
+    _service2, second_tick, second_exit = run_service_once(
+        "2026-06-02T10:01:00+00:00",
+        runner,
+    )
+
+    second_run = store.get_run(first_run["id"])
+    second_events = delivery_store.list_events(job_id=job["id"], limit=10)
+    assert second_exit == 0
+    assert second_tick.due == 0
+    assert second_tick.ran == 0
+    assert len(runner.calls) == 1
+    assert second_tick.delivery.claimed >= 1
+    assert second_tick.delivery.delivered == 1
+    assert second_events[0]["status"] == "delivered"
+    assert second_run["delivery_status"] == "delivered"
+    assert store.get_job(job["id"])["last_delivery_error"] is None
+    assert len(sender.calls) == 2
