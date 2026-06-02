@@ -2444,3 +2444,20 @@ def test_cron_doctor_warns_when_docker_version_fails(monkeypatch, tmp_path):
     assert result.exit_code == 1
     assert "docker runtime: Docker command is available but 'docker version' failed." in result.text
     assert "Start Docker or fix permission to access the Docker daemon." in result.text
+
+
+def test_cron_doctor_feishu_service_env_includes_restart_command(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+    monkeypatch.setenv("FEISHU_APP_ID", "shell-app")
+    monkeypatch.setenv("FEISHU_APP_SECRET", "shell-secret")
+    from cron.jobs import create_job
+
+    create_job("send", "every 5m", name="Feishu active", deliver="feishu:oc_1234567890abcdef")
+
+    result = _run_cli(["cron", "doctor"])
+
+    assert result.exit_code == 2
+    assert "agent cron service env set FEISHU_APP_ID APP_ID_VALUE" in result.text
+    assert "agent cron service env set FEISHU_APP_SECRET APP_SECRET_VALUE" in result.text
+    assert "agent cron service restart" in result.text
+    assert "background service delivery uses service.env" in result.text

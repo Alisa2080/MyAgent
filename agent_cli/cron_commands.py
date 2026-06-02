@@ -977,8 +977,9 @@ def cron_doctor(
                 "warn",
                 "active Feishu cron jobs require service env; "
                 f"service env missing {', '.join(missing_service_env)}. "
-                "Set with `agent cron service env set FEISHU_APP_ID <app_id>` and "
-                "`agent cron service env set FEISHU_APP_SECRET <app_secret>`.",
+                "Set with `agent cron service env set FEISHU_APP_ID APP_ID_VALUE` and "
+                "`agent cron service env set FEISHU_APP_SECRET APP_SECRET_VALUE`, then run "
+                "`agent cron service restart`.",
             )
             if shell_present:
                 add(
