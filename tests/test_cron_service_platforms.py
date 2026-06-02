@@ -1057,3 +1057,58 @@ def test_launchd_logs_report_when_no_logs(monkeypatch, tmp_path):
 
     assert result.exit_code == 0
     assert result.message == "No cron service logs yet."
+
+
+def test_systemd_unit_includes_workdir_pythonpath_and_env_file(tmp_path):
+    from cron.service_manager import ServiceInstallConfig
+    from cron.service_platforms.systemd_user import render_unit
+
+    unit = render_unit(
+        ServiceInstallConfig(
+            interval_seconds=30,
+            lease_seconds=90,
+            python_executable="/usr/bin/python3",
+            working_directory=tmp_path / "repo",
+            pythonpath=f"{tmp_path / 'repo'}:/extra",
+            service_env_file=tmp_path / "home" / "cron" / "service.env",
+            environment_overrides={"FEISHU_APP_SECRET": "must-not-leak"},
+        )
+    )
+
+    assert f"WorkingDirectory={tmp_path / 'repo'}" in unit
+    assert f'Environment="PYTHONPATH={tmp_path / "repo"}:/extra"' in unit
+    assert f"EnvironmentFile=-{tmp_path / 'home' / 'cron' / 'service.env'}" in unit
+    assert "FEISHU_APP_SECRET" not in unit
+
+
+def test_launchd_plist_includes_workdir_pythonpath_and_service_env(monkeypatch, tmp_path):
+    import plistlib
+
+    from cron.service_manager import ServiceInstallConfig
+    from cron.service_platforms.launchd_user import render_plist
+
+    env_path = tmp_path / "home" / "cron" / "service.env"
+    env_path.parent.mkdir(parents=True)
+    env_path.write_text("FEISHU_APP_ID=cli_123\nFEISHU_APP_SECRET=secret\n", encoding="utf-8")
+    monkeypatch.setattr(
+        "cron.service_platforms.launchd_user.launchd_log_paths",
+        lambda: (tmp_path / "out.log", tmp_path / "err.log"),
+    )
+
+    plist = plistlib.loads(
+        render_plist(
+            ServiceInstallConfig(
+                interval_seconds=30,
+                lease_seconds=90,
+                working_directory=tmp_path / "repo",
+                pythonpath=f"{tmp_path / 'repo'}:/extra",
+                service_env_file=env_path,
+            )
+        )
+    )
+
+    assert plist["WorkingDirectory"] == str(tmp_path / "repo")
+    env = plist["EnvironmentVariables"]
+    assert env["PYTHONPATH"] == f"{tmp_path / 'repo'}:/extra"
+    assert env["FEISHU_APP_ID"] == "cli_123"
+    assert env["FEISHU_APP_SECRET"] == "secret"

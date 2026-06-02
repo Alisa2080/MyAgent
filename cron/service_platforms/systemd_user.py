@@ -39,27 +39,46 @@ def _quote_systemd_arg(value: str) -> str:
     return escaped
 
 
+def _format_working_directory(config: ServiceInstallConfig) -> str:
+    if config.working_directory is None:
+        return ""
+    return f"WorkingDirectory={_quote_systemd(str(config.working_directory))}\n"
+
+
+def _format_environment_file(config: ServiceInstallConfig) -> str:
+    if config.service_env_file is None:
+        return ""
+    return f"EnvironmentFile=-{_quote_systemd(str(config.service_env_file))}\n"
+
+
 def _format_environment(config: ServiceInstallConfig) -> str:
+    values = service_environment(config.environment_overrides)
+    if config.pythonpath:
+        values["PYTHONPATH"] = config.pythonpath
+    for secret_key in ("FEISHU_APP_ID", "FEISHU_APP_SECRET"):
+        values.pop(secret_key, None)
     return "\n".join(
         f'Environment="{key}={_quote_systemd(value)}"'
-        for key, value in sorted(
-            service_environment(config.environment_overrides).items()
-        )
+        for key, value in sorted(values.items())
         if "\n" not in value and "\r" not in value
     )
 
 
 def render_unit(config: ServiceInstallConfig) -> str:
     command = " ".join(_quote_systemd_arg(arg) for arg in serve_command(config))
-    environment = _format_environment(config)
-    environment_block = f"{environment}\n" if environment else ""
+    working_directory = _format_working_directory(config)
+    environment_block = _format_environment(config)
+    environment_file = _format_environment_file(config)
+    environment_block_line = f"{environment_block}\n" if environment_block else ""
     return (
         "[Unit]\n"
         "Description=LangChain Agent Cron Service\n"
         "After=default.target\n\n"
         "[Service]\n"
         "Type=simple\n"
-        f"{environment_block}"
+        f"{working_directory}"
+        f"{environment_block_line}"
+        f"{environment_file}"
         f"ExecStart={command}\n"
         "Restart=on-failure\n"
         "RestartSec=5\n\n"

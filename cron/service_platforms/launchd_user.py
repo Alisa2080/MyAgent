@@ -8,6 +8,7 @@ import subprocess
 from pathlib import Path
 
 from cron.paths import atomic_replace, get_cron_dir, secure_dir, secure_file
+from cron.service_env import read_service_env
 from cron.service_manager import (
     ServiceCommandResult,
     ServiceInstallConfig,
@@ -49,11 +50,14 @@ def _run_command(args: list[str]) -> tuple[int, str, str]:
 
 
 def _environment_variables(config: ServiceInstallConfig) -> dict[str, str]:
+    values = service_environment(config.environment_overrides)
+    if config.pythonpath:
+        values["PYTHONPATH"] = config.pythonpath
+    if config.service_env_file is not None:
+        values.update(read_service_env(config.service_env_file))
     return {
         key: value
-        for key, value in sorted(
-            service_environment(config.environment_overrides).items()
-        )
+        for key, value in sorted(values.items())
         if "\n" not in value and "\r" not in value
     }
 
@@ -68,6 +72,8 @@ def render_plist(config: ServiceInstallConfig) -> bytes:
         "StandardOutPath": str(stdout_path),
         "StandardErrorPath": str(stderr_path),
     }
+    if config.working_directory is not None:
+        payload["WorkingDirectory"] = str(config.working_directory)
     environment = _environment_variables(config)
     if environment:
         payload["EnvironmentVariables"] = environment
