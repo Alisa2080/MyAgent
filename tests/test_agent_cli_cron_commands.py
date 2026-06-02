@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import timedelta
+import os
 from types import SimpleNamespace
 
 
@@ -1176,7 +1177,12 @@ def test_cron_status_includes_sqlite_state_counts_and_adapters(monkeypatch, tmp_
     assert result.exit_code == 0
     assert "Cron sqlite:" in result.text
     assert "Job states: scheduled=1" in result.text
-    assert "Delivery adapters: local, origin, webhook" in result.text
+    assert "Delivery adapters:" in result.text
+    assert "feishu" in result.text
+    assert "local" in result.text
+    assert "origin" in result.text
+    assert "webhook" in result.text
+    assert "wecom" in result.text
 
 
 def test_cron_doctor_reports_delivery_db(monkeypatch, tmp_path):
@@ -1424,6 +1430,145 @@ def test_cron_doctor_lists_delivery_adapters(monkeypatch, tmp_path):
     assert "origin" in result.text
     assert "webhook" in result.text
     assert "wecom" in result.text
+
+
+def test_cron_doctor_lists_feishu_adapter(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    from agent_cli.cron_commands import cron_doctor
+
+    result = cron_doctor()
+
+    assert "delivery adapters:" in result.text
+    assert "feishu" in result.text
+
+
+def test_cron_doctor_fails_active_feishu_job_missing_env(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+    monkeypatch.setenv("FEISHU_APP_ID", "app-id")
+    monkeypatch.setenv("FEISHU_APP_SECRET", "app-secret")
+
+    import gateway.registry as gateway_registry
+    from agent_cli.cron_commands import cron_doctor
+    from cron.jobs import create_job
+    from gateway.contracts import SendResult
+
+    class FakeFeishuAdapter:
+        key = "feishu"
+
+        def validate_target(self, target):
+            missing = [
+                name
+                for name in ("FEISHU_APP_ID", "FEISHU_APP_SECRET")
+                if not os.environ.get(name)
+            ]
+            if missing:
+                return SendResult(
+                    False,
+                    error=f"missing required Feishu environment variables: {', '.join(missing)}",
+                )
+            return SendResult(True)
+
+        def send_text(self, target, message):
+            return SendResult(True)
+
+        def token_smoke(self):
+            return SendResult(True)
+
+    gateway_registry.clear_gateway_adapter_factories()
+    gateway_registry.register_gateway_adapter_factory(lambda **kwargs: FakeFeishuAdapter())
+    try:
+        job = create_job(prompt="write report", schedule="30m", deliver="feishu:oc_123")
+        monkeypatch.delenv("FEISHU_APP_ID", raising=False)
+        monkeypatch.delenv("FEISHU_APP_SECRET", raising=False)
+
+        result = cron_doctor()
+    finally:
+        gateway_registry.clear_gateway_adapter_factories()
+
+    assert result.exit_code == 2
+    assert f"active job {job['id']} feishu delivery invalid" in result.text
+    assert "missing required Feishu environment variables: FEISHU_APP_ID, FEISHU_APP_SECRET" in result.text
+
+
+def test_cron_doctor_feishu_token_smoke_invalid_credentials_fails(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    import gateway.registry as gateway_registry
+    from agent_cli.cron_commands import cron_doctor
+    from cron.jobs import create_job
+    from gateway.contracts import SendResult
+
+    class FakeFeishuAdapter:
+        key = "feishu"
+
+        def validate_target(self, target):
+            return SendResult(True)
+
+        def send_text(self, target, message):
+            raise AssertionError("doctor must not send a Feishu message")
+
+        def token_smoke(self):
+            return SendResult(
+                False,
+                error="feishu token API error 99991663: invalid app credentials",
+                retryable=False,
+            )
+
+    gateway_registry.clear_gateway_adapter_factories()
+    gateway_registry.register_gateway_adapter_factory(lambda **kwargs: FakeFeishuAdapter())
+    try:
+        job = create_job(prompt="write report", schedule="30m", deliver="feishu:oc_123")
+
+        result = cron_doctor()
+    finally:
+        gateway_registry.clear_gateway_adapter_factories()
+
+    assert result.exit_code == 2
+    assert (
+        f"active job {job['id']} feishu token smoke failed: "
+        "feishu token API error 99991663: invalid app credentials"
+    ) in result.text
+
+
+def test_cron_doctor_feishu_token_smoke_temporary_failure_warns(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    import gateway.registry as gateway_registry
+    from agent_cli.cron_commands import cron_doctor
+    from cron.jobs import create_job
+    from gateway.contracts import SendResult
+
+    class FakeFeishuAdapter:
+        key = "feishu"
+
+        def validate_target(self, target):
+            return SendResult(True)
+
+        def send_text(self, target, message):
+            raise AssertionError("doctor must not send a Feishu message")
+
+        def token_smoke(self):
+            return SendResult(
+                False,
+                error="feishu token HTTP 503: service unavailable",
+                retryable=True,
+            )
+
+    gateway_registry.clear_gateway_adapter_factories()
+    gateway_registry.register_gateway_adapter_factory(lambda **kwargs: FakeFeishuAdapter())
+    try:
+        job = create_job(prompt="write report", schedule="30m", deliver="feishu:oc_123")
+
+        result = cron_doctor()
+    finally:
+        gateway_registry.clear_gateway_adapter_factories()
+
+    assert result.exit_code == 1
+    assert (
+        f"active job {job['id']} feishu token smoke temporary failure: "
+        "feishu token HTTP 503: service unavailable"
+    ) in result.text
 
 
 def test_cron_doctor_uses_stored_wecom_target_when_env_changes(monkeypatch, tmp_path):

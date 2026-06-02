@@ -786,6 +786,33 @@ def cron_doctor(
                 wecom_error = validate_wecom_webhook_url(address)
                 if wecom_error:
                     add("fail", f"active job {job.get('id')} wecom delivery invalid: {wecom_error}")
+            if adapter_key == "feishu":
+                from gateway.contracts import PlatformMessageTarget
+                from gateway.registry import default_gateway_registry
+
+                feishu_address = str(address or "").strip()
+                if not feishu_address:
+                    add("fail", f"active job {job.get('id')} feishu delivery invalid: feishu delivery requires a chat_id")
+                    continue
+                feishu_adapter = default_gateway_registry().get("feishu")
+                if feishu_adapter is None:
+                    add("fail", f"active job {job.get('id')} feishu delivery invalid: feishu gateway adapter is not registered")
+                    continue
+                feishu_target = PlatformMessageTarget(
+                    platform="feishu",
+                    target_type="chat_id",
+                    target_id=feishu_address,
+                )
+                feishu_validation = feishu_adapter.validate_target(feishu_target)
+                if not feishu_validation.ok:
+                    add("fail", f"active job {job.get('id')} feishu delivery invalid: {feishu_validation.error}")
+                    continue
+                token_smoke = feishu_adapter.token_smoke()
+                if not token_smoke.ok:
+                    if token_smoke.retryable:
+                        add("warn", f"active job {job.get('id')} feishu token smoke temporary failure: {token_smoke.error}")
+                    else:
+                        add("fail", f"active job {job.get('id')} feishu token smoke failed: {token_smoke.error}")
         if not validation.ok:
             add("fail", f"active job {job.get('id')} delivery invalid: {validation.error}")
             continue
