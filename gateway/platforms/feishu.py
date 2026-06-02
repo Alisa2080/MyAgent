@@ -34,6 +34,7 @@ class FeishuPlatformAdapter:
     TOKEN_URL = "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal"
     SEND_URL = "https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=chat_id"
     _EXPIRY_SKEW_SECONDS = 60
+    _RETRYABLE_SEND_API_CODES = {230020, 99991400}
 
     def __init__(
         self,
@@ -181,4 +182,7 @@ class FeishuPlatformAdapter:
 
     @staticmethod
     def _is_retryable_send_code(code: Any) -> bool:
-        return code != 230001
+        try:
+            return int(code) in FeishuPlatformAdapter._RETRYABLE_SEND_API_CODES
+        except (TypeError, ValueError):
+            return False
