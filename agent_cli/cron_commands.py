@@ -756,6 +756,19 @@ def cron_doctor(
     profile, profile_source = effective_runtime_profile(cli_profile=cli_profile)
     add("ok", f"effective profile: {profile} ({profile_source})")
 
+    from cron.docker_diagnostics import inspect_docker_runtime
+
+    docker_diag = inspect_docker_runtime(profile)
+    if docker_diag.expected and docker_diag.version_ok:
+        add("ok", f"docker runtime: ready ({docker_diag.command_path})")
+    elif docker_diag.expected:
+        message = f"docker runtime: {docker_diag.error or 'not ready'}"
+        if docker_diag.suggestion:
+            message = f"{message}. {docker_diag.suggestion}"
+        add("warn", message)
+    else:
+        add("ok", f"docker runtime: not required for TERMINAL_ENV={docker_diag.env_type}")
+
     # Runner mode
     mode, mode_ok = runner_mode_diagnostic()
     if mode_ok:

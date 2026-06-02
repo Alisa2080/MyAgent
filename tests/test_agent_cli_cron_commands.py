@@ -2391,3 +2391,56 @@ def test_cron_run_dry_run_reports_manual_schedule_preservation(monkeypatch, tmp_
     assert "Manual run: yes" in result.text
     assert "Preserves periodic schedule: yes" in result.text
     assert "Decision: would_claim" in result.text
+
+
+def test_cron_doctor_warns_when_prod_expects_docker_but_command_missing(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+    monkeypatch.setenv("AGENT_RUNTIME_PROFILE", "prod")
+    monkeypatch.delenv("TERMINAL_ENV", raising=False)
+
+    import cron.docker_diagnostics as docker_diagnostics
+
+    monkeypatch.setattr(
+        docker_diagnostics,
+        "inspect_docker_runtime",
+        lambda profile: docker_diagnostics.DockerRuntimeDiagnostic(
+            expected=True,
+            env_type="docker",
+            command_path=None,
+            version_ok=False,
+            error="docker command not found",
+            suggestion="Install Docker or set TERMINAL_ENV=local for development.",
+        ),
+    )
+
+    result = _run_cli(["cron", "doctor"])
+
+    assert result.exit_code == 1
+    assert "docker runtime: docker command not found" in result.text
+    assert "Install Docker or set TERMINAL_ENV=local for development." in result.text
+
+
+def test_cron_doctor_warns_when_docker_version_fails(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+    monkeypatch.setenv("AGENT_RUNTIME_PROFILE", "prod")
+
+    import cron.docker_diagnostics as docker_diagnostics
+
+    monkeypatch.setattr(
+        docker_diagnostics,
+        "inspect_docker_runtime",
+        lambda profile: docker_diagnostics.DockerRuntimeDiagnostic(
+            expected=True,
+            env_type="docker",
+            command_path="/usr/bin/docker",
+            version_ok=False,
+            error="Docker command is available but 'docker version' failed.",
+            suggestion="Start Docker or fix permission to access the Docker daemon.",
+        ),
+    )
+
+    result = _run_cli(["cron", "doctor"])
+
+    assert result.exit_code == 1
+    assert "docker runtime: Docker command is available but 'docker version' failed." in result.text
+    assert "Start Docker or fix permission to access the Docker daemon." in result.text
