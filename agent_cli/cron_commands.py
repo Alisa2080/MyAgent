@@ -607,6 +607,7 @@ def cron_doctor(
     cleanup_runner_tmp: bool = False,
 ) -> CronCommandResult:
     from cron.delivery import validate_webhook_url
+    from cron.delivery_adapters import validate_wecom_webhook_url
     from cron.delivery_registry import default_delivery_registry
     from cron.delivery_targets import DeliveryIdentity
     from cron.delivery_store import DeliveryStore
@@ -765,11 +766,35 @@ def cron_doctor(
         if not validation.ok:
             add("fail", f"active job {job.get('id')} delivery invalid: {validation.error}")
             continue
-        for target in validation.targets:
-            if target.target_type == "webhook":
-                webhook_error = validate_webhook_url(target.address)
+        targets_to_validate = list(validation.targets)
+        for item in job.get("delivery_targets") or []:
+            targets_to_validate.append(item)
+        seen_targets: set[tuple[str | None, str | None, str | None]] = set()
+        for target in targets_to_validate:
+            if isinstance(target, dict):
+                target_type = target.get("target_type")
+                adapter_key = target.get("adapter_key")
+                address = target.get("address")
+            else:
+                target_type = target.target_type
+                adapter_key = target.adapter_key
+                address = target.address
+            target_key = (
+                str(target_type) if target_type is not None else None,
+                str(adapter_key) if adapter_key is not None else None,
+                str(address) if address is not None else None,
+            )
+            if target_key in seen_targets:
+                continue
+            seen_targets.add(target_key)
+            if target_type == "webhook":
+                webhook_error = validate_webhook_url(address)
                 if webhook_error:
                     add("fail", f"active job {job.get('id')} webhook delivery invalid: {webhook_error}")
+            if adapter_key == "wecom":
+                wecom_error = validate_wecom_webhook_url(address)
+                if wecom_error:
+                    add("fail", f"active job {job.get('id')} wecom delivery invalid: {wecom_error}")
 
     exit_code = 2 if failures else (1 if warnings else 0)
     return CronCommandResult("\n".join(lines), exit_code=exit_code)

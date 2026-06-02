@@ -1423,6 +1423,81 @@ def test_cron_doctor_lists_delivery_adapters(monkeypatch, tmp_path):
     assert "local" in result.text
     assert "origin" in result.text
     assert "webhook" in result.text
+    assert "wecom" in result.text
+
+
+def test_cron_doctor_fails_active_wecom_job_without_default_url(monkeypatch, tmp_path):
+    valid_url = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=env-key"
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+    monkeypatch.setenv("AGENT_CRON_WECOM_WEBHOOK_URL", valid_url)
+
+    from agent_cli.cron_commands import cron_doctor
+    from cron.jobs import create_job
+
+    job = create_job(prompt="write report", schedule="30m", deliver="wecom")
+    monkeypatch.delenv("AGENT_CRON_WECOM_WEBHOOK_URL", raising=False)
+
+    result = cron_doctor()
+
+    assert result.exit_code == 2
+    assert f"active job {job['id']} delivery invalid" in result.text
+    assert "wecom delivery requires AGENT_CRON_WECOM_WEBHOOK_URL or explicit webhook URL" in result.text
+
+
+def test_cron_doctor_fails_active_wecom_job_with_malformed_url(monkeypatch, tmp_path):
+    valid_url = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=env-key"
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+    monkeypatch.setenv("AGENT_CRON_WECOM_WEBHOOK_URL", valid_url)
+
+    from agent_cli.cron_commands import cron_doctor
+    from cron.jobs import create_job
+    from cron.state_store import StateStore
+
+    job = create_job(prompt="write report", schedule="30m", deliver="wecom")
+    with StateStore()._connect() as conn:
+        conn.execute(
+            "UPDATE jobs SET deliver = ?, delivery_targets_json = NULL WHERE id = ?",
+            ("wecom:https://example.invalid/hook", job["id"]),
+        )
+
+    result = cron_doctor()
+
+    assert result.exit_code == 2
+    assert f"active job {job['id']} delivery invalid" in result.text
+    assert "wecom webhook URL host must be qyapi.weixin.qq.com" in result.text
+
+
+def test_cron_doctor_fails_stored_wecom_target_with_malformed_url(monkeypatch, tmp_path):
+    import json
+
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    from agent_cli.cron_commands import cron_doctor
+    from cron.jobs import create_job
+    from cron.state_store import StateStore
+
+    job = create_job(prompt="write report", schedule="30m", deliver="local")
+    stored_targets = [
+        {
+            "raw": "wecom",
+            "target_type": "platform",
+            "adapter_key": "wecom",
+            "address": "https://example.invalid/hook",
+            "thread_id": None,
+            "metadata": {},
+        }
+    ]
+    with StateStore()._connect() as conn:
+        conn.execute(
+            "UPDATE jobs SET delivery_targets_json = ? WHERE id = ?",
+            (json.dumps(stored_targets), job["id"]),
+        )
+
+    result = cron_doctor()
+
+    assert result.exit_code == 2
+    assert f"active job {job['id']} wecom delivery invalid" in result.text
+    assert "wecom webhook URL host must be qyapi.weixin.qq.com" in result.text
 
 
 def test_cron_run_dry_run_does_not_create_run(monkeypatch, tmp_path):
