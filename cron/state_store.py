@@ -2047,6 +2047,22 @@ class StateStore:
             "active_runs": active[:5],
         }
 
+    def recent_missed_runs(self, *, limit: int = 5) -> list[dict[str, Any]]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT runs.*, jobs.name AS job_name
+                FROM runs
+                JOIN jobs ON jobs.id = runs.job_id
+                WHERE runs.status = 'skipped'
+                  AND runs.exit_reason = 'missed_run'
+                ORDER BY COALESCE(runs.finished_at, runs.updated_at, runs.created_at) DESC
+                LIMIT ?
+                """,
+                (max(1, int(limit)),),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
     def plan_job_claim(self, job_id: str, *, now_text: str) -> dict[str, Any]:
         return self._plan_claim(job_id, now_text=now_text, manual=False)
 

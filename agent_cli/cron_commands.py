@@ -867,6 +867,31 @@ def cron_doctor(
         counts = state_store.job_counts_by_state()
         count_text = ", ".join(f"{state}={count}" for state, count in sorted(counts.items())) or "-"
         add("ok", f"job states: {count_text}")
+        summary = state_store.cron_status_summary(top_n=5)
+        next_due = summary.get("next_due")
+        if next_due:
+            add("ok", f"next due job: {next_due.get('id')} at {next_due.get('next_run_at')}")
+            from cron.state_store import _parse_time, utc_now
+
+            due_dt = _parse_time(next_due.get("next_run_at"))
+            now_dt = utc_now()
+            if due_dt is not None and due_dt < now_dt:
+                add(
+                    "warn",
+                    "next due job is overdue; if service heartbeat is stale, run "
+                    "`agent cron service start` or `agent cron service restart`. "
+                    "Inspect with `agent cron service status` and `agent cron status`.",
+                )
+        else:
+            add("ok", "next due job: -")
+        missed = state_store.recent_missed_runs(limit=3)
+        if missed:
+            first = missed[0]
+            add(
+                "warn",
+                f"recent missed cron runs: {len(missed)}; scheduled window was missed. "
+                f"Inspect with `agent cron runs {first['job_id']}`.",
+            )
         registry = default_delivery_registry()
         add("ok", f"delivery adapters: {', '.join(registry.adapter_keys())}")
         store = DeliveryStore()

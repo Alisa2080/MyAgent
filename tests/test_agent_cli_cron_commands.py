@@ -2461,3 +2461,52 @@ def test_cron_doctor_feishu_service_env_includes_restart_command(monkeypatch, tm
     assert "agent cron service env set FEISHU_APP_SECRET APP_SECRET_VALUE" in result.text
     assert "agent cron service restart" in result.text
     assert "background service delivery uses service.env" in result.text
+
+
+def test_cron_doctor_warns_overdue_next_due_with_stale_service(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+    from cron.jobs import create_job
+    from cron.state_store import StateStore
+    import agent_cli.cron_commands as cron_commands
+
+    job = create_job("overdue", "every 5m", name="Overdue", deliver="local")
+    store = StateStore()
+    saved = store.get_job(job["id"])
+    saved["next_run_at"] = "2026-06-02T18:00:00+08:00"
+    store.update_job(saved["id"], saved)
+
+    monkeypatch.setattr(
+        cron_commands,
+        "_service_status_lines",
+        lambda: ["Heartbeat: stale-or-missing"],
+    )
+
+    result = cron_commands.cron_doctor()
+
+    assert result.exit_code == 1
+    assert "next due job is overdue" in result.text
+    assert "agent cron service start" in result.text
+    assert "agent cron service restart" in result.text
+
+
+def test_cron_doctor_warns_recent_missed_runs(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+    import cron.state_store as state_store
+    from cron.jobs import create_job
+    from cron.state_store import StateStore
+
+    run_time = datetime.fromisoformat("2026-06-02T19:00:00+08:00")
+    state_store.utc_now = lambda: run_time
+
+    job = create_job("missed", "every 5m", name="Missed", deliver="local")
+    store = StateStore()
+    saved = store.get_job(job["id"])
+    saved["next_run_at"] = "2026-06-02T18:00:00+08:00"
+    store.update_job(saved["id"], saved)
+    store.claim_due_jobs(now_text="2026-06-02T19:00:00+08:00", limit=1)
+
+    result = _run_cli(["cron", "doctor"])
+
+    assert result.exit_code == 1
+    assert "recent missed cron runs" in result.text
+    assert f"agent cron runs {job['id']}" in result.text
