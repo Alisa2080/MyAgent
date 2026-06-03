@@ -211,6 +211,28 @@ def test_runtime_context_extracts_gateway_origin_identity_from_config():
     }
 
 
+def test_gateway_origin_identity_prefers_origin_thread_id():
+    from agent_core.session_context import origin_identity_from_runtime
+
+    runtime = SimpleNamespace(
+        config={
+            "configurable": {
+                "source_type": "gateway",
+                "platform": "feishu",
+                "chat_id": "oc_123",
+                "thread_id": "gw_session_thread",
+                "origin_thread_id": "feishu-thread-1",
+                "session_id": "gw_1",
+            }
+        }
+    )
+
+    identity = origin_identity_from_runtime(runtime)
+
+    assert identity["thread_id"] == "feishu-thread-1"
+    assert identity["session_id"] == "gw_1"
+
+
 def test_runtime_context_extracts_web_origin_identity_from_config():
     from agent_core.session_context import origin_identity_from_runtime
 

@@ -8,6 +8,7 @@ from agent_cli.command_handlers.background import background_handlers
 from agent_cli.command_handlers.clipboard import clipboard_handlers
 from agent_cli.command_handlers.cron import cron_handlers
 from agent_cli.command_handlers.debug import debug_handlers
+from agent_cli.command_handlers.gateway import gateway_handlers
 from agent_cli.command_handlers.session import session_handlers
 from agent_cli.command_handlers.skills import skills_handlers
 
@@ -23,6 +24,7 @@ def build_command_handlers(ctx: "CommandContext") -> dict[str, CommandHandler]:
         debug_handlers(),
         session_handlers(),
         background_handlers(),
+        gateway_handlers(),
         cron_handlers(),
         skills_handlers(),
         clipboard_handlers(),

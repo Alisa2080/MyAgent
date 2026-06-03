@@ -30,7 +30,11 @@ class DeliveryDispatcher:
             ):
                 self._sync_after_event_update(event)
                 summary["dead"] += 1
-        for event in self.store.claim_due_delivery_events(limit=limit, adapter_keys=dispatch_keys):
+        for event in self.store.claim_due_delivery_events(
+            limit=limit,
+            adapter_keys=dispatch_keys,
+            gateway_origin_only="origin" in dispatch_keys,
+        ):
             summary["claimed"] += 1
             adapter = self.registry.get(str(event["adapter_key"]))
             job = self.store.get_job(str(event["job_id"])) if event.get("job_id") else None

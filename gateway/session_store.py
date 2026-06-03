@@ -4,7 +4,7 @@ import json
 import sqlite3
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -45,6 +45,7 @@ CREATE TABLE IF NOT EXISTS gateway_inbound_events (
   platform TEXT NOT NULL,
   event_id TEXT NOT NULL,
   claimed_at TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'succeeded',
   PRIMARY KEY (platform, event_id)
 );
 """
@@ -76,6 +77,8 @@ class GatewayMessage:
 
 
 class GatewaySessionStore:
+    DEFAULT_PROCESSING_STALE_SECONDS = 300
+
     def __init__(self, db_path: str | Path):
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -98,6 +101,14 @@ class GatewaySessionStore:
     def _init_schema(self) -> None:
         with self.connect() as conn:
             conn.executescript(SCHEMA)
+            columns = {
+                row["name"]
+                for row in conn.execute("PRAGMA table_info(gateway_inbound_events)").fetchall()
+            }
+            if "status" not in columns:
+                conn.execute(
+                    "ALTER TABLE gateway_inbound_events ADD COLUMN status TEXT NOT NULL DEFAULT 'succeeded'"
+                )
 
     @staticmethod
     def _session_from_row(row: sqlite3.Row | tuple) -> GatewaySession:
@@ -185,7 +196,7 @@ class GatewaySessionStore:
                 """
                 UPDATE gateway_sessions
                 SET updated_at = ?,
-                    last_event_id = ?,
+                    last_event_id = COALESCE(?, last_event_id),
                     last_message_preview = ?
                 WHERE session_id = ?
                 """,
@@ -225,11 +236,76 @@ class GatewaySessionStore:
             try:
                 conn.execute(
                     """
-                    INSERT INTO gateway_inbound_events (platform, event_id, claimed_at)
-                    VALUES (?, ?, ?)
+                    INSERT INTO gateway_inbound_events (platform, event_id, claimed_at, status)
+                    VALUES (?, ?, ?, 'succeeded')
                     """,
                     (platform, event_id, now),
                 )
                 return True
             except sqlite3.IntegrityError:
                 return False
+
+    def has_event(self, platform: str, event_id: str) -> bool:
+        with self.connect() as conn:
+            row = conn.execute(
+                """
+                SELECT 1 FROM gateway_inbound_events
+                WHERE platform = ? AND event_id = ?
+                """,
+                (platform, event_id),
+            ).fetchone()
+        return row is not None
+
+    def begin_event_processing(
+        self,
+        platform: str,
+        event_id: str,
+        *,
+        stale_after_seconds: int = DEFAULT_PROCESSING_STALE_SECONDS,
+    ) -> bool:
+        now = self.now()
+        cutoff = (datetime.now(timezone.utc) - timedelta(seconds=stale_after_seconds)).isoformat()
+        with self.connect() as conn:
+            try:
+                conn.execute(
+                    """
+                    INSERT INTO gateway_inbound_events (platform, event_id, claimed_at, status)
+                    VALUES (?, ?, ?, 'processing')
+                    """,
+                    (platform, event_id, now),
+                )
+                return True
+            except sqlite3.IntegrityError:
+                cursor = conn.execute(
+                    """
+                    UPDATE gateway_inbound_events
+                    SET claimed_at = ?, status = 'processing'
+                    WHERE platform = ?
+                      AND event_id = ?
+                      AND status = 'processing'
+                      AND claimed_at < ?
+                    """,
+                    (now, platform, event_id, cutoff),
+                )
+                return cursor.rowcount > 0
+
+    def complete_event(self, platform: str, event_id: str) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                """
+                UPDATE gateway_inbound_events
+                SET status = 'succeeded', claimed_at = ?
+                WHERE platform = ? AND event_id = ?
+                """,
+                (self.now(), platform, event_id),
+            )
+
+    def release_event(self, platform: str, event_id: str) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                """
+                DELETE FROM gateway_inbound_events
+                WHERE platform = ? AND event_id = ? AND status = 'processing'
+                """,
+                (platform, event_id),
+            )

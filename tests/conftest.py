@@ -24,6 +24,11 @@ def _fake_tool(name=None, *tool_args, **tool_kwargs):
 def _install_langchain_stubs(monkeypatch=None):
     import types as types_
 
+    if _is_real_package_installed("langchain") and _is_real_package_installed("langchain_core"):
+        _clear_stubbed_modules("langchain")
+        _clear_stubbed_modules("langchain_core")
+        return
+
     setter = monkeypatch.setitem if monkeypatch is not None else sys.modules.setdefault
     mock_langchain = types_.ModuleType("langchain")
     mock_langchain_tools = types_.ModuleType("langchain.tools")
@@ -62,7 +67,10 @@ def _install_langchain_stubs(monkeypatch=None):
     mock_langchain_core.messages = types_.ModuleType("langchain_core.messages")
     mock_langchain_core.messages.AIMessage = MagicMock()
     mock_langchain_core.messages.ToolCall = dict
-    mock_langchain_core.messages.ToolMessage = lambda **kwargs: SimpleNamespace(**kwargs)
+    class ToolMessage(SimpleNamespace):
+        pass
+
+    mock_langchain_core.messages.ToolMessage = ToolMessage
     if monkeypatch is not None:
         setter(sys.modules, "langchain", mock_langchain)
         setter(sys.modules, "langchain.agents", mock_langchain_agents)
@@ -88,14 +96,30 @@ def _is_real_package_installed(name: str) -> bool:
     already in ``sys.modules`` but its ``__spec__`` is ``None`` — which is
     the case for MagicMock stubs.  We guard against that here.
     """
+    import importlib.util
     existing = sys.modules.get(name)
     if existing is not None:
-        # Already loaded: real if it has a genuine __spec__ with an origin.
         spec = getattr(existing, "__spec__", None)
-        return spec is not None and getattr(spec, "origin", None) is not None
-    # Not yet loaded: ask importlib — safe because there's no stub in sys.modules.
-    import importlib.util
+        if spec is not None and getattr(spec, "origin", None) is not None:
+            return True
+        del sys.modules[name]
+        real_spec = None
+        try:
+            real_spec = importlib.util.find_spec(name)
+        finally:
+            if real_spec is None:
+                sys.modules[name] = existing
+        return real_spec is not None
     return importlib.util.find_spec(name) is not None
+
+
+def _clear_stubbed_modules(prefix: str) -> None:
+    for name, module in list(sys.modules.items()):
+        if name != prefix and not name.startswith(prefix + "."):
+            continue
+        spec = getattr(module, "__spec__", None)
+        if spec is None or getattr(spec, "origin", None) is None:
+            sys.modules.pop(name, None)
 
 
 def _install_optional_dep_stubs(monkeypatch=None):
@@ -114,56 +138,76 @@ def _install_optional_dep_stubs(monkeypatch=None):
             setter("dateutil.parser", MagicMock())
 
 
-@pytest.fixture(autouse=True)
-def stub_heavy_deps(monkeypatch):
+def _install_langgraph_stubs(monkeypatch=None):
+    if _is_real_package_installed("langgraph"):
+        _clear_stubbed_modules("langgraph")
+        return
+
     import types as types_
 
-    _install_langchain_stubs(monkeypatch)
-
-    # langgraph stubs
+    setter = monkeypatch.setitem if monkeypatch is not None else sys.modules.setdefault
     mock_langgraph = types_.ModuleType("langgraph")
     mock_langgraph.__path__ = []
     mock_langgraph_runtime = types_.ModuleType("langgraph.runtime")
     mock_langgraph_runtime.Runtime = MagicMock()
     mock_langgraph_types = types_.ModuleType("langgraph.types")
-    mock_langgraph_types.Command = MagicMock()
+
+    class Command:
+        def __init__(self, *, resume=None, **kwargs):
+            self.resume = resume
+            for key, value in kwargs.items():
+                setattr(self, key, value)
+
+    mock_langgraph_types.Command = Command
     mock_langgraph_types.interrupt = MagicMock()
     mock_langgraph.runtime = mock_langgraph_runtime
     mock_langgraph.types = mock_langgraph_types
-    monkeypatch.setitem(sys.modules, "langgraph", mock_langgraph)
-    monkeypatch.setitem(sys.modules, "langgraph.runtime", mock_langgraph_runtime)
-    monkeypatch.setitem(sys.modules, "langgraph.types", mock_langgraph_types)
+    if monkeypatch is not None:
+        setter(sys.modules, "langgraph", mock_langgraph)
+        setter(sys.modules, "langgraph.runtime", mock_langgraph_runtime)
+        setter(sys.modules, "langgraph.types", mock_langgraph_types)
+    else:
+        setter("langgraph", mock_langgraph)
+        setter("langgraph.runtime", mock_langgraph_runtime)
+        setter("langgraph.types", mock_langgraph_types)
 
-    monkeypatch.setitem(sys.modules, "dotenv", MagicMock())
-    monkeypatch.setitem(sys.modules, "pydantic", MagicMock())
-    monkeypatch.setitem(sys.modules, "tinyfish", MagicMock())
-    monkeypatch.setitem(sys.modules, "langchain_anthropic", MagicMock())
-    monkeypatch.setitem(sys.modules, "langchain_openai", MagicMock())
+
+def _install_module_stub(name: str, monkeypatch=None) -> None:
+    if _is_real_package_installed(name):
+        _clear_stubbed_modules(name)
+        return
+    setter = monkeypatch.setitem if monkeypatch is not None else sys.modules.setdefault
+    if monkeypatch is not None:
+        setter(sys.modules, name, MagicMock())
+    else:
+        setter(name, MagicMock())
+
+
+@pytest.fixture(autouse=True)
+def stub_heavy_deps(monkeypatch):
+    _install_langchain_stubs(monkeypatch)
+    _install_langgraph_stubs(monkeypatch)
+    for module_name in (
+        "dotenv",
+        "pydantic",
+        "tinyfish",
+        "langchain_anthropic",
+        "langchain_openai",
+    ):
+        _install_module_stub(module_name, monkeypatch)
     _install_optional_dep_stubs(monkeypatch)
 
 
 def pytest_configure(config):
-    import types as types_
-
     # Stub heavy deps before any imports happen
     _install_langchain_stubs()
-
-    mock_langgraph = types_.ModuleType("langgraph")
-    mock_langgraph.__path__ = []
-    mock_langgraph_runtime = types_.ModuleType("langgraph.runtime")
-    mock_langgraph_runtime.Runtime = MagicMock()
-    mock_langgraph_types = types_.ModuleType("langgraph.types")
-    mock_langgraph_types.Command = MagicMock()
-    mock_langgraph_types.interrupt = MagicMock()
-    mock_langgraph.runtime = mock_langgraph_runtime
-    mock_langgraph.types = mock_langgraph_types
-    sys.modules.setdefault("langgraph", mock_langgraph)
-    sys.modules.setdefault("langgraph.runtime", mock_langgraph_runtime)
-    sys.modules.setdefault("langgraph.types", mock_langgraph_types)
-
-    sys.modules.setdefault("dotenv", MagicMock())
-    sys.modules.setdefault("pydantic", MagicMock())
-    sys.modules.setdefault("tinyfish", MagicMock())
-    sys.modules.setdefault("langchain_anthropic", MagicMock())
-    sys.modules.setdefault("langchain_openai", MagicMock())
+    _install_langgraph_stubs()
+    for module_name in (
+        "dotenv",
+        "pydantic",
+        "tinyfish",
+        "langchain_anthropic",
+        "langchain_openai",
+    ):
+        _install_module_stub(module_name)
     _install_optional_dep_stubs()

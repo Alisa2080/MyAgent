@@ -111,6 +111,18 @@ def test_run_health_checks_reports_storage_and_openai_key(tmp_path, monkeypatch)
     assert by_name["OPENAI_API_KEY"].status == "WARN"
 
 
+def test_run_health_checks_reports_feishu_gateway_config(tmp_path, monkeypatch):
+    monkeypatch.delenv("FEISHU_APP_ID", raising=False)
+    monkeypatch.delenv("FEISHU_APP_SECRET", raising=False)
+    monkeypatch.delenv("FEISHU_CALLBACK_TOKEN", raising=False)
+
+    results = run_health_checks(workdir=str(tmp_path), cli_home=tmp_path)
+    by_name = {item.name: item for item in results}
+
+    assert by_name["Feishu Gateway"].status == "WARN"
+    assert "FEISHU_APP_ID" in by_name["Feishu Gateway"].message
+
+
 def test_run_health_checks_uses_explicit_cli_home_for_database(tmp_path, monkeypatch):
     ambient_home = tmp_path / "ambient"
     explicit_home = tmp_path / "explicit"

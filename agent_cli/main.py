@@ -126,7 +126,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     gateway_subparsers = gateway_parser.add_subparsers(dest="gateway_command")
     gateway_subparsers.add_parser("status", parents=[public_options])
-    gateway_subparsers.add_parser("serve", parents=[public_options])
+    gateway_serve = gateway_subparsers.add_parser("serve", parents=[public_options])
+    gateway_serve.add_argument("--host", default="127.0.0.1")
+    gateway_serve.add_argument("--port", type=int, default=8765)
 
     cron_parser = subparsers.add_parser(
         "cron",
@@ -539,7 +541,7 @@ def main(argv: list[str] | None = None) -> int:
         if subcommand == "status":
             return gateway_status(home=cli_home)
         if subcommand == "serve":
-            return gateway_serve(args)
+            return gateway_serve(args, home=cli_home)
         return gateway_status(home=cli_home)
 
     if command == "cron":

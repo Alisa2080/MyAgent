@@ -184,6 +184,32 @@ def test_send_payload_uses_feishu_message_api_shape(monkeypatch):
     }
 
 
+def test_send_with_thread_id_replies_to_feishu_message(monkeypatch):
+    monkeypatch.setenv("FEISHU_APP_ID", "app-id")
+    monkeypatch.setenv("FEISHU_APP_SECRET", "app-secret")
+    sender = FakeHttpSender([token_response(token="abc123"), send_response()])
+    adapter = FeishuPlatformAdapter(http_sender=sender, now=lambda: 1000)
+
+    result = adapter.send_text(
+        PlatformMessageTarget(
+            platform="feishu",
+            target_type="chat_id",
+            target_id="oc_chat",
+            thread_id="om_original",
+        ),
+        feishu_message("reply text"),
+    )
+
+    assert result.ok is True
+    url, payload, headers = sender.calls[1]
+    assert url == FeishuPlatformAdapter.REPLY_URL_TEMPLATE.format(message_id="om_original")
+    assert headers["Authorization"] == "Bearer abc123"
+    assert payload == {
+        "msg_type": "text",
+        "content": json.dumps({"text": "reply text"}, ensure_ascii=False),
+    }
+
+
 def test_token_network_exception_is_retryable(monkeypatch):
     monkeypatch.setenv("FEISHU_APP_ID", "app-id")
     monkeypatch.setenv("FEISHU_APP_SECRET", "app-secret")
@@ -372,6 +398,7 @@ def test_feishu_text_message_event_normalizes_to_inbound_event(monkeypatch):
     assert result.event.platform == "feishu"
     assert result.event.event_id == "evt-1"
     assert result.event.chat_id == "oc_123"
+    assert result.event.thread_id == "om_1"
     assert result.event.sender_id == "ou_1"
     assert result.event.text == "hello feishu"
     assert result.response_body == {"ok": True}
@@ -393,3 +420,14 @@ def test_feishu_unsupported_message_type_is_acknowledged(monkeypatch):
     assert result.ok is True
     assert result.event is None
     assert result.response_body == {"ok": True}
+
+
+def test_feishu_encrypted_callback_reports_unsupported(monkeypatch):
+    monkeypatch.setenv("FEISHU_CALLBACK_TOKEN", "expected-token")
+    adapter = FeishuPlatformAdapter(http_sender=FakeHttpSender([]))
+
+    result = adapter.parse_callback({}, {"encrypt": "ciphertext"})
+
+    assert result.ok is False
+    assert result.status_code == 400
+    assert "encrypted Feishu callbacks are not supported" in (result.error or "")

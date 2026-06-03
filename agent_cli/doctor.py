@@ -192,6 +192,13 @@ def check_feishu_gateway_config(env: dict[str, str] | None = None) -> list[str]:
     return [f"missing Feishu gateway environment variables: {', '.join(missing)}"]
 
 
+def check_feishu_gateway() -> HealthCheck:
+    errors = check_feishu_gateway_config()
+    if errors:
+        return warn("Feishu Gateway", "; ".join(errors))
+    return ok("Feishu Gateway", "configured")
+
+
 def run_health_checks(workdir: str, cli_home: Path | None = None) -> list[HealthCheck]:
     if cli_home is None:
         cli_home = get_cli_home()
@@ -210,6 +217,7 @@ def run_health_checks(workdir: str, cli_home: Path | None = None) -> list[Health
         check_dotenv(cli_home, cwd),
         check_openai_api_key(),
         check_background_tasks(db_path),
+        check_feishu_gateway(),
     ]
     return results
 

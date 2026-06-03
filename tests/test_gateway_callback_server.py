@@ -4,7 +4,7 @@ import json
 
 
 class FakeAdapter:
-    key = "fake" 
+    key = "fake"
 
     def parse_callback(self, headers, body):
         from gateway.contracts import InboundEvent, InboundParseResult
@@ -70,6 +70,50 @@ def test_callback_dispatches_inbound_event_once():
     assert first.status_code == 200
     assert second.status_code == 200
     assert [event.event_id for event in dispatched] == ["evt-1"]
+
+
+def test_callback_does_not_dedupe_before_failed_dispatch():
+    from gateway.callback_server import CallbackApplication
+    from gateway.registry import GatewayRegistry
+
+    calls = []
+    registry = GatewayRegistry()
+    registry.register(FakeAdapter())
+
+    def dispatch(event):
+        calls.append(event.event_id)
+        if len(calls) == 1:
+            raise RuntimeError("temporary failure")
+
+    app = CallbackApplication(registry=registry, dispatch=dispatch)
+    body = json.dumps({"event_id": "evt-1", "chat_id": "chat-1", "text": "hello"}).encode()
+
+    first = app.handle("POST", "/callback/fake", {}, body)
+    second = app.handle("POST", "/callback/fake", {}, body)
+
+    assert first.status_code == 500
+    assert "temporary failure" in first.body["error"]
+    assert second.status_code == 200
+    assert calls == ["evt-1", "evt-1"]
+
+
+def test_callback_dispatch_false_result_returns_500():
+    from gateway.callback_server import CallbackApplication
+    from gateway.dispatch import DispatchResult
+    from gateway.registry import GatewayRegistry
+
+    registry = GatewayRegistry()
+    registry.register(FakeAdapter())
+    app = CallbackApplication(
+        registry=registry,
+        dispatch=lambda event: DispatchResult(False, "gw_1", error="send failed"),
+    )
+    body = json.dumps({"event_id": "evt-1", "chat_id": "chat-1", "text": "hello"}).encode()
+
+    response = app.handle("POST", "/callback/fake", {}, body)
+
+    assert response.status_code == 500
+    assert response.body == {"error": "send failed"}
 
 
 def test_callback_unknown_platform_returns_404():

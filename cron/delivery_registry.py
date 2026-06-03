@@ -85,7 +85,6 @@ class DeliveryRegistry:
 def build_delivery_registry(*, webhook_sender=None, extra_adapters=None) -> DeliveryRegistry:
     from cron.delivery_adapters import (
         FeishuDeliveryAdapter,
-        GatewayOriginDeliveryAdapter,
         LocalDeliveryAdapter,
         OriginDeliveryAdapter,
         WebhookDeliveryAdapter,
@@ -95,7 +94,6 @@ def build_delivery_registry(*, webhook_sender=None, extra_adapters=None) -> Deli
     registry = DeliveryRegistry()
     registry.register(LocalDeliveryAdapter())
     registry.register(OriginDeliveryAdapter())
-    registry.register(GatewayOriginDeliveryAdapter())
     registry.register(WebhookDeliveryAdapter(sender=webhook_sender))
     registry.register(WeComDeliveryAdapter(sender=webhook_sender))
     registry.register(FeishuDeliveryAdapter())

@@ -42,7 +42,7 @@ class LocalDeliveryAdapter:
 
 class OriginDeliveryAdapter:
     key = "origin"
-    active_dispatch = False
+    active_dispatch = True
 
     def validate(self, target: Any, job: dict[str, Any]) -> AdapterValidation:
         origin = job.get("origin") or {}
@@ -79,7 +79,7 @@ class OriginDeliveryAdapter:
             thread_id=origin.get("thread_id"),
         )
         message = OutboundMessage(
-            text=_format_origin_delivery_text(event, job, run),
+            text=_shorten_feishu_text(_format_origin_delivery_text(event, job, run), _FEISHU_MAX_TEXT_CHARS),
             metadata={"event_id": event.get("id"), "job_id": (job or {}).get("id")},
         )
         result = gateway_adapter.send_text(target, message)
@@ -122,7 +122,7 @@ class GatewayOriginDeliveryAdapter:
             thread_id=origin.get("thread_id"),
         )
         message = OutboundMessage(
-            text=_format_origin_delivery_text(event, job, run),
+            text=_shorten_feishu_text(_format_origin_delivery_text(event, job, run), _FEISHU_MAX_TEXT_CHARS),
             metadata={"event_id": event.get("id"), "job_id": (job or {}).get("id")},
         )
         result = gateway_adapter.send_text(target, message)

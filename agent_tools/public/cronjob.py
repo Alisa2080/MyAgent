@@ -220,7 +220,7 @@ def _validate_delivery(deliver: Any, *, origin: dict[str, Any] | None) -> dict[s
     validation = registry.validate_targets(
         str(deliver),
         origin=DeliveryIdentity.from_job_origin(origin),
-        job={},
+        job={"origin": origin},
     )
     if validation.ok:
         return None

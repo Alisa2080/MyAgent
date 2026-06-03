@@ -141,7 +141,7 @@ def origin_identity_from_runtime(runtime: Any | None) -> dict[str, str] | None:
         "source_type": source_type,
         "platform": configurable.get("platform"),
         "chat_id": configurable.get("chat_id"),
-        "thread_id": configurable.get("thread_id"),
+        "thread_id": configurable.get("origin_thread_id") or configurable.get("thread_id"),
         "session_id": configurable.get("session_id"),
         "display_name": configurable.get("display_name") or configurable.get("chat_name"),
     }

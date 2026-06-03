@@ -119,7 +119,7 @@ def test_dispatcher_marks_unsupported_persisted_target_dead_by_default(monkeypat
     assert "unsupported delivery target" in stored["last_error"]
 
 
-def test_dispatcher_does_not_claim_local_events_but_dead_letters_non_gateway_origin(monkeypatch, tmp_path):
+def test_dispatcher_does_not_claim_local_or_non_gateway_origin_events(monkeypatch, tmp_path):
     monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
 
     from cron.delivery import JobRunResult, enqueue_result
@@ -146,9 +146,27 @@ def test_dispatcher_does_not_claim_local_events_but_dead_letters_non_gateway_ori
 
     summary = DeliveryDispatcher().dispatch_due(limit=10)
 
-    assert summary == {"claimed": 1, "delivered": 0, "failed": 0, "dead": 1}
+    assert summary == {"claimed": 0, "delivered": 0, "failed": 0, "dead": 0}
     assert DeliveryStore().get(local_event["id"])["status"] == "delivered"
-    assert DeliveryStore().get(origin_event["id"])["status"] == "dead"
+    assert DeliveryStore().get(origin_event["id"])["status"] == "pending"
+
+
+def test_gateway_origin_uses_origin_adapter(monkeypatch):
+    from cron.delivery_registry import default_delivery_registry
+    from cron.delivery_targets import DeliveryIdentity, parse_delivery_targets
+
+    target = parse_delivery_targets(
+        "origin",
+        origin=DeliveryIdentity(
+            source_type="gateway",
+            platform="feishu",
+            chat_id="oc_123",
+            thread_id="om_1",
+        ),
+    )[0]
+
+    assert target.adapter_key == "origin"
+    assert "origin" in default_delivery_registry().active_adapter_keys()
 
 
 def test_dispatcher_can_skip_stale_recovery(monkeypatch, tmp_path):
@@ -173,7 +191,7 @@ def test_default_registry_active_dispatch_keys_include_origin():
     assert default_delivery_registry().active_adapter_keys() == ["feishu", "origin", "webhook", "wecom"]
 
 
-def test_dispatcher_dead_letters_non_gateway_origin_events(monkeypatch, tmp_path):
+def test_dispatcher_keeps_non_gateway_origin_events_pending(monkeypatch, tmp_path):
     monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
 
     from cron.delivery_dispatcher import DeliveryDispatcher
@@ -199,8 +217,8 @@ def test_dispatcher_dead_letters_non_gateway_origin_events(monkeypatch, tmp_path
 
     summary = DeliveryDispatcher(store=store).dispatch_due(limit=10)
 
-    assert summary == {"claimed": 1, "delivered": 0, "failed": 0, "dead": 1}
-    assert store.get_delivery_event(event["id"])["status"] == "dead"
+    assert summary == {"claimed": 0, "delivered": 0, "failed": 0, "dead": 0}
+    assert store.get_delivery_event(event["id"])["status"] == "pending"
 
 
 def test_dispatcher_counts_retry_exhaustion_as_dead(monkeypatch, tmp_path):

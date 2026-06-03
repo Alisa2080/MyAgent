@@ -35,6 +35,7 @@ class FeishuPlatformAdapter:
     key = "feishu"
     TOKEN_URL = "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal"
     SEND_URL = "https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=chat_id"
+    REPLY_URL_TEMPLATE = "https://open.feishu.cn/open-apis/im/v1/messages/{message_id}/reply"
     _EXPIRY_SKEW_SECONDS = 60
     _RETRYABLE_SEND_API_CODES = {230020, 99991400}
 
@@ -77,14 +78,10 @@ class FeishuPlatformAdapter:
         if not token_result.ok or token is None:
             return token_result
 
-        payload = {
-            "receive_id": target.target_id,
-            "msg_type": "text",
-            "content": json.dumps({"text": message.text}, ensure_ascii=False),
-        }
+        payload = self._send_payload(target, message)
         try:
             status, body = self.http_sender(
-                self.SEND_URL,
+                self._send_url(target),
                 payload,
                 {"Authorization": f"Bearer {token}"},
             )
@@ -175,6 +172,12 @@ class FeishuPlatformAdapter:
         return self._tenant_access_token, SendResult(True)
 
     def parse_callback(self, headers: dict[str, str], body: dict[str, Any]) -> InboundParseResult:
+        if body.get("encrypt"):
+            return InboundParseResult(
+                False,
+                status_code=400,
+                error="encrypted Feishu callbacks are not supported; disable encryption or add FEISHU_CALLBACK_ENCRYPT_KEY support",
+            )
         token_result = self._validate_callback_token(body)
         if not token_result.ok:
             return token_result
@@ -211,7 +214,7 @@ class FeishuPlatformAdapter:
             event_id=event_id,
             event_type=event_type,
             chat_id=chat_id,
-            thread_id=message.get("thread_id"),
+            thread_id=message.get("thread_id") or message.get("message_id"),
             sender_id=sender_id.get("open_id") or sender_id.get("union_id") or sender_id.get("user_id"),
             sender_name=sender.get("sender_name"),
             text=text,
@@ -219,6 +222,22 @@ class FeishuPlatformAdapter:
             raw=body,
         )
         return InboundParseResult(True, event=inbound, response_body={"ok": True}, status_code=200)
+
+    @classmethod
+    def _send_url(cls, target: PlatformMessageTarget) -> str:
+        if target.thread_id:
+            return cls.REPLY_URL_TEMPLATE.format(message_id=str(target.thread_id))
+        return cls.SEND_URL
+
+    @staticmethod
+    def _send_payload(target: PlatformMessageTarget, message: OutboundMessage) -> dict[str, Any]:
+        payload = {
+            "msg_type": "text",
+            "content": json.dumps({"text": message.text}, ensure_ascii=False),
+        }
+        if not target.thread_id:
+            payload["receive_id"] = target.target_id
+        return payload
 
     def _validate_callback_token(self, body: dict[str, Any]) -> InboundParseResult:
         expected = os.environ.get("FEISHU_CALLBACK_TOKEN")

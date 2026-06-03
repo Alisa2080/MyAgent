@@ -829,7 +829,13 @@ class StateStore:
             ).fetchone()
         return int(row["count"])
 
-    def claim_due_delivery_events(self, *, limit: int = 20, adapter_keys: set[str] | None = None) -> list[dict[str, Any]]:
+    def claim_due_delivery_events(
+        self,
+        *,
+        limit: int = 20,
+        adapter_keys: set[str] | None = None,
+        gateway_origin_only: bool = False,
+    ) -> list[dict[str, Any]]:
         now_text = utc_now().isoformat()
         now_dt = _parse_time(now_text)
         event_limit = max(0, int(limit))
@@ -856,6 +862,10 @@ class StateStore:
             ).fetchall()
             claimed = []
             for row in rows:
+                if gateway_origin_only and row["adapter_key"] == "origin":
+                    origin = _json_loads(row["origin_json"], {}) or {}
+                    if origin.get("source_type") != "gateway":
+                        continue
                 next_attempt_at = _parse_time(row["next_attempt_at"])
                 if row["next_attempt_at"] and next_attempt_at is not None and next_attempt_at > now_dt:
                     continue

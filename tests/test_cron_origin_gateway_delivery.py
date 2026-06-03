@@ -44,13 +44,13 @@ def delivery_event():
 
 def test_origin_delivery_sends_gateway_origin(monkeypatch):
     import gateway.registry as gateway_registry
-    from cron.delivery_adapters import GatewayOriginDeliveryAdapter
+    from cron.delivery_adapters import OriginDeliveryAdapter
 
     fake = FakeGatewayAdapter()
     gateway_registry.clear_gateway_adapter_factories()
     gateway_registry.register_gateway_adapter_factory(lambda **kwargs: fake)
     try:
-        adapter = GatewayOriginDeliveryAdapter()
+        adapter = OriginDeliveryAdapter()
         job = {
             "id": "job-1",
             "origin": {
@@ -77,13 +77,13 @@ def test_origin_delivery_sends_gateway_origin(monkeypatch):
 
 def test_origin_delivery_maps_retryable_gateway_failure(monkeypatch):
     import gateway.registry as gateway_registry
-    from cron.delivery_adapters import GatewayOriginDeliveryAdapter
+    from cron.delivery_adapters import OriginDeliveryAdapter
 
     fake = FakeGatewayAdapter(ok=False, retryable=True, error="rate limit")
     gateway_registry.clear_gateway_adapter_factories()
     gateway_registry.register_gateway_adapter_factory(lambda **kwargs: fake)
     try:
-        result = GatewayOriginDeliveryAdapter().deliver(
+        result = OriginDeliveryAdapter().deliver(
             delivery_event(),
             {
                 "id": "job-1",
@@ -95,5 +95,34 @@ def test_origin_delivery_maps_retryable_gateway_failure(monkeypatch):
         assert result.delivered is False
         assert result.retryable is True
         assert result.error == "rate limit"
+    finally:
+        gateway_registry.clear_gateway_adapter_factories()
+
+
+def test_origin_delivery_truncates_long_gateway_message(monkeypatch):
+    import gateway.registry as gateway_registry
+    from cron.delivery_adapters import OriginDeliveryAdapter
+
+    fake = FakeGatewayAdapter()
+    gateway_registry.clear_gateway_adapter_factories()
+    gateway_registry.register_gateway_adapter_factory(lambda **kwargs: fake)
+    try:
+        event = delivery_event()
+        payload = json.loads(event["payload_json"])
+        payload["final_response"] = "x" * 5000
+        event["payload_json"] = json.dumps(payload)
+
+        result = OriginDeliveryAdapter().deliver(
+            event,
+            {
+                "id": "job-1",
+                "origin": {"source_type": "gateway", "platform": "feishu", "chat_id": "oc_123"},
+            },
+            {"id": "run-1"},
+        )
+
+        assert result.delivered is True
+        assert len(fake.sent[0][1].text) <= 3900
+        assert "truncated" in fake.sent[0][1].text
     finally:
         gateway_registry.clear_gateway_adapter_factories()

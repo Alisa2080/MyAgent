@@ -65,6 +65,15 @@ def test_gateway_session_store_records_messages_in_order(tmp_path):
     messages = store.list_messages(session.session_id)
     assert [message.direction for message in messages] == ["inbound", "outbound"]
     assert [message.text for message in messages] == ["hello", "world"]
+    refreshed = store.get_or_create_session(
+        platform="feishu",
+        chat_id="oc_123",
+        thread_id=None,
+        sender_id="ou_1",
+        sender_name="Miku",
+    )
+    assert refreshed.last_event_id == "evt-1"
+    assert refreshed.last_message_preview == "world"
 
 
 def test_gateway_event_dedupe_is_platform_scoped(tmp_path):
