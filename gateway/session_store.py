@@ -14,11 +14,14 @@ CREATE TABLE IF NOT EXISTS gateway_sessions (
   session_id  TEXT PRIMARY KEY,
   platform    TEXT NOT NULL,
   chat_id     TEXT NOT NULL,
-  thread_id   TEXT NOT NULL DEFAULT '',
-  sender_id   TEXT NOT NULL DEFAULT '',
-  sender_name TEXT NOT NULL DEFAULT '',
+  thread_id   TEXT,
+  sender_id   TEXT,
+  sender_name TEXT,
   created_at  TEXT NOT NULL,
-  updated_at  TEXT NOT NULL
+  updated_at  TEXT NOT NULL,
+  status      TEXT NOT NULL DEFAULT 'active',
+  last_event_id TEXT,
+  last_message_preview TEXT
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_gw_session_identity
@@ -52,11 +55,12 @@ class GatewaySession:
     session_id: str
     platform: str
     chat_id: str
-    thread_id: str
-    sender_id: str
-    sender_name: str
-    created_at: str
-    updated_at: str
+    thread_id: str | None
+    sender_id: str | None
+    sender_name: str | None
+    status: str
+    last_event_id: str | None
+    last_message_preview: str | None
 
 
 @dataclass(frozen=True)
@@ -103,8 +107,9 @@ class GatewaySessionStore:
             thread_id=row["thread_id"],
             sender_id=row["sender_id"],
             sender_name=row["sender_name"],
-            created_at=row["created_at"],
-            updated_at=row["updated_at"],
+            status=row["status"],
+            last_event_id=row["last_event_id"],
+            last_message_preview=row["last_message_preview"],
         )
 
     def get_or_create_session(
@@ -123,7 +128,8 @@ class GatewaySessionStore:
             row = conn.execute(
                 """
                 SELECT session_id, platform, chat_id, thread_id,
-                       sender_id, sender_name, created_at, updated_at
+                       sender_id, sender_name, status,
+                       last_event_id, last_message_preview
                 FROM gateway_sessions
                 WHERE platform = ? AND chat_id = ? AND COALESCE(thread_id, '') = ?
                 """,
@@ -140,27 +146,20 @@ class GatewaySessionStore:
                     """,
                     (now, session.session_id),
                 )
-                return GatewaySession(
-                    session_id=session.session_id,
-                    platform=session.platform,
-                    chat_id=session.chat_id,
-                    thread_id=session.thread_id,
-                    sender_id=session.sender_id,
-                    sender_name=session.sender_name,
-                    created_at=session.created_at,
-                    updated_at=now,
-                )
+                return session
 
             session_id = self.new_id("gw")
             conn.execute(
                 """
                 INSERT INTO gateway_sessions
                     (session_id, platform, chat_id, thread_id,
-                     sender_id, sender_name, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                     sender_id, sender_name, created_at, updated_at,
+                     status, last_event_id, last_message_preview)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (session_id, platform, chat_id, thread_key,
-                 sender_id, sender_name, now, now),
+                 sender_id, sender_name, now, now,
+                 "active", None, None),
             )
 
         return GatewaySession(
@@ -170,8 +169,9 @@ class GatewaySessionStore:
             thread_id=thread_key,
             sender_id=sender_id,
             sender_name=sender_name,
-            created_at=now,
-            updated_at=now,
+            status="active",
+            last_event_id=None,
+            last_message_preview=None,
         )
 
     def record_message(
@@ -202,10 +202,12 @@ class GatewaySessionStore:
             conn.execute(
                 """
                 UPDATE gateway_sessions
-                SET updated_at = ?
+                SET updated_at = ?,
+                    last_event_id = ?,
+                    last_message_preview = ?
                 WHERE session_id = ?
                 """,
-                (now, session_id),
+                (now, event_id, text, session_id),
             )
 
     def list_messages(self, session_id: str) -> list[GatewayMessage]:
