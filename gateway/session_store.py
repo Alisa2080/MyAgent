@@ -91,6 +91,7 @@ class GatewaySessionStore:
 
     def connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(str(self.db_path))
+        conn.execute("PRAGMA foreign_keys = ON")
         conn.row_factory = sqlite3.Row
         return conn
 
@@ -100,11 +101,15 @@ class GatewaySessionStore:
 
     @staticmethod
     def _session_from_row(row: sqlite3.Row | tuple) -> GatewaySession:
+        thread_id_val = row["thread_id"]
+        # Convert None or empty string "" back to None for type consistency
+        thread_id_clean = thread_id_val if thread_id_val else None
+
         return GatewaySession(
             session_id=row["session_id"],
             platform=row["platform"],
             chat_id=row["chat_id"],
-            thread_id=row["thread_id"],
+            thread_id=thread_id_clean,
             sender_id=row["sender_id"],
             sender_name=row["sender_name"],
             status=row["status"],
@@ -121,58 +126,35 @@ class GatewaySessionStore:
         sender_id: str,
         sender_name: str,
     ) -> GatewaySession:
-        thread_key = thread_id or ""
         now = self.now()
+        session_id = self.new_id("gw")
 
         with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO gateway_sessions
+                    (session_id, platform, chat_id, thread_id,
+                     sender_id, sender_name, created_at, updated_at,
+                     status)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active')
+                ON CONFLICT(platform, chat_id, COALESCE(thread_id, '')) DO UPDATE SET updated_at = excluded.updated_at
+                """,
+                (session_id, platform, chat_id, thread_id,
+                 sender_id, sender_name, now, now),
+            )
+
             row = conn.execute(
                 """
                 SELECT session_id, platform, chat_id, thread_id,
                        sender_id, sender_name, status,
                        last_event_id, last_message_preview
                 FROM gateway_sessions
-                WHERE platform = ? AND chat_id = ? AND COALESCE(thread_id, '') = ?
+                WHERE platform = ? AND chat_id = ? AND COALESCE(thread_id, '') = COALESCE(?, '')
                 """,
-                (platform, chat_id, thread_key),
+                (platform, chat_id, thread_id),
             ).fetchone()
 
-            if row is not None:
-                session = self._session_from_row(row)
-                conn.execute(
-                    """
-                    UPDATE gateway_sessions
-                    SET updated_at = ?
-                    WHERE session_id = ?
-                    """,
-                    (now, session.session_id),
-                )
-                return session
-
-            session_id = self.new_id("gw")
-            conn.execute(
-                """
-                INSERT INTO gateway_sessions
-                    (session_id, platform, chat_id, thread_id,
-                     sender_id, sender_name, created_at, updated_at,
-                     status, last_event_id, last_message_preview)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (session_id, platform, chat_id, thread_key,
-                 sender_id, sender_name, now, now,
-                 "active", None, None),
-            )
-
-        return GatewaySession(
-            session_id=session_id,
-            platform=platform,
-            chat_id=chat_id,
-            thread_id=thread_key,
-            sender_id=sender_id,
-            sender_name=sender_name,
-            status="active",
-            last_event_id=None,
-            last_message_preview=None,
-        )
+        return self._session_from_row(row)
 
     def record_message(
         self,
