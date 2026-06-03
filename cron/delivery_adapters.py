@@ -54,6 +54,10 @@ class OriginDeliveryAdapter:
 
     def deliver(self, event: dict[str, Any], job: dict[str, Any] | None, run: dict[str, Any] | None) -> DeliveryResult:
         origin = (job or {}).get("origin") or {}
+        if not origin:
+            origin_json = event.get("origin_json")
+            if origin_json:
+                origin = json.loads(origin_json) if isinstance(origin_json, str) else origin_json
         if origin.get("source_type") != "gateway":
             return DeliveryResult(False, retryable=False, error="origin delivery waits for origin poll or host bridge pickup")
         platform = str(origin.get("platform") or "")

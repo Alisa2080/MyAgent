@@ -48,11 +48,11 @@ class CallbackApplication:
         result: InboundParseResult = adapter.parse_callback(headers, body)
         if not result.ok:
             return CallbackResponse(result.status_code, {"error": result.error or "callback rejected"})
-        if result.response_body is not None:
-            return CallbackResponse(result.status_code, result.response_body)
         if result.event is not None:
             key = (result.event.platform, result.event.event_id)
             if key not in self._seen_events:
                 self._seen_events.add(key)
                 self.dispatch(result.event)
+        if result.response_body is not None:
+            return CallbackResponse(result.status_code, result.response_body)
         return CallbackResponse(result.status_code, {"ok": True})
