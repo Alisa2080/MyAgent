@@ -75,3 +75,55 @@ def test_gateway_registry_factory_override_is_isolated():
         assert isinstance(registry.get("feishu"), FakeFeishuAdapter)
     finally:
         gateway_registry.clear_gateway_adapter_factories()
+
+
+def test_gateway_inbound_contracts_are_plain_values():
+    from gateway.contracts import InboundEvent, InboundParseResult
+
+    event = InboundEvent(
+        platform="feishu",
+        event_id="evt-1",
+        event_type="message",
+        chat_id="oc_123",
+        text="hello",
+        timestamp="2026-06-03T00:00:00+00:00",
+        thread_id="thread-1",
+        sender_id="ou_123",
+        sender_name="Miku",
+        raw={"event": {"message": {"text": "hello"}}},
+    )
+    result = InboundParseResult(ok=True, event=event, status_code=200, response_body={"ok": True})
+
+    assert event.platform == "feishu"
+    assert event.event_id == "evt-1"
+    assert event.chat_id == "oc_123"
+    assert event.thread_id == "thread-1"
+    assert event.sender_id == "ou_123"
+    assert result.ok is True
+    assert result.event is event
+    assert result.status_code == 200
+    assert result.response_body == {"ok": True}
+
+
+def test_gateway_registry_accepts_inbound_capable_adapter():
+    from gateway.contracts import InboundParseResult, SendResult
+    from gateway.registry import GatewayRegistry
+
+    class FakeInboundAdapter:
+        key = "fake"
+
+        def validate_target(self, target):
+            return SendResult(ok=True)
+
+        def send_text(self, target, message):
+            return SendResult(ok=True)
+
+        def parse_callback(self, headers, body):
+            return InboundParseResult(ok=True, response_body={"challenge": "ok"}, status_code=200)
+
+    registry = GatewayRegistry()
+    adapter = FakeInboundAdapter()
+    registry.register(adapter)
+
+    assert registry.get("fake") is adapter
+    assert registry.platform_keys() == ["fake"]
