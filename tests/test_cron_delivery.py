@@ -886,7 +886,7 @@ def test_webhook_sender_does_not_follow_redirects(monkeypatch):
     assert opened["url"] == "https://example.invalid/hook"
 
 
-def test_process_due_dead_letters_non_gateway_origin_events(monkeypatch, tmp_path):
+def test_process_due_keeps_non_gateway_origin_delivery_pending(monkeypatch, tmp_path):
     monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
 
     from cron.delivery import enqueue_result, process_due
@@ -902,10 +902,10 @@ def test_process_due_dead_letters_non_gateway_origin_events(monkeypatch, tmp_pat
 
     summary = process_due(limit=10)
     stored = DeliveryStore().get(event["id"])
-    assert summary["claimed"] == 1
-    assert summary["dead"] == 1
-    assert stored["status"] == "dead"
-    assert stored["attempt_count"] == 1
+    assert summary["claimed"] == 0
+    assert summary["dead"] == 0
+    assert stored["status"] == "pending"
+    assert stored["attempt_count"] == 0
 
 
 def test_process_due_can_skip_stale_recovery(monkeypatch, tmp_path):
