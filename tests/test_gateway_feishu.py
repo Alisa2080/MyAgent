@@ -307,3 +307,89 @@ def test_send_permission_and_parameter_api_errors_are_non_retryable_by_default(m
     assert result.ok is False
     assert result.retryable is False
     assert msg in (result.error or "")
+
+def test_feishu_callback_challenge_requires_matching_token(monkeypatch):
+    monkeypatch.setenv("FEISHU_CALLBACK_TOKEN", "expected-token")
+    adapter = FeishuPlatformAdapter(http_sender=FakeHttpSender([]))
+
+    result = adapter.parse_callback(
+        {},
+        {"type": "url_verification", "token": "expected-token", "challenge": "challenge-value"},
+    )
+
+    assert result.ok is True
+    assert result.status_code == 200
+    assert result.response_body == {"challenge": "challenge-value"}
+
+
+def test_feishu_callback_rejects_invalid_token(monkeypatch):
+    monkeypatch.setenv("FEISHU_CALLBACK_TOKEN", "expected-token")
+    adapter = FeishuPlatformAdapter(http_sender=FakeHttpSender([]))
+
+    result = adapter.parse_callback(
+        {},
+        {"type": "url_verification", "token": "wrong-token", "challenge": "challenge-value"},
+    )
+
+    assert result.ok is False
+    assert result.status_code == 403
+    assert "token" in (result.error or "")
+
+
+def test_feishu_text_message_event_normalizes_to_inbound_event(monkeypatch):
+    monkeypatch.setenv("FEISHU_CALLBACK_TOKEN", "expected-token")
+    adapter = FeishuPlatformAdapter(http_sender=FakeHttpSender([]))
+
+    result = adapter.parse_callback(
+        {},
+        {
+            "schema": "2.0",
+            "header": {
+                "event_id": "evt-1",
+                "event_type": "im.message.receive_v1",
+                "token": "expected-token",
+                "create_time": "1780000000000",
+            },
+            "event": {
+                "sender": {
+                    "sender_id": {"open_id": "ou_1"},
+                    "sender_type": "user",
+                    "tenant_key": "tenant",
+                },
+                "message": {
+                    "message_id": "om_1",
+                    "chat_id": "oc_123",
+                    "chat_type": "group",
+                    "message_type": "text",
+                    "content": json.dumps({"text": "hello feishu"}),
+                },
+            },
+        },
+    )
+
+    assert result.ok is True
+    assert result.event is not None
+    assert result.event.platform == "feishu"
+    assert result.event.event_id == "evt-1"
+    assert result.event.chat_id == "oc_123"
+    assert result.event.sender_id == "ou_1"
+    assert result.event.text == "hello feishu"
+    assert result.response_body == {"ok": True}
+
+
+def test_feishu_unsupported_message_type_is_acknowledged(monkeypatch):
+    monkeypatch.setenv("FEISHU_CALLBACK_TOKEN", "expected-token")
+    adapter = FeishuPlatformAdapter(http_sender=FakeHttpSender([]))
+
+    result = adapter.parse_callback(
+        {},
+        {
+            "schema": "2.0",
+            "header": {"event_id": "evt-2", "event_type": "im.message.receive_v1", "token": "expected-token"},
+            "event": {"message": {"chat_id": "oc_123", "message_type": "image", "content": "{}"}},
+        },
+    )
+
+    assert result.ok is True
+    assert result.event is None
+    assert result.response_body == {"ok": True}
