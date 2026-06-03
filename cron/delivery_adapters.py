@@ -42,15 +42,44 @@ class LocalDeliveryAdapter:
 
 class OriginDeliveryAdapter:
     key = "origin"
-    active_dispatch = False
+    active_dispatch = True
 
     def validate(self, target: Any, job: dict[str, Any]) -> AdapterValidation:
+        origin = job.get("origin") or {}
+        if origin.get("source_type") == "gateway" and origin.get("platform") and origin.get("chat_id"):
+            return AdapterValidation(True)
         if not target.address:
             return AdapterValidation(False, "origin delivery requires session_id or chat_id")
         return AdapterValidation(True)
 
     def deliver(self, event: dict[str, Any], job: dict[str, Any] | None, run: dict[str, Any] | None) -> DeliveryResult:
-        return DeliveryResult(False, retryable=False, error="origin delivery waits for origin poll or host bridge pickup")
+        origin = (job or {}).get("origin") or {}
+        if origin.get("source_type") != "gateway":
+            return DeliveryResult(False, retryable=False, error="origin delivery waits for origin poll or host bridge pickup")
+        platform = str(origin.get("platform") or "")
+        chat_id = str(origin.get("chat_id") or "")
+        if not platform or not chat_id:
+            return DeliveryResult(False, retryable=False, error="gateway origin delivery requires platform and chat_id")
+
+        from gateway.contracts import OutboundMessage, PlatformMessageTarget
+        from gateway.registry import default_gateway_registry
+
+        gateway_adapter = default_gateway_registry().get(platform)
+        if gateway_adapter is None:
+            return DeliveryResult(False, retryable=False, error=f"unsupported gateway origin platform: {platform}")
+
+        target = PlatformMessageTarget(
+            platform=platform,
+            target_type="chat_id",
+            target_id=chat_id,
+            thread_id=origin.get("thread_id"),
+        )
+        message = OutboundMessage(
+            text=_format_origin_delivery_text(event, job, run),
+            metadata={"event_id": event.get("id"), "job_id": (job or {}).get("id")},
+        )
+        result = gateway_adapter.send_text(target, message)
+        return DeliveryResult(result.ok, retryable=result.retryable, error=result.error)
 
 
 class WebhookDeliveryAdapter:
@@ -200,6 +229,24 @@ class WeComDeliveryAdapter:
         retryable = normalized_errcode in _RETRYABLE_WECOM_ERRCODES
         return DeliveryResult(False, retryable=retryable, error=f"WeCom errcode {errcode}: {errmsg}")
 
+
+def _format_origin_delivery_text(event: dict[str, Any], job: dict[str, Any] | None, run: dict[str, Any] | None) -> str:
+    payload = json.loads(event.get("payload_json") or "{}")
+    lines = [
+        f"Cron job: {payload.get('job_name') or (job or {}).get('name') or (job or {}).get('id') or 'unknown'}",
+        f"Job ID: {payload.get('job_id') or (job or {}).get('id') or 'unknown'}",
+    ]
+    run_id = payload.get("run_id") or (run or {}).get("id")
+    if run_id:
+        lines.append(f"Run ID: {run_id}")
+    lines.append(f"Status: {payload.get('status') or 'unknown'}")
+    if payload.get("final_response"):
+        lines.extend(["", str(payload["final_response"])])
+    if payload.get("error"):
+        lines.extend(["", f"Error: {payload['error']}"])
+    if payload.get("output_path"):
+        lines.extend(["", f"Output: {payload['output_path']}"])
+    return "\n".join(lines)
 
 _FEISHU_MAX_TEXT_CHARS = 3900
 

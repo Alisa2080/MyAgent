@@ -119,7 +119,7 @@ def test_dispatcher_marks_unsupported_persisted_target_dead_by_default(monkeypat
     assert "unsupported delivery target" in stored["last_error"]
 
 
-def test_default_dispatcher_does_not_claim_local_or_origin_events(monkeypatch, tmp_path):
+def test_dispatcher_does_not_claim_local_events_but_dead_letters_non_gateway_origin(monkeypatch, tmp_path):
     monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
 
     from cron.delivery import JobRunResult, enqueue_result
@@ -146,9 +146,9 @@ def test_default_dispatcher_does_not_claim_local_or_origin_events(monkeypatch, t
 
     summary = DeliveryDispatcher().dispatch_due(limit=10)
 
-    assert summary == {"claimed": 0, "delivered": 0, "failed": 0, "dead": 0}
+    assert summary == {"claimed": 1, "delivered": 0, "failed": 0, "dead": 1}
     assert DeliveryStore().get(local_event["id"])["status"] == "delivered"
-    assert DeliveryStore().get(origin_event["id"])["status"] == "pending"
+    assert DeliveryStore().get(origin_event["id"])["status"] == "dead"
 
 
 def test_dispatcher_can_skip_stale_recovery(monkeypatch, tmp_path):
@@ -167,13 +167,13 @@ def test_dispatcher_can_skip_stale_recovery(monkeypatch, tmp_path):
     assert called == []
 
 
-def test_default_registry_active_dispatch_keys_exclude_local_and_origin():
+def test_default_registry_active_dispatch_keys_include_origin():
     from cron.delivery_registry import default_delivery_registry
 
-    assert default_delivery_registry().active_adapter_keys() == ["feishu", "webhook", "wecom"]
+    assert default_delivery_registry().active_adapter_keys() == ["feishu", "origin", "webhook", "wecom"]
 
 
-def test_dispatcher_leaves_origin_events_for_origin_poller(monkeypatch, tmp_path):
+def test_dispatcher_dead_letters_non_gateway_origin_events(monkeypatch, tmp_path):
     monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
 
     from cron.delivery_dispatcher import DeliveryDispatcher
@@ -199,8 +199,8 @@ def test_dispatcher_leaves_origin_events_for_origin_poller(monkeypatch, tmp_path
 
     summary = DeliveryDispatcher(store=store).dispatch_due(limit=10)
 
-    assert summary == {"claimed": 0, "delivered": 0, "failed": 0, "dead": 0}
-    assert store.get_delivery_event(event["id"])["status"] == "pending"
+    assert summary == {"claimed": 1, "delivered": 0, "failed": 0, "dead": 1}
+    assert store.get_delivery_event(event["id"])["status"] == "dead"
 
 
 def test_dispatcher_counts_retry_exhaustion_as_dead(monkeypatch, tmp_path):
