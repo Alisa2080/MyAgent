@@ -1,0 +1,251 @@
+from __future__ import annotations
+
+import json
+import sqlite3
+import uuid
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS gateway_sessions (
+  session_id  TEXT PRIMARY KEY,
+  platform    TEXT NOT NULL,
+  chat_id     TEXT NOT NULL,
+  thread_id   TEXT NOT NULL DEFAULT '',
+  sender_id   TEXT NOT NULL DEFAULT '',
+  sender_name TEXT NOT NULL DEFAULT '',
+  created_at  TEXT NOT NULL,
+  updated_at  TEXT NOT NULL
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_gw_session_identity
+  ON gateway_sessions (platform, chat_id, COALESCE(thread_id, ''));
+
+CREATE TABLE IF NOT EXISTS gateway_messages (
+  message_id  TEXT PRIMARY KEY,
+  session_id  TEXT NOT NULL REFERENCES gateway_sessions(session_id),
+  direction   TEXT NOT NULL CHECK (direction IN ('inbound', 'outbound')),
+  platform    TEXT NOT NULL,
+  event_id    TEXT,
+  text        TEXT NOT NULL DEFAULT '',
+  raw         TEXT NOT NULL DEFAULT '{}',
+  created_at  TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_gw_messages_session
+  ON gateway_messages (session_id, created_at);
+
+CREATE TABLE IF NOT EXISTS gateway_inbound_events (
+  platform TEXT NOT NULL,
+  event_id TEXT NOT NULL,
+  claimed_at TEXT NOT NULL,
+  PRIMARY KEY (platform, event_id)
+);
+"""
+
+
+@dataclass(frozen=True)
+class GatewaySession:
+    session_id: str
+    platform: str
+    chat_id: str
+    thread_id: str
+    sender_id: str
+    sender_name: str
+    created_at: str
+    updated_at: str
+
+
+@dataclass(frozen=True)
+class GatewayMessage:
+    message_id: str
+    session_id: str
+    direction: str
+    platform: str
+    event_id: str | None
+    text: str
+    raw: dict[str, Any]
+    created_at: str
+
+
+class GatewaySessionStore:
+    def __init__(self, db_path: str | Path):
+        self.db_path = Path(db_path)
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        self._init_schema()
+
+    @staticmethod
+    def now() -> str:
+        return datetime.now(timezone.utc).isoformat()
+
+    @staticmethod
+    def new_id(prefix: str) -> str:
+        return f"{prefix}_{uuid.uuid4().hex[:12]}"
+
+    def connect(self) -> sqlite3.Connection:
+        conn = sqlite3.connect(str(self.db_path))
+        conn.row_factory = sqlite3.Row
+        return conn
+
+    def _init_schema(self) -> None:
+        with self.connect() as conn:
+            conn.executescript(SCHEMA)
+
+    @staticmethod
+    def _session_from_row(row: sqlite3.Row | tuple) -> GatewaySession:
+        return GatewaySession(
+            session_id=row["session_id"],
+            platform=row["platform"],
+            chat_id=row["chat_id"],
+            thread_id=row["thread_id"],
+            sender_id=row["sender_id"],
+            sender_name=row["sender_name"],
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+        )
+
+    def get_or_create_session(
+        self,
+        *,
+        platform: str,
+        chat_id: str,
+        thread_id: str | None,
+        sender_id: str,
+        sender_name: str,
+    ) -> GatewaySession:
+        thread_key = thread_id or ""
+        now = self.now()
+
+        with self.connect() as conn:
+            row = conn.execute(
+                """
+                SELECT session_id, platform, chat_id, thread_id,
+                       sender_id, sender_name, created_at, updated_at
+                FROM gateway_sessions
+                WHERE platform = ? AND chat_id = ? AND COALESCE(thread_id, '') = ?
+                """,
+                (platform, chat_id, thread_key),
+            ).fetchone()
+
+            if row is not None:
+                session = self._session_from_row(row)
+                conn.execute(
+                    """
+                    UPDATE gateway_sessions
+                    SET updated_at = ?
+                    WHERE session_id = ?
+                    """,
+                    (now, session.session_id),
+                )
+                return GatewaySession(
+                    session_id=session.session_id,
+                    platform=session.platform,
+                    chat_id=session.chat_id,
+                    thread_id=session.thread_id,
+                    sender_id=session.sender_id,
+                    sender_name=session.sender_name,
+                    created_at=session.created_at,
+                    updated_at=now,
+                )
+
+            session_id = self.new_id("gw")
+            conn.execute(
+                """
+                INSERT INTO gateway_sessions
+                    (session_id, platform, chat_id, thread_id,
+                     sender_id, sender_name, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (session_id, platform, chat_id, thread_key,
+                 sender_id, sender_name, now, now),
+            )
+
+        return GatewaySession(
+            session_id=session_id,
+            platform=platform,
+            chat_id=chat_id,
+            thread_id=thread_key,
+            sender_id=sender_id,
+            sender_name=sender_name,
+            created_at=now,
+            updated_at=now,
+        )
+
+    def record_message(
+        self,
+        session_id: str,
+        *,
+        direction: str,
+        platform: str,
+        event_id: str | None,
+        text: str,
+        raw: dict[str, Any],
+    ) -> None:
+        now = self.now()
+        message_id = self.new_id("msg")
+        raw_json = json.dumps(raw, ensure_ascii=False)
+
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO gateway_messages
+                    (message_id, session_id, direction, platform,
+                     event_id, text, raw, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (message_id, session_id, direction, platform,
+                 event_id, text, raw_json, now),
+            )
+            conn.execute(
+                """
+                UPDATE gateway_sessions
+                SET updated_at = ?
+                WHERE session_id = ?
+                """,
+                (now, session_id),
+            )
+
+    def list_messages(self, session_id: str) -> list[GatewayMessage]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT message_id, session_id, direction, platform,
+                       event_id, text, raw, created_at
+                FROM gateway_messages
+                WHERE session_id = ?
+                ORDER BY created_at
+                """,
+                (session_id,),
+            ).fetchall()
+
+        return [
+            GatewayMessage(
+                message_id=row["message_id"],
+                session_id=row["session_id"],
+                direction=row["direction"],
+                platform=row["platform"],
+                event_id=row["event_id"],
+                text=row["text"],
+                raw=json.loads(row["raw"]),
+                created_at=row["created_at"],
+            )
+            for row in rows
+        ]
+
+    def claim_event(self, platform: str, event_id: str) -> bool:
+        now = self.now()
+        with self.connect() as conn:
+            try:
+                conn.execute(
+                    """
+                    INSERT INTO gateway_inbound_events (platform, event_id, claimed_at)
+                    VALUES (?, ?, ?)
+                    """,
+                    (platform, event_id, now),
+                )
+                return True
+            except sqlite3.IntegrityError:
+                return False
