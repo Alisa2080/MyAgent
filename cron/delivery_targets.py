@@ -95,10 +95,11 @@ def _parse_one(raw: str, *, origin: DeliveryIdentity | None) -> DeliveryTarget:
             raise DeliveryTargetError("origin delivery requires CLI session_id or thread_id")
         if origin.source_type in {"gateway", "web"} and not (origin.chat_id or origin.session_id):
             raise DeliveryTargetError("origin delivery requires chat_id or session_id")
+        adapter_key = "gateway_origin" if origin.source_type == "gateway" else "origin"
         return DeliveryTarget(
             raw=raw,
             target_type="origin",
-            adapter_key="origin",
+            adapter_key=adapter_key,
             address=origin.session_id or origin.chat_id or origin.thread_id,
             thread_id=origin.thread_id,
             metadata={"origin": origin.to_json()},

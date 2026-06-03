@@ -42,7 +42,7 @@ class LocalDeliveryAdapter:
 
 class OriginDeliveryAdapter:
     key = "origin"
-    active_dispatch = True
+    active_dispatch = False
 
     def validate(self, target: Any, job: dict[str, Any]) -> AdapterValidation:
         origin = job.get("origin") or {}
@@ -60,6 +60,49 @@ class OriginDeliveryAdapter:
                 origin = json.loads(origin_json) if isinstance(origin_json, str) else origin_json
         if origin.get("source_type") != "gateway":
             return DeliveryResult(False, retryable=False, error="origin delivery waits for origin poll or host bridge pickup")
+        platform = str(origin.get("platform") or "")
+        chat_id = str(origin.get("chat_id") or "")
+        if not platform or not chat_id:
+            return DeliveryResult(False, retryable=False, error="gateway origin delivery requires platform and chat_id")
+
+        from gateway.contracts import OutboundMessage, PlatformMessageTarget
+        from gateway.registry import default_gateway_registry
+
+        gateway_adapter = default_gateway_registry().get(platform)
+        if gateway_adapter is None:
+            return DeliveryResult(False, retryable=False, error=f"unsupported gateway origin platform: {platform}")
+
+        target = PlatformMessageTarget(
+            platform=platform,
+            target_type="chat_id",
+            target_id=chat_id,
+            thread_id=origin.get("thread_id"),
+        )
+        message = OutboundMessage(
+            text=_format_origin_delivery_text(event, job, run),
+            metadata={"event_id": event.get("id"), "job_id": (job or {}).get("id")},
+        )
+        result = gateway_adapter.send_text(target, message)
+        return DeliveryResult(result.ok, retryable=result.retryable, error=result.error)
+
+
+
+class GatewayOriginDeliveryAdapter:
+    key = "gateway_origin"
+    active_dispatch = True
+
+    def validate(self, target, job):
+        origin = job.get("origin") or {}
+        if origin.get("source_type") == "gateway" and origin.get("platform") and origin.get("chat_id"):
+            return AdapterValidation(True)
+        return AdapterValidation(False, "gateway_origin delivery requires gateway origin with platform and chat_id")
+
+    def deliver(self, event, job, run):
+        origin = (job or {}).get("origin") or {}
+        if not origin:
+            origin_json = event.get("origin_json")
+            if origin_json:
+                origin = json.loads(origin_json) if isinstance(origin_json, str) else origin_json
         platform = str(origin.get("platform") or "")
         chat_id = str(origin.get("chat_id") or "")
         if not platform or not chat_id:

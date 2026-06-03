@@ -44,13 +44,13 @@ def delivery_event():
 
 def test_origin_delivery_sends_gateway_origin(monkeypatch):
     import gateway.registry as gateway_registry
-    from cron.delivery_adapters import OriginDeliveryAdapter
+    from cron.delivery_adapters import GatewayOriginDeliveryAdapter
 
     fake = FakeGatewayAdapter()
     gateway_registry.clear_gateway_adapter_factories()
     gateway_registry.register_gateway_adapter_factory(lambda **kwargs: fake)
     try:
-        adapter = OriginDeliveryAdapter()
+        adapter = GatewayOriginDeliveryAdapter()
         job = {
             "id": "job-1",
             "origin": {
@@ -77,13 +77,13 @@ def test_origin_delivery_sends_gateway_origin(monkeypatch):
 
 def test_origin_delivery_maps_retryable_gateway_failure(monkeypatch):
     import gateway.registry as gateway_registry
-    from cron.delivery_adapters import OriginDeliveryAdapter
+    from cron.delivery_adapters import GatewayOriginDeliveryAdapter
 
     fake = FakeGatewayAdapter(ok=False, retryable=True, error="rate limit")
     gateway_registry.clear_gateway_adapter_factories()
     gateway_registry.register_gateway_adapter_factory(lambda **kwargs: fake)
     try:
-        result = OriginDeliveryAdapter().deliver(
+        result = GatewayOriginDeliveryAdapter().deliver(
             delivery_event(),
             {
                 "id": "job-1",

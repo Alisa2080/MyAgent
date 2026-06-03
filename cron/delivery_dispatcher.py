@@ -25,7 +25,7 @@ class DeliveryDispatcher:
         if adapter_keys is None:
             for event in self.store.dead_letter_unsupported_delivery_events(
                 supported_adapter_keys=set(self.registry.adapter_keys()),
-                ignored_adapter_keys={"origin"},
+                ignored_adapter_keys={"origin", "gateway_origin"},
                 limit=limit,
             ):
                 self._sync_after_event_update(event)
