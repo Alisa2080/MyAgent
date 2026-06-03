@@ -7,7 +7,7 @@ import sqlite3
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from agent_cli.config import ConfigError, settings_from_config
 from agent_cli.paths import get_cli_home
@@ -178,6 +178,18 @@ def check_background_tasks(db_path: Path) -> HealthCheck:
     if stale:
         return warn("Background Tasks", f"{len(stale)} active task(s) look stale")
     return ok("Background Tasks", "metadata readable")
+
+
+def check_feishu_gateway_config(env: dict[str, str] | None = None) -> list[str]:
+    values = env or os.environ
+    missing = [
+        name
+        for name in ("FEISHU_APP_ID", "FEISHU_APP_SECRET", "FEISHU_CALLBACK_TOKEN")
+        if not values.get(name)
+    ]
+    if not missing:
+        return []
+    return [f"missing Feishu gateway environment variables: {', '.join(missing)}"]
 
 
 def run_health_checks(workdir: str, cli_home: Path | None = None) -> list[HealthCheck]:

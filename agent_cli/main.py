@@ -119,6 +119,15 @@ def build_parser() -> argparse.ArgumentParser:
     config_set.add_argument("path")
     config_set.add_argument("value")
 
+    gateway_parser = subparsers.add_parser(
+        "gateway",
+        help="Manage gateway service.",
+        parents=[public_options],
+    )
+    gateway_subparsers = gateway_parser.add_subparsers(dest="gateway_command")
+    gateway_subparsers.add_parser("status", parents=[public_options])
+    gateway_subparsers.add_parser("serve", parents=[public_options])
+
     cron_parser = subparsers.add_parser(
         "cron",
         help="Manage scheduled cron jobs.",
@@ -520,6 +529,18 @@ def main(argv: list[str] | None = None) -> int:
         results = run_health_checks(workdir=workdir, cli_home=cli_home)
         print(render_doctor_output(results))
         return doctor_exit_code(results)
+
+    if command == "gateway":
+        from agent_cli.command_handlers.gateway import gateway_status, gateway_serve
+
+        cli_home = get_cli_home()
+        load_dotenv_files(cli_home=cli_home, project_root=Path.cwd(), dotenv_module=dotenv)
+        subcommand = getattr(args, "gateway_command", None)
+        if subcommand == "status":
+            return gateway_status(home=cli_home)
+        if subcommand == "serve":
+            return gateway_serve(args)
+        return gateway_status(home=cli_home)
 
     if command == "cron":
         cli_home = get_cli_home()

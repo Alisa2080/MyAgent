@@ -104,6 +104,12 @@ COMMAND_REGISTRY: tuple[CommandDef, ...] = (
         args_hint="[N]",
     ),
     CommandDef(
+        "gateway",
+        "Manage gateway service.",
+        "Gateway",
+        args_hint="[subcommand]",
+    ),
+    CommandDef(
         "cron",
         "Manage scheduled cron jobs.",
         "Cron",
