@@ -129,6 +129,25 @@ def build_parser() -> argparse.ArgumentParser:
     gateway_serve = gateway_subparsers.add_parser("serve", parents=[public_options])
     gateway_serve.add_argument("--host", default="127.0.0.1")
     gateway_serve.add_argument("--port", type=int, default=8765)
+    gateway_subparsers.add_parser("feishu-ws", parents=[public_options])
+
+    gateway_service = gateway_subparsers.add_parser("service", parents=[public_options])
+    gateway_service_subparsers = gateway_service.add_subparsers(dest="gateway_service_command")
+    gateway_service_install = gateway_service_subparsers.add_parser("install", parents=[public_options])
+    gateway_service_install.add_argument("--transport", choices=["feishu-ws"], default="feishu-ws")
+    gateway_service_install.add_argument("--force", action="store_true")
+    for action in ("start", "stop", "restart", "status", "uninstall"):
+        gateway_service_subparsers.add_parser(action, parents=[public_options])
+    gateway_logs = gateway_service_subparsers.add_parser("logs", parents=[public_options])
+    gateway_logs.add_argument("--lines", type=int, default=100)
+    gateway_env = gateway_service_subparsers.add_parser("env", parents=[public_options])
+    gateway_env_subparsers = gateway_env.add_subparsers(dest="gateway_service_env_command")
+    gateway_env_set = gateway_env_subparsers.add_parser("set", parents=[public_options])
+    gateway_env_set.add_argument("key")
+    gateway_env_set.add_argument("value")
+    gateway_env_unset = gateway_env_subparsers.add_parser("unset", parents=[public_options])
+    gateway_env_unset.add_argument("key")
+    gateway_env_subparsers.add_parser("list", parents=[public_options])
 
     cron_parser = subparsers.add_parser(
         "cron",
@@ -533,7 +552,7 @@ def main(argv: list[str] | None = None) -> int:
         return doctor_exit_code(results)
 
     if command == "gateway":
-        from agent_cli.command_handlers.gateway import gateway_status, gateway_serve
+        from agent_cli.command_handlers.gateway import gateway_feishu_ws, gateway_status, gateway_serve
 
         cli_home = get_cli_home()
         load_dotenv_files(cli_home=cli_home, project_root=Path.cwd(), dotenv_module=dotenv)
@@ -542,6 +561,12 @@ def main(argv: list[str] | None = None) -> int:
             return gateway_status(home=cli_home)
         if subcommand == "serve":
             return gateway_serve(args, home=cli_home)
+        if subcommand == "feishu-ws":
+            return gateway_feishu_ws(args, home=cli_home)
+        if subcommand == "service":
+            from agent_cli.command_handlers.gateway import handle_gateway_service
+            svc_sub = getattr(args, "gateway_service_command", None)
+            return handle_gateway_service(args, svc_sub)
         return gateway_status(home=cli_home)
 
     if command == "cron":

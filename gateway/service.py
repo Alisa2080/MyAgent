@@ -32,11 +32,12 @@ class GatewayService:
         if getattr(result, "ok", True) is False:
             raise RuntimeError(str(getattr(result, "error", None) or "gateway dispatch failed"))
 
-    def write_status(self, *, process_state: str) -> None:
+    def write_status(self, *, process_state: str, transport: str = "http") -> None:
         write_gateway_status(
             self.home,
             {
                 "process_state": process_state,
+                "transport": transport,
                 "platforms": self.registry.platform_keys(),
             },
         )

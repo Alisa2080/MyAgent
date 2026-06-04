@@ -199,6 +199,38 @@ def check_feishu_gateway() -> HealthCheck:
     return ok("Feishu Gateway", "configured")
 
 
+def check_feishu_ws_gateway_config() -> HealthCheck:
+    import os as _os
+
+    missing = [key for key in ("FEISHU_APP_ID", "FEISHU_APP_SECRET") if not _os.getenv(key)]
+    if missing:
+        return warn("Feishu WebSocket", f"missing: {', '.join(missing)}")
+    try:
+        import lark_oapi  # noqa: F401
+    except ModuleNotFoundError:
+        return warn("Feishu WebSocket", "missing dependency: lark-oapi")
+    return ok("Feishu WebSocket", "configured")
+
+
+def check_feishu_ws_gateway() -> HealthCheck:
+    errors = check_feishu_ws_gateway_config()
+    if errors.status == "WARN":
+        return errors
+    return ok("Feishu WebSocket", "configured")
+
+
+def check_gateway_service() -> HealthCheck:
+    try:
+        from gateway import service_manager
+
+        result = service_manager.service_status()
+    except Exception as exc:
+        return warn("Gateway Service", f"check failed: {exc}")
+    if result.exit_code == 0:
+        return ok("Gateway Service", result.message)
+    return warn("Gateway Service", result.message)
+
+
 def run_health_checks(workdir: str, cli_home: Path | None = None) -> list[HealthCheck]:
     if cli_home is None:
         cli_home = get_cli_home()
@@ -218,6 +250,8 @@ def run_health_checks(workdir: str, cli_home: Path | None = None) -> list[Health
         check_openai_api_key(),
         check_background_tasks(db_path),
         check_feishu_gateway(),
+        check_feishu_ws_gateway(),
+        check_gateway_service(),
     ]
     return results
 
