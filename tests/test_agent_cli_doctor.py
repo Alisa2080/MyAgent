@@ -280,3 +280,460 @@ def test_doctor_warns_gateway_service_not_installed(tmp_path, monkeypatch):
     assert service_check is not None
     assert service_check.status == "WARN"
     assert "not installed" in service_check.message
+
+
+# --- Task 2: Cron/gateway/Feishu doctor helpers ---
+
+
+def test_format_counts_returns_key_values(monkeypatch):
+    from agent_cli.doctor import _format_counts
+
+    result = _format_counts({"pending": 2, "failed": 1, "succeeded": 5})
+    assert "pending=2" in result
+    assert "failed=1" in result
+    assert "succeeded=5" in result
+
+
+def test_format_counts_empty(monkeypatch):
+    from agent_cli.doctor import _format_counts
+
+    result = _format_counts({})
+    assert result == ""
+
+
+def test_check_cron_service_reports_ok_when_active(monkeypatch):
+    from agent_cli.doctor import check_cron_service
+    from cron.service_manager import ServiceStatus
+
+    monkeypatch.setattr(
+        "agent_cli.doctor.compose_service_status",
+        lambda: ServiceStatus(
+            platform="systemd-user",
+            supported=True,
+            installed=True,
+            enabled=True,
+            active=True,
+            pid=12345,
+            detail="ok",
+            error=None,
+            heartbeat_fresh=True,
+            process_state="running",
+            leader_state="leader",
+            last_heartbeat_at="2026-06-04T00:00:00+00:00",
+            last_tick={"jobs_ran": 1},
+            last_error=None,
+            exit_reason=None,
+            status_pid=12345,
+        ),
+    )
+
+    result = check_cron_service()
+
+    assert result.status == "OK"
+    assert "cron service" in result.name.lower()
+
+
+def test_check_cron_service_warns_when_inactive(monkeypatch):
+    from agent_cli.doctor import check_cron_service
+    from cron.service_manager import ServiceStatus
+
+    monkeypatch.setattr(
+        "agent_cli.doctor.compose_service_status",
+        lambda: ServiceStatus(
+            platform="systemd-user",
+            supported=True,
+            installed=True,
+            enabled=True,
+            active=False,
+            pid=None,
+            detail=None,
+            error=None,
+            heartbeat_fresh=False,
+            process_state=None,
+            leader_state=None,
+            last_heartbeat_at=None,
+            last_tick=None,
+            last_error=None,
+            exit_reason=None,
+            status_pid=None,
+        ),
+    )
+
+    result = check_cron_service()
+
+    assert result.status == "WARN"
+
+
+def test_check_cron_service_warns_when_unsupported(monkeypatch):
+    from agent_cli.doctor import check_cron_service
+    from cron.service_manager import ServiceStatus
+
+    monkeypatch.setattr(
+        "agent_cli.doctor.compose_service_status",
+        lambda: ServiceStatus(
+            platform="unknown",
+            supported=False,
+            installed=None,
+            enabled=None,
+            active=None,
+            pid=None,
+            detail=None,
+            error=None,
+            heartbeat_fresh=False,
+            process_state=None,
+            leader_state=None,
+            last_heartbeat_at=None,
+            last_tick=None,
+            last_error=None,
+            exit_reason=None,
+            status_pid=None,
+        ),
+    )
+
+    result = check_cron_service()
+
+    assert result.status == "WARN"
+
+
+def test_check_feishu_token_ok_when_token_obtained(monkeypatch):
+    from agent_cli.doctor import check_feishu_token
+    from gateway.contracts import SendResult
+
+    monkeypatch.setenv("FEISHU_APP_ID", "cli_x")
+    monkeypatch.setenv("FEISHU_APP_SECRET", "secret")
+
+    class FakeAdapter:
+        key = "feishu"
+
+        def token_smoke(self):
+            return SendResult(True)
+
+    monkeypatch.setattr(
+        "agent_cli.doctor.default_gateway_registry",
+        lambda **kwargs: type("R", (), {"get": lambda self, k: FakeAdapter() if k == "feishu" else None})(),
+    )
+
+    result = check_feishu_token()
+
+    assert result.status == "OK"
+
+
+def test_check_feishu_token_warns_when_env_missing(monkeypatch):
+    from agent_cli.doctor import check_feishu_token
+
+    monkeypatch.delenv("FEISHU_APP_ID", raising=False)
+    monkeypatch.delenv("FEISHU_APP_SECRET", raising=False)
+
+    result = check_feishu_token()
+
+    assert result.status == "WARN"
+    assert "FEISHU_APP_ID" in result.message or "FEISHU_APP_SECRET" in result.message
+
+
+def test_check_feishu_token_warns_when_adapter_absent(monkeypatch):
+    from agent_cli.doctor import check_feishu_token
+
+    monkeypatch.setenv("FEISHU_APP_ID", "cli_x")
+    monkeypatch.setenv("FEISHU_APP_SECRET", "secret")
+
+    monkeypatch.setattr(
+        "agent_cli.doctor.default_gateway_registry",
+        lambda **kwargs: type("R", (), {"get": lambda self, k: None})(),
+    )
+
+    result = check_feishu_token()
+
+    assert result.status == "WARN"
+    assert "feishu" in result.message.lower()
+
+
+def test_check_feishu_token_warns_when_token_fails(monkeypatch):
+    from agent_cli.doctor import check_feishu_token
+    from gateway.contracts import SendResult
+
+    monkeypatch.setenv("FEISHU_APP_ID", "cli_x")
+    monkeypatch.setenv("FEISHU_APP_SECRET", "secret")
+
+    class FakeAdapter:
+        key = "feishu"
+
+        def token_smoke(self):
+            return SendResult(False, error="token request failed")
+
+    monkeypatch.setattr(
+        "agent_cli.doctor.default_gateway_registry",
+        lambda **kwargs: type("R", (), {"get": lambda self, k: FakeAdapter() if k == "feishu" else None})(),
+    )
+
+    result = check_feishu_token()
+
+    assert result.status == "WARN"
+    assert "token" in result.message.lower() or "failed" in result.message.lower()
+
+
+def test_check_cron_feishu_delivery_ok_when_adapters_present(monkeypatch):
+    from agent_cli.doctor import check_cron_feishu_delivery
+    from gateway.contracts import SendResult
+
+    class FakeDeliveryRegistry:
+        def get(self, key):
+            return True
+
+        def active_adapter_keys(self):
+            return ["feishu", "origin"]
+
+        def adapter_keys(self):
+            return ["feishu", "origin", "local"]
+
+    class FakeGatewayAdapter:
+        def validate_target(self, target):
+            return SendResult(True)
+
+    class FakeGatewayRegistry:
+        def get(self, key):
+            return FakeGatewayAdapter() if key == "feishu" else None
+
+    monkeypatch.setattr(
+        "agent_cli.doctor.default_delivery_registry",
+        lambda: FakeDeliveryRegistry(),
+    )
+    monkeypatch.setattr(
+        "agent_cli.doctor.default_gateway_registry",
+        lambda **kwargs: FakeGatewayRegistry(),
+    )
+
+    result = check_cron_feishu_delivery()
+
+    assert result.status == "OK"
+
+
+def test_check_cron_feishu_delivery_warns_when_cron_feishu_missing(monkeypatch):
+    from agent_cli.doctor import check_cron_feishu_delivery
+
+    monkeypatch.setattr(
+        "agent_cli.doctor.default_delivery_registry",
+        lambda: type("R", (), {
+            "get": lambda self, k: None,
+            "active_adapter_keys": lambda self: ["origin"],
+            "adapter_keys": lambda self: ["origin", "local"],
+        })(),
+    )
+    monkeypatch.setattr(
+        "agent_cli.doctor.default_gateway_registry",
+        lambda **kwargs: type("R", (), {"get": lambda self, k: True if k == "feishu" else None})(),
+    )
+
+    result = check_cron_feishu_delivery()
+
+    assert result.status == "WARN"
+    assert "feishu" in result.message.lower()
+
+
+def test_check_cron_feishu_delivery_warns_when_gateway_feishu_missing(monkeypatch):
+    from agent_cli.doctor import check_cron_feishu_delivery
+
+    monkeypatch.setattr(
+        "agent_cli.doctor.default_delivery_registry",
+        lambda: type("R", (), {
+            "get": lambda self, k: True,
+            "active_adapter_keys": lambda self: ["feishu", "origin"],
+            "adapter_keys": lambda self: ["feishu", "origin"],
+        })(),
+    )
+    monkeypatch.setattr(
+        "agent_cli.doctor.default_gateway_registry",
+        lambda **kwargs: type("R", (), {"get": lambda self, k: None})(),
+    )
+
+    result = check_cron_feishu_delivery()
+
+    assert result.status == "WARN"
+
+
+def test_check_cron_feishu_delivery_warns_when_origin_adapter_inactive(monkeypatch):
+    from agent_cli.doctor import check_cron_feishu_delivery
+    from gateway.contracts import SendResult
+
+    class FakeGatewayAdapter:
+        def validate_target(self, target):
+            return SendResult(True)
+
+    monkeypatch.setattr(
+        "agent_cli.doctor.default_delivery_registry",
+        lambda: type("R", (), {
+            "get": lambda self, k: True,
+            "active_adapter_keys": lambda self: ["feishu"],
+            "adapter_keys": lambda self: ["feishu", "origin"],
+        })(),
+    )
+    monkeypatch.setattr(
+        "agent_cli.doctor.default_gateway_registry",
+        lambda **kwargs: type("GR", (), {"get": lambda self, k: FakeGatewayAdapter() if k == "feishu" else None})(),
+    )
+
+    result = check_cron_feishu_delivery()
+
+    assert result.status == "WARN"
+    assert "origin" in result.message.lower()
+
+
+def test_check_cron_feishu_delivery_warns_when_target_validation_fails(monkeypatch):
+    from agent_cli.doctor import check_cron_feishu_delivery
+    from gateway.contracts import SendResult
+
+    class FakeGatewayAdapter:
+        def validate_target(self, target):
+            return SendResult(False, error="missing required Feishu environment variables")
+
+    monkeypatch.setattr(
+        "agent_cli.doctor.default_delivery_registry",
+        lambda: type("R", (), {
+            "get": lambda self, k: True,
+            "active_adapter_keys": lambda self: ["feishu", "origin"],
+            "adapter_keys": lambda self: ["feishu", "origin"],
+        })(),
+    )
+    monkeypatch.setattr(
+        "agent_cli.doctor.default_gateway_registry",
+        lambda **kwargs: type("GR", (), {"get": lambda self, k: FakeGatewayAdapter() if k == "feishu" else None})(),
+    )
+
+    result = check_cron_feishu_delivery()
+
+    assert result.status == "WARN"
+    assert "missing required" in result.message
+
+
+def test_check_gateway_inbox_ok_when_no_failures(monkeypatch):
+    from agent_cli.doctor import check_gateway_inbox
+    from pathlib import Path
+
+    # No gateway.sqlite at all
+    result = check_gateway_inbox(Path("/nonexistent"))
+
+    assert result.status == "OK"
+
+
+def test_check_gateway_inbox_warns_on_failed_events(tmp_path, monkeypatch):
+    from agent_cli.doctor import check_gateway_inbox
+    from gateway.contracts import InboundEvent
+    from gateway.inbox_store import GatewayInboxStore
+
+    inbox_path = tmp_path / "gateway" / "gateway.sqlite"
+    store = GatewayInboxStore(inbox_path)
+    row_id = store.enqueue(
+        InboundEvent(
+            platform="feishu",
+            event_id="evt-dead",
+            event_type="im.message.receive_v1",
+            chat_id="oc_123",
+            text="hello",
+            timestamp="2026-06-04T00:00:00+00:00",
+            raw={},
+        )
+    )
+    store.fail(row_id, "dispatch failed", max_attempts=1)
+
+    result = check_gateway_inbox(tmp_path)
+
+    assert result.status == "WARN"
+    assert "dead=1" in result.message
+
+
+def test_check_gateway_inbox_reports_counts(tmp_path, monkeypatch):
+    from agent_cli.doctor import check_gateway_inbox
+
+    result = check_gateway_inbox(tmp_path)
+
+    assert result.status == "OK"
+    assert "pending" in result.message or "inbox" in result.name.lower()
+
+
+def test_check_cron_delivery_queue_reports_stats(monkeypatch):
+    from agent_cli.doctor import check_cron_delivery_queue
+
+    monkeypatch.setattr(
+        "agent_cli.doctor.DeliveryStore",
+        lambda: type("DS", (), {"stats": lambda self: {"pending": 0, "delivering": 0, "failed": 0, "dead": 0, "delivered": 0}})(),
+    )
+
+    result = check_cron_delivery_queue()
+
+    assert result.status == "OK"
+    assert "pending" in result.message
+
+
+def test_check_cron_delivery_queue_warns_on_failures(monkeypatch):
+    from agent_cli.doctor import check_cron_delivery_queue
+
+    monkeypatch.setattr(
+        "agent_cli.doctor.DeliveryStore",
+        lambda: type("DS", (), {"stats": lambda self: {"pending": 0, "delivering": 0, "failed": 2, "dead": 1, "delivered": 10}})(),
+    )
+
+    result = check_cron_delivery_queue()
+
+    assert result.status == "WARN"
+    assert "failed" in result.message or "dead" in result.message
+
+
+def test_check_cron_delivery_queue_warns_on_pending_when_cron_unhealthy(monkeypatch):
+    from agent_cli.doctor import check_cron_delivery_queue
+
+    monkeypatch.setattr(
+        "agent_cli.doctor.DeliveryStore",
+        lambda: type("DS", (), {"stats": lambda self: {"pending": 2, "delivering": 0, "failed": 0, "dead": 0, "delivered": 0}})(),
+    )
+
+    result = check_cron_delivery_queue(cron_service_healthy=False)
+
+    assert result.status == "WARN"
+    assert "pending" in result.message
+    assert "cron service" in result.message.lower()
+
+
+def test_run_health_checks_includes_new_cron_checks(tmp_path, monkeypatch):
+    monkeypatch.setenv("AGENT_CLI_HOME", str(tmp_path))
+    monkeypatch.setenv("FEISHU_APP_ID", "cli_x")
+    monkeypatch.setenv("FEISHU_APP_SECRET", "secret")
+
+    from agent_cli.doctor import run_health_checks
+
+    monkeypatch.setattr(
+        "agent_cli.doctor.compose_service_status",
+        lambda: type("SS", (), {
+            "platform": "systemd-user",
+            "supported": True,
+            "installed": True,
+            "enabled": True,
+            "active": True,
+            "pid": 12345,
+            "detail": "ok",
+            "error": None,
+            "heartbeat_fresh": True,
+            "process_state": "running",
+            "leader_state": "leader",
+            "last_heartbeat_at": "2026-06-04T00:00:00+00:00",
+            "last_tick": {"jobs_ran": 0},
+            "last_error": None,
+            "exit_reason": None,
+            "status_pid": 12345,
+        })(),
+    )
+    monkeypatch.setattr(
+        "agent_cli.doctor.default_delivery_registry",
+        lambda: type("R", (), {"get": lambda self, k: True, "platform_keys": lambda self: ["feishu"]})(),
+    )
+    monkeypatch.setattr(
+        "agent_cli.doctor.default_gateway_registry",
+        lambda **kwargs: type("GR", (), {"get": lambda self, k: True if k == "feishu" else None})(),
+    )
+
+    results = run_health_checks(workdir=str(tmp_path), cli_home=tmp_path)
+    names = [c.name for c in results]
+
+    assert "Cron Service" in names
+    assert "Feishu Token" in names
+    assert "Cron Feishu Delivery" in names
+    assert "Gateway Inbox" in names
+    assert "Cron Delivery Queue" in names

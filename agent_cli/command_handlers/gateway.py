@@ -4,6 +4,7 @@ import os
 import threading
 from pathlib import Path
 
+from cron.service_manager import compose_service_status
 from gateway.callback_server import CallbackApplication, serve_callback_http
 from gateway.transports.feishu_ws import serve_feishu_ws_gateway, validate_feishu_ws_env
 
@@ -81,6 +82,7 @@ def gateway_feishu_ws(args, *, home: str | Path | None = None) -> int:
     target_home = Path(home) if home is not None else _default_home()
     if _refuse_if_other_transport(home=target_home, desired="feishu-ws"):
         return 2
+    _warn_if_cron_service_not_running(home=target_home)
     service = GatewayService(home=target_home)
     service.write_status(process_state="running", transport="feishu-ws")
     stop_heartbeat = threading.Event()
@@ -160,6 +162,31 @@ def _refuse_if_other_transport(*, home: Path, desired: str) -> bool:
         print(f"Gateway service is already running with transport {running}")
         return True
     return False
+
+
+def _warn_if_cron_service_not_running(*, home: Path) -> None:
+    try:
+        service_status = compose_service_status()
+    except Exception:
+        print("WARN Cron service status could not be checked; run `python3 -m agent_cli.main cron service status` for details")
+        print("   scheduled cron jobs will not run automatically")
+        return
+
+    if service_status.supported:
+        healthy = (
+            service_status.active
+            and service_status.heartbeat_fresh
+            and service_status.process_state == "running"
+        )
+        if healthy:
+            return
+        print("WARN Cron service is not running")
+        print("   scheduled cron jobs will not run automatically")
+        print("   To start the cron scheduler, run: python3 -m agent_cli.main cron service start")
+    else:
+        print("WARN Cron service is not available on this platform")
+        print("   scheduled cron jobs will not run automatically")
+        print("   To start the cron scheduler in the foreground, run: python3 -m agent_cli.main cron serve")
 
 
 def _status_heartbeat(service, stop_event: threading.Event, transport: str) -> None:

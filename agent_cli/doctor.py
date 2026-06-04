@@ -12,6 +12,12 @@ from typing import Any, Literal
 from agent_cli.config import ConfigError, settings_from_config
 from agent_cli.paths import get_cli_home
 
+from cron.service_manager import compose_service_status
+from cron.delivery_registry import default_delivery_registry
+from gateway.registry import default_gateway_registry
+from cron.delivery_store import DeliveryStore
+from gateway.inbox_store import GatewayInboxStore
+
 
 DoctorStatus = Literal["OK", "WARN", "FAIL"]
 
@@ -231,12 +237,141 @@ def check_gateway_service() -> HealthCheck:
     return warn("Gateway Service", result.message)
 
 
+def _format_counts(stats: dict[str, int]) -> str:
+    """Format a stats dict into a compact key=value string."""
+    if not stats:
+        return ""
+    parts = [f"{k}={v}" for k, v in sorted(stats.items())]
+    return " ".join(parts)
+
+
+def check_cron_service() -> HealthCheck:
+    try:
+        status = compose_service_status()
+    except Exception as exc:
+        return warn("Cron Service", f"check failed: {exc}")
+    details = [
+        f"platform={getattr(status, 'platform', '-')}",
+        f"active={getattr(status, 'active', None)}",
+        f"enabled={getattr(status, 'enabled', None)}",
+        f"fresh={getattr(status, 'heartbeat_fresh', None)}",
+        f"state={getattr(status, 'process_state', None) or '-'}",
+        f"leader={getattr(status, 'leader_state', None) or '-'}",
+    ]
+    if getattr(status, "last_heartbeat_at", None):
+        details.append(f"heartbeat={status.last_heartbeat_at}")
+    if getattr(status, "last_tick", None):
+        details.append(f"last_tick={status.last_tick}")
+    if getattr(status, "last_error", None):
+        details.append(f"error={status.last_error}")
+    detail_text = "; ".join(details)
+    if not status.supported:
+        return warn("Cron Service", f"unsupported platform; use `agent cron serve`; {detail_text}")
+    if not status.installed:
+        return warn("Cron Service", f"not installed; run `agent cron service install`; {detail_text}")
+    if not status.active:
+        return warn("Cron Service", f"installed but inactive; run `agent cron service start`; {detail_text}")
+    if not status.enabled:
+        return warn("Cron Service", f"installed but disabled; run `agent cron service install --force`; {detail_text}")
+    if not status.heartbeat_fresh:
+        return warn("Cron Service", f"heartbeat stale; {detail_text}")
+    if status.process_state != "running":
+        return warn("Cron Service", f"process state is not running; {detail_text}")
+    return ok("Cron Service", f"running; {detail_text}")
+
+
+def check_feishu_token() -> HealthCheck:
+    missing = [k for k in ("FEISHU_APP_ID", "FEISHU_APP_SECRET") if not os.environ.get(k)]
+    if missing:
+        return warn("Feishu Token", f"missing env vars: {', '.join(missing)}")
+    try:
+        registry = default_gateway_registry()
+        adapter = registry.get("feishu")
+    except Exception as exc:
+        return warn("Feishu Token", f"cannot load gateway registry: {exc}")
+    if adapter is None:
+        return warn("Feishu Token", "feishu gateway adapter not available")
+    try:
+        result = adapter.token_smoke()
+    except Exception as exc:
+        return warn("Feishu Token", f"token smoke failed: {exc}")
+    if not getattr(result, "ok", False):
+        return warn("Feishu Token", f"token smoke failed: {getattr(result, 'error', 'unknown')}")
+    return ok("Feishu Token", "token smoke passed")
+
+
+def check_cron_feishu_delivery() -> HealthCheck:
+    try:
+        cron_reg = default_delivery_registry()
+        gw_reg = default_gateway_registry()
+    except Exception as exc:
+        return warn("Cron Feishu Delivery", f"cannot load registries: {exc}")
+    active_keys = set(cron_reg.active_adapter_keys()) if hasattr(cron_reg, "active_adapter_keys") else set()
+    adapter_keys = set(cron_reg.adapter_keys()) if hasattr(cron_reg, "adapter_keys") else active_keys
+    missing = []
+    if "origin" not in active_keys:
+        missing.append("active origin delivery adapter")
+    if "feishu" not in active_keys:
+        missing.append("active feishu delivery adapter")
+    if "feishu" not in adapter_keys or cron_reg.get("feishu") is None:
+        missing.append("feishu adapter in cron delivery registry")
+    gw_adapter = gw_reg.get("feishu")
+    if gw_adapter is None:
+        return warn("Cron Feishu Delivery", "feishu adapter missing from gateway registry")
+    if missing:
+        return warn("Cron Feishu Delivery", "missing: " + ", ".join(missing))
+    try:
+        from gateway.contracts import PlatformMessageTarget
+
+        validation = gw_adapter.validate_target(
+            PlatformMessageTarget(platform="feishu", target_type="chat_id", target_id="doctor-probe")
+        )
+    except Exception as exc:
+        return warn("Cron Feishu Delivery", f"target validation failed: {exc}")
+    if not validation.ok:
+        return warn("Cron Feishu Delivery", f"target validation failed: {validation.error or 'unknown'}")
+    return ok("Cron Feishu Delivery", "active adapters: " + ", ".join(sorted(active_keys)))
+
+
+def check_gateway_inbox(cli_home: Path) -> HealthCheck:
+    inbox_path = cli_home / "gateway" / "gateway.sqlite"
+    if not inbox_path.exists():
+        return ok("Gateway Inbox", "no gateway inbox found")
+    try:
+        store = GatewayInboxStore(inbox_path)
+        stats = store.stats()
+    except Exception as exc:
+        return warn("Gateway Inbox", f"cannot read inbox: {exc}")
+    count_str = _format_counts(stats)
+    if stats.get("failed", 0) > 0 or stats.get("dead", 0) > 0:
+        return warn("Gateway Inbox", f"inbox: {count_str}")
+    return ok("Gateway Inbox", f"inbox: {count_str}")
+
+
+def check_cron_delivery_queue(*, cron_service_healthy: bool | None = None) -> HealthCheck:
+    try:
+        store = DeliveryStore()
+        stats = store.stats()
+    except Exception as exc:
+        return warn("Cron Delivery Queue", f"cannot read delivery queue: {exc}")
+    count_str = _format_counts(stats)
+    if stats.get("pending", 0) > 0 and cron_service_healthy is False:
+        return warn(
+            "Cron Delivery Queue",
+            f"delivery: {count_str}; pending events may not dispatch because cron service is not healthy",
+        )
+    if stats.get("failed", 0) > 0 or stats.get("dead", 0) > 0:
+        return warn("Cron Delivery Queue", f"delivery: {count_str}")
+    return ok("Cron Delivery Queue", f"delivery: {count_str}")
+
+
 def run_health_checks(workdir: str, cli_home: Path | None = None) -> list[HealthCheck]:
     if cli_home is None:
         cli_home = get_cli_home()
     db_path = cli_home / "cli.sqlite"
     cwd = Path.cwd()
 
+    cron_service = check_cron_service()
     results: list[HealthCheck] = [
         check_python_version(),
         check_platform(),
@@ -252,6 +387,11 @@ def run_health_checks(workdir: str, cli_home: Path | None = None) -> list[Health
         check_feishu_gateway(),
         check_feishu_ws_gateway(),
         check_gateway_service(),
+        cron_service,
+        check_feishu_token(),
+        check_cron_feishu_delivery(),
+        check_gateway_inbox(cli_home),
+        check_cron_delivery_queue(cron_service_healthy=cron_service.status == "OK"),
     ]
     return results
 

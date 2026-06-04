@@ -231,3 +231,128 @@ def test_gateway_status_shows_inbox_stats(monkeypatch, tmp_path, capsys):
 
     assert gateway_status(home=tmp_path) == 0
     assert "Inbox: pending=1" in capsys.readouterr().out
+
+
+def test_gateway_feishu_ws_warns_when_cron_service_not_running(monkeypatch, tmp_path, capsys):
+    from argparse import Namespace
+
+    import agent_cli.command_handlers.gateway as gateway_handler
+    from cron.service_manager import ServiceRuntimeStatus
+
+    monkeypatch.setenv("FEISHU_APP_ID", "cli_x")
+    monkeypatch.setenv("FEISHU_APP_SECRET", "secret")
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    def fake_compose_service_status(runtime=None, *, now_text=None, stale_after_seconds=180):
+        from cron.service_manager import compose_service_status
+
+        return compose_service_status(
+            ServiceRuntimeStatus(
+                platform="systemd-user",
+                supported=True,
+                installed=True,
+                enabled=True,
+                active=False,
+                pid=None,
+                detail="inactive",
+            ),
+            now_text="2026-06-04T00:00:00+00:00",
+            stale_after_seconds=stale_after_seconds,
+        )
+
+    def fake_serve(**kwargs):
+        pass
+
+    monkeypatch.setattr(gateway_handler, "serve_feishu_ws_gateway", fake_serve)
+    monkeypatch.setattr(gateway_handler, "compose_service_status", fake_compose_service_status)
+
+    gateway_handler.gateway_feishu_ws(Namespace(), home=tmp_path)
+
+    output = capsys.readouterr().out
+    assert "WARN Cron service is not running" in output
+    assert "scheduled cron jobs will not run automatically" in output
+    assert "python3 -m agent_cli.main cron service start" in output
+
+
+def test_gateway_feishu_ws_warns_with_cron_serve_on_unsupported_platform(monkeypatch, tmp_path, capsys):
+    from argparse import Namespace
+
+    import agent_cli.command_handlers.gateway as gateway_handler
+    from cron.service_manager import ServiceRuntimeStatus
+
+    monkeypatch.setenv("FEISHU_APP_ID", "cli_x")
+    monkeypatch.setenv("FEISHU_APP_SECRET", "secret")
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    def fake_compose_service_status(runtime=None, *, now_text=None, stale_after_seconds=180):
+        from cron.service_manager import compose_service_status
+        return compose_service_status(
+            ServiceRuntimeStatus(
+                platform="unsupported",
+                supported=False,
+                installed=False,
+                enabled=False,
+                active=False,
+                pid=None,
+                detail="run `python3 -m agent_cli.main cron serve` for foreground scheduling",
+            ),
+            now_text="2026-06-04T00:00:00+00:00",
+            stale_after_seconds=stale_after_seconds,
+        )
+
+    def fake_serve(**kwargs):
+        pass
+
+    monkeypatch.setattr(gateway_handler, "serve_feishu_ws_gateway", fake_serve)
+    monkeypatch.setattr(gateway_handler, "compose_service_status", fake_compose_service_status)
+
+    gateway_handler.gateway_feishu_ws(Namespace(), home=tmp_path)
+
+    output = capsys.readouterr().out
+    assert "WARN Cron service is not available on this platform" in output
+    assert "scheduled cron jobs will not run automatically" in output
+    assert "python3 -m agent_cli.main cron serve" in output
+
+
+def test_gateway_feishu_ws_does_not_warn_when_cron_service_is_healthy(monkeypatch, tmp_path, capsys):
+    from argparse import Namespace
+
+    import agent_cli.command_handlers.gateway as gateway_handler
+    from cron.service_manager import ServiceRuntimeStatus
+    from cron.service_state import write_service_status
+
+    monkeypatch.setenv("FEISHU_APP_ID", "cli_x")
+    monkeypatch.setenv("FEISHU_APP_SECRET", "secret")
+    monkeypatch.setenv("AGENT_CRON_HOME", str(tmp_path))
+
+    write_service_status(
+        {"process_state": "running", "pid": 999, "last_heartbeat_at": "2026-06-04T00:00:00+00:00"},
+    )
+
+    def fake_compose_service_status(runtime=None, *, now_text=None, stale_after_seconds=180):
+        from cron.service_manager import compose_service_status
+        return compose_service_status(
+            ServiceRuntimeStatus(
+                platform="systemd-user",
+                supported=True,
+                installed=True,
+                enabled=True,
+                active=True,
+                pid=999,
+                detail="active",
+            ),
+            now_text="2026-06-04T00:00:00+00:00",
+            stale_after_seconds=stale_after_seconds,
+        )
+
+    def fake_serve(**kwargs):
+        pass
+
+    monkeypatch.setattr(gateway_handler, "serve_feishu_ws_gateway", fake_serve)
+    monkeypatch.setattr(gateway_handler, "compose_service_status", fake_compose_service_status)
+
+    gateway_handler.gateway_feishu_ws(Namespace(), home=tmp_path)
+
+    output = capsys.readouterr().out
+    assert "WARN" not in output
+    assert "Cron service" not in output
