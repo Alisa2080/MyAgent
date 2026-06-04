@@ -238,3 +238,45 @@ def test_doctor_reports_config_schema_path(tmp_path, monkeypatch):
 
     assert config.status == "FAIL"
     assert "display.markdown" in config.message
+
+
+def test_doctor_warns_missing_feishu_ws_config(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    from agent_cli.doctor import run_health_checks
+
+    monkeypatch.delenv("FEISHU_APP_ID", raising=False)
+    monkeypatch.delenv("FEISHU_APP_SECRET", raising=False)
+
+    results = run_health_checks(workdir=str(tmp_path))
+
+    ws_check = next((c for c in results if c.name == "Feishu WebSocket"), None)
+    assert ws_check is not None
+    assert ws_check.status in ("WARN", "FAIL")
+
+
+def test_doctor_runs_feishu_ws_check(tmp_path, monkeypatch):
+    from agent_cli.doctor import run_health_checks
+
+    monkeypatch.setenv("FEISHU_APP_ID", "cli_x")
+    monkeypatch.setenv("FEISHU_APP_SECRET", "secret")
+
+    results = run_health_checks(workdir=str(tmp_path), cli_home=tmp_path)
+
+    names = [c.name for c in results]
+    assert "Feishu WebSocket" in names
+
+
+def test_doctor_warns_gateway_service_not_installed(tmp_path, monkeypatch):
+    import agent_cli.doctor as doctor
+
+    monkeypatch.setattr(doctor, "get_cli_home", lambda: tmp_path)
+    monkeypatch.setattr("gateway.service_manager.detect_platform", lambda: "systemd-user")
+    monkeypatch.setattr("gateway.service_manager.systemd_unit_dir", lambda: tmp_path / "systemd")
+
+    results = doctor.run_health_checks(workdir=str(tmp_path), cli_home=tmp_path)
+
+    service_check = next((check for check in results if check.name == "Gateway Service"), None)
+    assert service_check is not None
+    assert service_check.status == "WARN"
+    assert "not installed" in service_check.message
