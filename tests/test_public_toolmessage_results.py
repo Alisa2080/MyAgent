@@ -304,7 +304,7 @@ def test_clarify_tool_rejects_empty_question():
     )
     result = clarify.func(question="   ", choices=None, runtime=runtime)
     _assert_tool_result(result, "clarify", False)
-    assert result.artifact["code"] == "invalid_input"
+    assert result.artifact["error"]["code"] == "invalid_input"
     assert "question is required" in result.artifact["message"].lower()
 
 
@@ -321,5 +321,5 @@ def test_clarify_tool_rejects_too_many_choices():
         runtime=runtime,
     )
     _assert_tool_result(result, "clarify", False)
-    assert result.artifact["code"] == "invalid_input"
+    assert result.artifact["error"]["code"] == "invalid_input"
     assert "at most 4" in result.artifact["message"]

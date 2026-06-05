@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 from langchain.tools import ToolRuntime, tool
-from langchain_core.messages import ToolMessage
 from pydantic import BaseModel, Field
 
 from agent_core.session_context import origin_identity_from_runtime
-from agent_tools.shared.tool_result import _artifact, _content, _tool_call_id, tool_success
+from agent_tools.shared.tool_result import tool_failure, tool_success
 
 
 MAX_CHOICES = 4
@@ -34,24 +33,6 @@ def _clean_choices(choices: list[str] | None) -> list[str] | None:
     return cleaned or None
 
 
-def _clarify_failure(
-    message: str,
-    *,
-    code: str,
-    data: dict | None = None,
-    runtime: ToolRuntime | None = None,
-) -> ToolMessage:
-    payload = _artifact("clarify", ok=False, message=message, data=data, error={"code": code, "message": message})
-    payload["code"] = code
-    return ToolMessage(
-        content=_content(message),
-        name="clarify",
-        tool_call_id=_tool_call_id(runtime),
-        status="error",
-        artifact=payload,
-    )
-
-
 def _interactive_source(runtime: ToolRuntime | None) -> str | None:
     identity = origin_identity_from_runtime(runtime)
     if identity is None:
@@ -77,7 +58,8 @@ def clarify(
     """
     cleaned_question = _clean_question(question)
     if not cleaned_question:
-        return _clarify_failure(
+        return tool_failure(
+            "clarify",
             "question is required.",
             code="invalid_input",
             runtime=runtime,
@@ -85,7 +67,8 @@ def clarify(
 
     cleaned_choices = _clean_choices(choices)
     if cleaned_choices is not None and len(cleaned_choices) > MAX_CHOICES:
-        return _clarify_failure(
+        return tool_failure(
+            "clarify",
             f"choices supports at most {MAX_CHOICES} non-empty items.",
             code="invalid_input",
             data={"max_choices": MAX_CHOICES},
@@ -94,7 +77,8 @@ def clarify(
 
     source_type = _interactive_source(runtime)
     if source_type is None:
-        return _clarify_failure(
+        return tool_failure(
+            "clarify",
             "clarify is unavailable in this non-interactive execution context.",
             code="interactive_unavailable",
             runtime=runtime,
