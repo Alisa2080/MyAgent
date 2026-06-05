@@ -84,3 +84,36 @@ def test_gateway_event_dedupe_is_platform_scoped(tmp_path):
     assert store.claim_event("feishu", "evt-1") is True
     assert store.claim_event("feishu", "evt-1") is False
     assert store.claim_event("slack", "evt-1") is True
+
+
+def test_gateway_session_store_pending_clarify_lifecycle(tmp_path):
+    from gateway.session_store import GatewaySessionStore
+
+    store = GatewaySessionStore(tmp_path / "gateway.sqlite")
+    session = store.get_or_create_session(
+        platform="feishu",
+        chat_id="oc_123",
+        thread_id=None,
+        sender_id="ou_1",
+        sender_name="Miku",
+    )
+    payload = {
+        "action_request": {
+            "name": "clarify",
+            "args": {
+                "question": "Which path?",
+                "choices": ["Small", "Complete"],
+            },
+        },
+        "review_config": {"kind": "clarify"},
+    }
+
+    store.set_pending_interrupt(session.session_id, kind="clarify", payload=payload)
+    pending = store.get_pending_interrupt(session.session_id)
+
+    assert pending is not None
+    assert pending.kind == "clarify"
+    assert pending.payload["action_request"]["args"]["question"] == "Which path?"
+
+    store.clear_pending_interrupt(session.session_id)
+    assert store.get_pending_interrupt(session.session_id) is None

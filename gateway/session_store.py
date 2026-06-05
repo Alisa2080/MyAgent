@@ -48,6 +48,13 @@ CREATE TABLE IF NOT EXISTS gateway_inbound_events (
   status TEXT NOT NULL DEFAULT 'succeeded',
   PRIMARY KEY (platform, event_id)
 );
+
+CREATE TABLE IF NOT EXISTS gateway_pending_interrupts (
+  session_id TEXT PRIMARY KEY REFERENCES gateway_sessions(session_id) ON DELETE CASCADE,
+  kind       TEXT NOT NULL,
+  payload    TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL);
 """
 
 
@@ -74,6 +81,15 @@ class GatewayMessage:
     text: str
     raw: dict[str, Any]
     created_at: str
+
+
+@dataclass(frozen=True)
+class GatewayPendingInterrupt:
+    session_id: str
+    kind: str
+    payload: dict[str, Any]
+    created_at: str
+    updated_at: str
 
 
 class GatewaySessionStore:
@@ -308,4 +324,50 @@ class GatewaySessionStore:
                 WHERE platform = ? AND event_id = ? AND status = 'processing'
                 """,
                 (platform, event_id),
+            )
+
+    @staticmethod
+    def _pending_interrupt_from_row(row: sqlite3.Row) -> GatewayPendingInterrupt:
+        return GatewayPendingInterrupt(
+            session_id=row["session_id"],
+            kind=row["kind"],
+            payload=json.loads(row["payload"]),
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+        )
+
+    def set_pending_interrupt(self, session_id: str, *, kind: str, payload: dict[str, Any]) -> None:
+        now = self.now()
+        payload_json = json.dumps(payload, ensure_ascii=False)
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO gateway_pending_interrupts
+                    (session_id, kind, payload, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(session_id) DO UPDATE SET
+                    kind = excluded.kind,
+                    payload = excluded.payload,
+                    updated_at = excluded.updated_at
+                """,
+                (session_id, kind, payload_json, now, now),
+            )
+
+    def get_pending_interrupt(self, session_id: str) -> GatewayPendingInterrupt | None:
+        with self.connect() as conn:
+            row = conn.execute(
+                """
+                SELECT session_id, kind, payload, created_at, updated_at
+                FROM gateway_pending_interrupts
+                WHERE session_id = ?
+                """,
+                (session_id,),
+            ).fetchone()
+        return self._pending_interrupt_from_row(row) if row is not None else None
+
+    def clear_pending_interrupt(self, session_id: str) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                "DELETE FROM gateway_pending_interrupts WHERE session_id = ?",
+                (session_id,),
             )
