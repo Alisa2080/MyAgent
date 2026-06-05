@@ -70,8 +70,6 @@ def _clarify_answer_from_text(payload: dict[str, Any], text: str) -> str:
         selected = int(answer)
         if 1 <= selected <= len(choices):
             return choices[selected - 1]
-        if selected == len(choices) + 1:
-            return ""
     return answer
 
 
@@ -92,7 +90,7 @@ def _format_clarify_message(payload: dict[str, Any]) -> str:
         lines.append("")
         for index, choice in enumerate(choices, start=1):
             lines.append(f"{index}. {choice}")
-        lines.append(f"{len(choices) + 1}. Other (type your answer)")
+        lines.append("Other: type your answer")
     return "\n".join(lines)
 
 
@@ -132,11 +130,12 @@ def run_gateway_agent_turn(
 
     from agent_core.agent_runner import invoke_agent_with_terminal_notifications
 
-    result = invoke_agent_with_terminal_notifications(
-        agent,
-        {"messages": [{"role": "user", "content": event.text}]},
-        gateway_agent_config(origin),
+    input_data = (
+        Command(resume=origin["resume"])
+        if "resume" in origin
+        else {"messages": [{"role": "user", "content": event.text}]}
     )
+    result = invoke_agent_with_terminal_notifications(agent, input_data, gateway_agent_config(origin))
     return result
 
 
@@ -198,7 +197,7 @@ class GatewayDispatcher:
             pending = self.store.get_pending_interrupt(session.session_id)
             if pending is not None and pending.kind == "clarify":
                 answer = _clarify_answer_from_text(pending.payload, event.text)
-                response_text = self.runner(
+                runner_result = self.runner(
                     event,
                     session,
                     {
@@ -219,7 +218,19 @@ class GatewayDispatcher:
                         },
                     },
                 )
-                response_text = _assistant_text_from_result(response_text)
+                clarify_request = _clarify_request_from_result(runner_result)
+                if clarify_request is not None:
+                    payload = _clarify_payload(clarify_request)
+                    response_text = _format_clarify_message(payload)
+                    send_error = self._send_and_record_response(event, session, response_text)
+                    if send_error is not None:
+                        self.store.release_event(event.platform, event.event_id)
+                        return send_error
+                    self.store.set_pending_interrupt(session.session_id, kind="clarify", payload=payload)
+                    self.store.complete_event(event.platform, event.event_id)
+                    return DispatchResult(True, session.session_id)
+
+                response_text = _assistant_text_from_result(runner_result)
                 if not response_text:
                     response_text = _EMPTY_AGENT_RESPONSE_TEXT
                 send_error = self._send_and_record_response(event, session, response_text)

@@ -1,6 +1,5 @@
-from __future__ import annotations
-
 from langchain.tools import ToolRuntime, tool
+from langchain_core.messages import ToolMessage
 from pydantic import BaseModel, Field
 
 from agent_core.session_context import origin_identity_from_runtime
@@ -46,8 +45,9 @@ def _interactive_source(runtime: ToolRuntime | None) -> str | None:
 @tool("clarify", args_schema=ClarifyInput)
 def clarify(
     question: str,
-    runtime: ToolRuntime,
     choices: list[str] | None = None,
+    *,
+    runtime: ToolRuntime,
 ) -> ToolMessage:
     """Ask the user a clarification question before proceeding.
 

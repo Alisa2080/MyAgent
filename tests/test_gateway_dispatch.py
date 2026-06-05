@@ -261,6 +261,61 @@ def test_default_gateway_runner_passes_origin_config_to_agent():
     assert config["configurable"]["display_name"] == "Miku"
 
 
+def test_default_gateway_runner_resumes_pending_interrupt():
+    from gateway.dispatch import run_gateway_agent_turn
+    from gateway.session_store import GatewaySession
+
+    class FakeAgent:
+        def __init__(self):
+            self.calls = []
+
+        def invoke(self, input_data, config=None):
+            self.calls.append((input_data, config))
+            return {"messages": [{"role": "assistant", "content": "resumed"}]}
+
+    agent = FakeAgent()
+    event = InboundEvent(
+        platform="feishu",
+        event_id="evt-2",
+        event_type="message",
+        chat_id="oc_123",
+        text="2",
+        timestamp="2026-06-05T00:01:00+00:00",
+        thread_id="thread-1",
+        sender_id="ou_1",
+        sender_name="Miku",
+        raw={},
+    )
+    session = GatewaySession(
+        session_id="gw_1",
+        platform="feishu",
+        chat_id="oc_123",
+        thread_id="thread-1",
+        sender_id="ou_1",
+        sender_name="Miku",
+        status="active",
+        last_event_id=None,
+        last_message_preview=None,
+    )
+    origin = {
+        "source_type": "gateway",
+        "platform": "feishu",
+        "chat_id": "oc_123",
+        "thread_id": "thread-1",
+        "sender_id": "ou_1",
+        "display_name": "Miku",
+        "session_id": "gw_1",
+        "resume": {"decisions": [{"type": "respond", "message": "Complete"}]},
+    }
+
+    result = run_gateway_agent_turn(event, session, origin, agent=agent)
+
+    assert result == {"messages": [{"role": "assistant", "content": "resumed"}]}
+    input_data, config = agent.calls[0]
+    assert input_data.resume == {"decisions": [{"type": "respond", "message": "Complete"}]}
+    assert config["configurable"]["thread_id"] == "gw_1"
+
+
 def _clarify_interrupt_result():
     return {
         "__interrupt__": [
@@ -318,7 +373,7 @@ def test_gateway_dispatch_sends_clarify_and_records_pending(tmp_path):
     assert adapter.sent
     assert "Which path?" in adapter.sent[0][1].text
     assert "1. Small" in adapter.sent[0][1].text
-    assert "3. Other" in adapter.sent[0][1].text
+    assert "Other: type your answer" in adapter.sent[0][1].text
     pending = store.get_pending_interrupt(result.session_id)
     assert pending is not None
     assert pending.kind == "clarify"
@@ -371,3 +426,49 @@ def test_gateway_dispatch_next_message_answers_pending_clarify(tmp_path):
     assert second.ok is True
     assert adapter.sent[-1][1].text == "resumed with answer"
     assert store.get_pending_interrupt(first.session_id) is None
+
+
+def test_gateway_dispatch_resume_can_store_followup_clarify(tmp_path):
+    from gateway.dispatch import GatewayDispatcher
+    from gateway.registry import GatewayRegistry
+    from gateway.session_store import GatewaySessionStore
+
+    adapter = FakeAdapter()
+    registry = GatewayRegistry()
+    registry.register(adapter)
+    store = GatewaySessionStore(tmp_path / "gateway.sqlite")
+    calls = []
+
+    def runner(event, session, origin):
+        calls.append(origin)
+        return _clarify_interrupt_result()
+
+    dispatcher = GatewayDispatcher(store=store, registry=registry, runner=runner)
+    first = dispatcher.dispatch(
+        InboundEvent(
+            platform="feishu",
+            event_id="evt-1",
+            event_type="message",
+            chat_id="oc_123",
+            text="build it",
+            timestamp="2026-06-05T00:00:00+00:00",
+            raw={},
+        )
+    )
+    second = dispatcher.dispatch(
+        InboundEvent(
+            platform="feishu",
+            event_id="evt-2",
+            event_type="message",
+            chat_id="oc_123",
+            text="2",
+            timestamp="2026-06-05T00:01:00+00:00",
+            raw={},
+        )
+    )
+
+    assert first.ok is True
+    assert second.ok is True
+    assert len(adapter.sent) == 2
+    assert "Which path?" in adapter.sent[-1][1].text
+    assert store.get_pending_interrupt(first.session_id) is not None

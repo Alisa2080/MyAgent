@@ -97,11 +97,15 @@ def _clarify_decision_from_answer(request: ApprovalRequest, answer: str) -> dict
         selected = int(text)
         if 1 <= selected <= len(choices):
             text = choices[selected - 1]
-        elif selected == len(choices) + 1:
-            text = ""
     if not text:
         text = "No clarification answer provided."
     return {"type": "respond", "message": text}
+
+
+def _is_clarify_other_choice(request: ApprovalRequest, answer: str) -> bool:
+    choices = _clarify_choices(request)
+    text = str(answer or "").strip()
+    return bool(choices and text.isdigit() and int(text) == len(choices) + 1)
 
 
 def collect_approval_decisions(
@@ -126,6 +130,15 @@ def collect_approval_decisions(
                     for _ in range(total - index)
                 )
                 break
+            if _is_clarify_other_choice(request, answer):
+                try:
+                    answer = input_func("Other answer: ")
+                except EOFError:
+                    decisions.extend(
+                        {"type": "reject", "message": eof_message}
+                        for _ in range(total - index)
+                    )
+                    break
             decisions.append(_clarify_decision_from_answer(request, answer))
             index += 1
             continue

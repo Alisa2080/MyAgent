@@ -295,6 +295,13 @@ def test_clarify_tool_returns_structured_payload():
     assert result.content == "Clarification requested."
 
 
+def test_clarify_tool_registers_runtime_for_injection():
+    from agent_tools.public.clarify import clarify
+
+    assert "runtime" in clarify._injected_args_keys
+    assert "runtime" not in clarify.args
+
+
 def test_clarify_tool_rejects_empty_question():
     from agent_tools.public.clarify import clarify
 

@@ -351,6 +351,30 @@ def test_collect_approval_decisions_accepts_clarify_other_text():
     assert resume == {"decisions": [{"type": "respond", "message": "Use a staged rollout"}]}
 
 
+def test_collect_approval_decisions_prompts_for_clarify_other_choice():
+    from agent_cli.approval import ApprovalRequest, collect_approval_decisions
+
+    answers = iter(["3", "Use a staged rollout"])
+    request = ApprovalRequest(
+        {
+            "name": "clarify",
+            "args": {
+                "question": "Which path?",
+                "choices": ["Small", "Complete"],
+            },
+        },
+        {"kind": "clarify", "allowed_decisions": ["respond"]},
+    )
+
+    resume = collect_approval_decisions(
+        [request],
+        input_func=lambda prompt: next(answers),
+        print_func=lambda text="": None,
+    )
+
+    assert resume == {"decisions": [{"type": "respond", "message": "Use a staged rollout"}]}
+
+
 def test_collect_approval_decisions_accepts_open_ended_clarify_answer():
     from agent_cli.approval import ApprovalRequest, collect_approval_decisions
 
