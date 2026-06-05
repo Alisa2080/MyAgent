@@ -274,3 +274,52 @@ def test_skill_view_content_includes_skill_body(monkeypatch, tmp_path):
     assert result.tool_call_id == "call-skill-body"
     assert "# Example Skill" in result.content
     assert "Use this skill." in result.content
+
+
+def test_clarify_tool_returns_structured_payload():
+    from agent_tools.public.clarify import clarify
+
+    runtime = SimpleNamespace(
+        execution_info=SimpleNamespace(thread_id="clarify-thread"),
+        tool_call_id="call-clarify",
+    )
+    result = clarify.func(
+        question="Which implementation path should I take?",
+        choices=["Small", "Complete"],
+        runtime=runtime,
+    )
+    _assert_tool_result(result, "clarify", True)
+    artifact = result.artifact
+    assert artifact["data"]["question"] == "Which implementation path should I take?"
+    assert artifact["data"]["choices"] == ["Small", "Complete"]
+    assert result.content == "Clarification requested."
+
+
+def test_clarify_tool_rejects_empty_question():
+    from agent_tools.public.clarify import clarify
+
+    runtime = SimpleNamespace(
+        execution_info=SimpleNamespace(thread_id="clarify-thread"),
+        tool_call_id="call-clarify",
+    )
+    result = clarify.func(question="   ", choices=None, runtime=runtime)
+    _assert_tool_result(result, "clarify", False)
+    assert result.artifact["code"] == "invalid_input"
+    assert "question is required" in result.artifact["message"].lower()
+
+
+def test_clarify_tool_rejects_too_many_choices():
+    from agent_tools.public.clarify import clarify
+
+    runtime = SimpleNamespace(
+        execution_info=SimpleNamespace(thread_id="clarify-thread"),
+        tool_call_id="call-clarify",
+    )
+    result = clarify.func(
+        question="Pick one",
+        choices=["a", "b", "c", "d", "e"],
+        runtime=runtime,
+    )
+    _assert_tool_result(result, "clarify", False)
+    assert result.artifact["code"] == "invalid_input"
+    assert "at most 4" in result.artifact["message"]

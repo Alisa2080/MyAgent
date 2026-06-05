@@ -3,6 +3,7 @@
 import sys
 import types
 
+from agent_tools.public.clarify import clarify
 from agent_tools.public.files import file_info, list_directory, patch, read_file, search_files, write_file
 from agent_tools.public.memory import memory_manage
 from agent_tools.public.skills import skill_manage, skill_view, skills_list
@@ -30,6 +31,7 @@ sys.modules[__name__].__class__ = _PublicToolsModule
 
 
 __all__ = [
+    "clarify",
     "file_info",
     "cronjob",
     "list_directory",

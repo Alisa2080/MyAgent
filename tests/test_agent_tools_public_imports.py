@@ -107,6 +107,12 @@ def test_agent_core_uses_public_tool_facades_for_runtime_registration():
     assert "from agent_tools.public.skills import build_skills_system_prompt" in system_prompt_source
 
 
+def test_public_package_exports_clarify():
+    from agent_tools.public import __all__, clarify
+    assert "clarify" in __all__
+    assert getattr(clarify, "name", None) == "clarify"
+
+
 def test_public_package_does_not_eagerly_import_cronjob(monkeypatch):
     for module_name in [
         "agent_tools.public",
