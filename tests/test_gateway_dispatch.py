@@ -14,6 +14,19 @@ class FakeAdapter:
         return SendResult(ok=True)
 
 
+class FailingOnceAdapter(FakeAdapter):
+    def __init__(self):
+        super().__init__()
+        self.failures_remaining = 1
+
+    def send_text(self, target, message):
+        self.sent.append((target, message))
+        if self.failures_remaining:
+            self.failures_remaining -= 1
+            return SendResult(ok=False, error="temporary send failure")
+        return SendResult(ok=True)
+
+
 def test_gateway_dispatch_records_messages_and_sends_response(tmp_path):
     from gateway.dispatch import GatewayDispatcher
     from gateway.registry import GatewayRegistry
@@ -381,6 +394,47 @@ def test_gateway_dispatch_sends_clarify_and_records_pending(tmp_path):
     assert [message.direction for message in messages] == ["inbound", "outbound"]
 
 
+def test_gateway_dispatch_retries_failed_clarify_delivery_without_rerunning_agent(tmp_path):
+    from gateway.dispatch import GatewayDispatcher
+    from gateway.registry import GatewayRegistry
+    from gateway.session_store import GatewaySessionStore
+
+    adapter = FailingOnceAdapter()
+    registry = GatewayRegistry()
+    registry.register(adapter)
+    store = GatewaySessionStore(tmp_path / "gateway.sqlite")
+    calls = []
+
+    def runner(event, session, origin):
+        calls.append(origin)
+        return _clarify_interrupt_result()
+
+    dispatcher = GatewayDispatcher(store=store, registry=registry, runner=runner)
+    event = InboundEvent(
+        platform="feishu",
+        event_id="evt-clarify",
+        event_type="message",
+        chat_id="oc_123",
+        text="build it",
+        timestamp="2026-06-05T00:00:00+00:00",
+        raw={},
+    )
+
+    first = dispatcher.dispatch(event)
+    second = dispatcher.dispatch(event)
+
+    assert first.ok is False
+    assert first.error == "temporary send failure"
+    assert second.ok is True
+    assert len(calls) == 1
+    assert len(adapter.sent) == 2
+    assert adapter.sent[-1][1].text == adapter.sent[0][1].text
+    pending = store.get_pending_interrupt(second.session_id)
+    assert pending is not None
+    assert pending.kind == "clarify"
+    assert "_gateway_delivery" not in pending.payload
+
+
 def test_gateway_dispatch_next_message_answers_pending_clarify(tmp_path):
     from gateway.dispatch import GatewayDispatcher
     from gateway.registry import GatewayRegistry
@@ -428,6 +482,72 @@ def test_gateway_dispatch_next_message_answers_pending_clarify(tmp_path):
     assert store.get_pending_interrupt(first.session_id) is None
 
 
+def test_gateway_dispatch_retries_failed_resume_response_without_resuming_twice(tmp_path):
+    from gateway.dispatch import GatewayDispatcher
+    from gateway.registry import GatewayRegistry
+    from gateway.session_store import GatewaySessionStore
+
+    adapter = FailingOnceAdapter()
+    registry = GatewayRegistry()
+    registry.register(adapter)
+    store = GatewaySessionStore(tmp_path / "gateway.sqlite")
+    calls = []
+
+    def runner(event, session, origin):
+        calls.append(origin)
+        if len(calls) == 1:
+            return _clarify_interrupt_result()
+        assert origin["resume"]["decisions"][0]["message"] == "Complete"
+        return "resumed with answer"
+
+    dispatcher = GatewayDispatcher(store=store, registry=registry, runner=runner)
+    first = dispatcher.dispatch(
+        InboundEvent(
+            platform="feishu",
+            event_id="evt-1",
+            event_type="message",
+            chat_id="oc_123",
+            text="build it",
+            timestamp="2026-06-05T00:00:00+00:00",
+            raw={},
+        )
+    )
+    assert first.ok is False
+
+    adapter.failures_remaining = 0
+    delivered_clarify = dispatcher.dispatch(
+        InboundEvent(
+            platform="feishu",
+            event_id="evt-1",
+            event_type="message",
+            chat_id="oc_123",
+            text="build it",
+            timestamp="2026-06-05T00:00:00+00:00",
+            raw={},
+        )
+    )
+    assert delivered_clarify.ok is True
+
+    adapter.failures_remaining = 1
+    answer = InboundEvent(
+        platform="feishu",
+        event_id="evt-2",
+        event_type="message",
+        chat_id="oc_123",
+        text="2",
+        timestamp="2026-06-05T00:01:00+00:00",
+        raw={},
+    )
+    failed_response = dispatcher.dispatch(answer)
+    retried_response = dispatcher.dispatch(answer)
+
+    assert failed_response.ok is False
+    assert retried_response.ok is True
+    assert len(calls) == 2
+    assert adapter.sent[-1][1].text == "resumed with answer"
+    assert store.get_pending_interrupt(first.session_id) is None
+
+
 def test_gateway_dispatch_resume_can_store_followup_clarify(tmp_path):
     from gateway.dispatch import GatewayDispatcher
     from gateway.registry import GatewayRegistry
@@ -471,4 +591,5 @@ def test_gateway_dispatch_resume_can_store_followup_clarify(tmp_path):
     assert second.ok is True
     assert len(adapter.sent) == 2
     assert "Which path?" in adapter.sent[-1][1].text
+    assert calls[1]["resume"]["decisions"][0]["message"] == "Complete"
     assert store.get_pending_interrupt(first.session_id) is not None

@@ -2,7 +2,7 @@ from langchain.tools import ToolRuntime, tool
 from langchain_core.messages import ToolMessage
 from pydantic import BaseModel, Field
 
-from agent_core.session_context import origin_identity_from_runtime
+from agent_core.session_context import RuntimeContext, origin_identity_from_runtime
 from agent_tools.shared.tool_result import tool_failure, tool_success
 
 
@@ -13,7 +13,6 @@ class ClarifyInput(BaseModel):
     question: str = Field(description="Question to ask the user for clarification.")
     choices: list[str] | None = Field(
         default=None,
-        max_length=MAX_CHOICES,
         description=(
             "Optional list of 1 to 4 suggested answers. The UI may add an "
             "Other option that lets the user type a custom answer."
@@ -33,12 +32,16 @@ def _clean_choices(choices: list[str] | None) -> list[str] | None:
 
 
 def _interactive_source(runtime: ToolRuntime | None) -> str | None:
+    if runtime is None:
+        return None
     identity = origin_identity_from_runtime(runtime)
-    if identity is None:
+    if identity is not None:
+        source_type = identity.get("source_type")
+        if source_type in {"cli", "gateway", "web"}:
+            return source_type
+        return None
+    if RuntimeContext.from_runtime(runtime).has_thread:
         return "cli"
-    source_type = identity.get("source_type")
-    if source_type in {"cli", "gateway", "web"}:
-        return source_type
     return None
 
 

@@ -330,3 +330,36 @@ def test_clarify_tool_rejects_too_many_choices():
     _assert_tool_result(result, "clarify", False)
     assert result.artifact["error"]["code"] == "invalid_input"
     assert "at most 4" in result.artifact["message"]
+
+
+def test_clarify_schema_allows_tool_to_report_too_many_choices():
+    from agent_tools.public.clarify import ClarifyInput
+
+    parsed = ClarifyInput.model_validate(
+        {
+            "question": "Which path?",
+            "choices": ["A", "B", "C", "D", "E"],
+        }
+    )
+
+    assert parsed.choices == ["A", "B", "C", "D", "E"]
+
+
+def test_clarify_tool_fails_closed_without_runtime():
+    from agent_tools.public.clarify import clarify
+
+    result = clarify.func(question="Which path?", choices=None, runtime=None)
+
+    _assert_tool_result(result, "clarify", False)
+    assert result.artifact["error"]["code"] == "interactive_unavailable"
+
+
+def test_clarify_tool_fails_closed_without_runtime_identity():
+    from agent_tools.public.clarify import clarify
+
+    runtime = SimpleNamespace(tool_call_id="call-clarify-no-thread")
+
+    result = clarify.func(question="Which path?", choices=None, runtime=runtime)
+
+    _assert_tool_result(result, "clarify", False)
+    assert result.artifact["error"]["code"] == "interactive_unavailable"

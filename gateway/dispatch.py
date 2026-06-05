@@ -17,6 +17,7 @@ _EMPTY_AGENT_RESPONSE_TEXT = (
     "抱歉，本次请求已被接收，但我无法生成回复。"
     "请稍后重试，或把问题拆得更具体一些。"
 )
+_GATEWAY_DELIVERY_KEY = "_gateway_delivery"
 
 
 @dataclass(frozen=True)
@@ -78,6 +79,34 @@ def _clarify_payload(request: Any) -> dict[str, Any]:
         "action_request": request.action_request,
         "review_config": request.review_config,
     }
+
+
+def _with_pending_delivery(payload: dict[str, Any], *, event_id: str, text: str) -> dict[str, Any]:
+    return {
+        **payload,
+        _GATEWAY_DELIVERY_KEY: {
+            "event_id": event_id,
+            "text": text,
+        },
+    }
+
+
+def _without_pending_delivery(payload: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: value
+        for key, value in payload.items()
+        if key != _GATEWAY_DELIVERY_KEY
+    }
+
+
+def _pending_delivery_text(payload: dict[str, Any], event_id: str) -> str | None:
+    delivery = payload.get(_GATEWAY_DELIVERY_KEY)
+    if not isinstance(delivery, dict):
+        return None
+    if str(delivery.get("event_id") or "") != event_id:
+        return None
+    text = delivery.get("text")
+    return str(text) if text else None
 
 
 def _format_clarify_message(payload: dict[str, Any]) -> str:
@@ -173,6 +202,53 @@ class GatewayDispatcher:
         )
         return None
 
+    def _retry_pending_delivery(
+        self,
+        event: InboundEvent,
+        session: GatewaySession,
+        pending: Any,
+    ) -> DispatchResult | None:
+        if pending.kind not in {"clarify", "outbound_response"}:
+            return None
+        response_text = _pending_delivery_text(pending.payload, event.event_id)
+        if response_text is None:
+            return None
+
+        send_error = self._send_and_record_response(event, session, response_text)
+        if send_error is not None:
+            self.store.release_event(event.platform, event.event_id)
+            return send_error
+
+        if pending.kind == "clarify":
+            self.store.set_pending_interrupt(
+                session.session_id,
+                kind="clarify",
+                payload=_without_pending_delivery(pending.payload),
+            )
+        else:
+            self.store.clear_pending_interrupt(session.session_id)
+        self.store.complete_event(event.platform, event.event_id)
+        return DispatchResult(True, session.session_id)
+
+    def _store_pending_delivery(
+        self,
+        event: InboundEvent,
+        session: GatewaySession,
+        *,
+        kind: str,
+        payload: dict[str, Any],
+        response_text: str,
+    ) -> None:
+        self.store.set_pending_interrupt(
+            session.session_id,
+            kind=kind,
+            payload=_with_pending_delivery(
+                payload,
+                event_id=event.event_id,
+                text=response_text,
+            ),
+        )
+
     def dispatch(self, event: InboundEvent) -> DispatchResult:
         session = self.store.get_or_create_session(
             platform=event.platform,
@@ -185,6 +261,15 @@ class GatewayDispatcher:
             return DispatchResult(True, session.session_id, duplicate=True)
 
         try:
+            pending = self.store.get_pending_interrupt(session.session_id)
+            delivery_result = (
+                self._retry_pending_delivery(event, session, pending)
+                if pending is not None
+                else None
+            )
+            if delivery_result is not None:
+                return delivery_result
+
             self.store.record_message(
                 session.session_id,
                 direction="inbound",
@@ -194,7 +279,6 @@ class GatewayDispatcher:
                 raw=event.raw,
             )
 
-            pending = self.store.get_pending_interrupt(session.session_id)
             if pending is not None and pending.kind == "clarify":
                 answer = _clarify_answer_from_text(pending.payload, event.text)
                 runner_result = self.runner(
@@ -224,6 +308,13 @@ class GatewayDispatcher:
                     response_text = _format_clarify_message(payload)
                     send_error = self._send_and_record_response(event, session, response_text)
                     if send_error is not None:
+                        self._store_pending_delivery(
+                            event,
+                            session,
+                            kind="clarify",
+                            payload=payload,
+                            response_text=response_text,
+                        )
                         self.store.release_event(event.platform, event.event_id)
                         return send_error
                     self.store.set_pending_interrupt(session.session_id, kind="clarify", payload=payload)
@@ -235,6 +326,13 @@ class GatewayDispatcher:
                     response_text = _EMPTY_AGENT_RESPONSE_TEXT
                 send_error = self._send_and_record_response(event, session, response_text)
                 if send_error is not None:
+                    self._store_pending_delivery(
+                        event,
+                        session,
+                        kind="outbound_response",
+                        payload={"text": response_text},
+                        response_text=response_text,
+                    )
                     self.store.release_event(event.platform, event.event_id)
                     return send_error
                 self.store.clear_pending_interrupt(session.session_id)
@@ -258,6 +356,13 @@ class GatewayDispatcher:
                 response_text = _format_clarify_message(payload)
                 send_error = self._send_and_record_response(event, session, response_text)
                 if send_error is not None:
+                    self._store_pending_delivery(
+                        event,
+                        session,
+                        kind="clarify",
+                        payload=payload,
+                        response_text=response_text,
+                    )
                     self.store.release_event(event.platform, event.event_id)
                     return send_error
                 self.store.set_pending_interrupt(session.session_id, kind="clarify", payload=payload)
@@ -276,6 +381,13 @@ class GatewayDispatcher:
                 response_text = _EMPTY_AGENT_RESPONSE_TEXT
             send_error = self._send_and_record_response(event, session, response_text)
             if send_error is not None:
+                self._store_pending_delivery(
+                    event,
+                    session,
+                    kind="outbound_response",
+                    payload={"text": response_text},
+                    response_text=response_text,
+                )
                 self.store.release_event(event.platform, event.event_id)
                 return send_error
 
