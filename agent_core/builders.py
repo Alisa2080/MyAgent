@@ -45,6 +45,11 @@ HUMAN_INTERRUPT_ON = {
         "allowed_decisions": ["approve", "edit", "reject", "respond"],
         "description": "Review this procedural skill change before it is written to disk.",
     },
+    "clarify": {
+        "allowed_decisions": ["respond"],
+        "description": "Answer this clarification question.",
+        "kind": "clarify",
+    },
 }
 
 POLICY_REVIEW_TOOLS = {"terminal", "process", "write_file", "patch"}

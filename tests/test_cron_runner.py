@@ -101,6 +101,14 @@ def test_build_cron_tools_excludes_cronjob_and_includes_requested_toolsets():
     assert "task" in names
 
 
+def test_build_cron_tools_excludes_clarify():
+    import cron.runner as runner
+
+    names = [getattr(tool, "name", "") for tool in runner.build_cron_tools(["terminal", "file_write", "delegation"])]
+
+    assert "clarify" not in names
+
+
 def test_build_cron_tools_defaults_to_read_only_tools():
     import cron.runner as runner
 

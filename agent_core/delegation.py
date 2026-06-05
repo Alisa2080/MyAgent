@@ -15,6 +15,7 @@ from agent_core.system_prompt import (
 )
 from agent_core.tool_limits import build_tool_call_limit_middleware
 from agent_core.workspace import WORKDIR
+from agent_tools.public.clarify import clarify
 from agent_tools.public.files import file_info, list_directory, patch, read_file, search_files, write_file
 from agent_tools.public.skills import skill_manage, skill_view, skills_list
 from agent_tools.public.terminal import process, terminal
@@ -41,6 +42,7 @@ BASE_TOOLS = [
     terminal,
     process,
     skill_manage,
+    clarify,
 ]
 
 

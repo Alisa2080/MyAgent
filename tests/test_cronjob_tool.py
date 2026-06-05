@@ -524,6 +524,17 @@ def test_build_agent_can_include_cronjob(monkeypatch):
     assert "cronjob" in names
 
 
+def test_build_agent_includes_clarify_by_default(monkeypatch):
+    import agent_core.builders as builders
+
+    _patch_build_agent_side_effects(monkeypatch, builders)
+
+    result = builders.build_agent()
+
+    names = [getattr(tool, "name", "") for tool in result["tools"]]
+    assert "clarify" in names
+
+
 def test_cronjob_blocks_dangerous_prompt():
     cronjob_tool = _cronjob_tool()
 

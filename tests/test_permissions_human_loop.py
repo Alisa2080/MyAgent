@@ -401,6 +401,58 @@ def test_non_policy_tool_still_uses_interrupt_on(monkeypatch):
     assert result["messages"][0].tool_calls[0]["id"] == "memory-call"
 
 
+def test_clarify_uses_human_interrupt(monkeypatch):
+    from langchain_core.messages import AIMessage
+
+    import agent_core.human_loop as human_loop
+
+    seen_payloads = []
+
+    def fake_interrupt(payload):
+        seen_payloads.append(payload)
+        return {"type": "respond", "message": "Use the complete option."}
+
+    monkeypatch.setattr(human_loop, "interrupt", fake_interrupt)
+
+    middleware = human_loop.FlexibleHumanInTheLoopMiddleware(
+        interrupt_on={
+            "clarify": {
+                "allowed_decisions": ["respond"],
+                "description": "Answer this clarification question.",
+                "kind": "clarify",
+            }
+        },
+        policy_tools=set(),
+    )
+    state = {
+        "messages": [
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "clarify",
+                        "args": {
+                            "question": "Which path?",
+                            "choices": ["Small", "Complete"],
+                        },
+                        "id": "call-clarify",
+                    }
+                ],
+            )
+        ]
+    }
+
+    result = middleware.after_model(state, runtime=_runtime("thread-clarify"))
+
+    assert seen_payloads
+    action_requests = seen_payloads[0]["action_requests"]
+    review_configs = seen_payloads[0]["review_configs"]
+    assert action_requests[0]["name"] == "clarify"
+    assert action_requests[0]["args"]["question"] == "Which path?"
+    assert review_configs[0]["allowed_decisions"] == ["respond"]
+    assert result is not None
+
+
 def test_policy_reject_does_not_record_approval(monkeypatch):
     import agent_core.human_loop as human_loop
     from agent_core.permissions.approvals import clear_approvals, consume_approval
