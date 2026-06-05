@@ -303,3 +303,71 @@ def test_collect_approval_decisions_rejects_remaining_on_secondary_prompt_eof():
             },
         ]
     }
+
+
+def test_collect_approval_decisions_maps_clarify_choice_number():
+    from agent_cli.approval import ApprovalRequest, collect_approval_decisions
+
+    request = ApprovalRequest(
+        {
+            "name": "clarify",
+            "args": {
+                "question": "Which path?",
+                "choices": ["Small", "Complete"],
+            },
+        },
+        {"kind": "clarify", "allowed_decisions": ["respond"]},
+    )
+
+    resume = collect_approval_decisions(
+        [request],
+        input_func=lambda prompt: "2",
+        print_func=lambda text="": None,
+    )
+
+    assert resume == {"decisions": [{"type": "respond", "message": "Complete"}]}
+
+
+def test_collect_approval_decisions_accepts_clarify_other_text():
+    from agent_cli.approval import ApprovalRequest, collect_approval_decisions
+
+    request = ApprovalRequest(
+        {
+            "name": "clarify",
+            "args": {
+                "question": "Which path?",
+                "choices": ["Small", "Complete"],
+            },
+        },
+        {"kind": "clarify", "allowed_decisions": ["respond"]},
+    )
+
+    resume = collect_approval_decisions(
+        [request],
+        input_func=lambda prompt: "Use a staged rollout",
+        print_func=lambda text="": None,
+    )
+
+    assert resume == {"decisions": [{"type": "respond", "message": "Use a staged rollout"}]}
+
+
+def test_collect_approval_decisions_accepts_open_ended_clarify_answer():
+    from agent_cli.approval import ApprovalRequest, collect_approval_decisions
+
+    request = ApprovalRequest(
+        {
+            "name": "clarify",
+            "args": {
+                "question": "What should the title be?",
+            },
+        },
+        {"kind": "clarify", "allowed_decisions": ["respond"]},
+    )
+
+    resume = collect_approval_decisions(
+        [request],
+        input_func=lambda prompt: "Clarify Tool",
+        print_func=lambda text="": None,
+    )
+
+    assert resume == {"decisions": [{"type": "respond", "message": "Clarify Tool"}]}

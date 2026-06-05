@@ -61,6 +61,49 @@ def _render_request(index: int, total: int, request: ApprovalRequest) -> str:
     return "\n".join(lines)
 
 
+def _is_clarify_request(request: ApprovalRequest) -> bool:
+    return request.tool_name == "clarify" or request.review_config.get("kind") == "clarify"
+
+
+def _clarify_choices(request: ApprovalRequest) -> list[str]:
+    args = request.args if isinstance(request.args, dict) else {}
+    raw_choices = args.get("choices")
+    if not isinstance(raw_choices, list):
+        return []
+    return [str(choice).strip() for choice in raw_choices if str(choice).strip()]
+
+
+def _clarify_question(request: ApprovalRequest) -> str:
+    args = request.args if isinstance(request.args, dict) else {}
+    question = str(args.get("question") or "").strip()
+    return question or "Clarification needed."
+
+
+def _render_clarify_request(index: int, total: int, request: ApprovalRequest) -> str:
+    lines = [f"[{index}/{total}] clarify", _clarify_question(request), ""]
+    choices = _clarify_choices(request)
+    for choice_index, choice in enumerate(choices, start=1):
+        lines.append(f"{choice_index}. {choice}")
+    if choices:
+        lines.append(f"{len(choices) + 1}. Other (type your answer)")
+        lines.append("")
+    return "\n".join(lines)
+
+
+def _clarify_decision_from_answer(request: ApprovalRequest, answer: str) -> dict[str, str]:
+    text = str(answer or "").strip()
+    choices = _clarify_choices(request)
+    if choices and text.isdigit():
+        selected = int(text)
+        if 1 <= selected <= len(choices):
+            text = choices[selected - 1]
+        elif selected == len(choices) + 1:
+            text = ""
+    if not text:
+        text = "No clarification answer provided."
+    return {"type": "respond", "message": text}
+
+
 def collect_approval_decisions(
     requests: list[ApprovalRequest],
     *,
@@ -73,6 +116,19 @@ def collect_approval_decisions(
     eof_message = "Rejected because approval input ended."
     while index < total:
         request = requests[index]
+        if _is_clarify_request(request):
+            print_func(_render_clarify_request(index + 1, total, request))
+            try:
+                answer = input_func("Answer: ")
+            except EOFError:
+                decisions.extend(
+                    {"type": "reject", "message": eof_message}
+                    for _ in range(total - index)
+                )
+                break
+            decisions.append(_clarify_decision_from_answer(request, answer))
+            index += 1
+            continue
         print_func(_render_request(index + 1, total, request))
         try:
             answer = input_func("Decision [y/n/e/r/a/q]: ").strip().lower()
