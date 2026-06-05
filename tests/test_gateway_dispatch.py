@@ -50,6 +50,43 @@ def test_gateway_dispatch_records_messages_and_sends_response(tmp_path):
     assert [message.direction for message in messages] == ["inbound", "outbound"]
 
 
+def test_gateway_dispatch_sends_fallback_when_runner_returns_no_text(tmp_path):
+    from gateway.dispatch import GatewayDispatcher
+    from gateway.registry import GatewayRegistry
+    from gateway.session_store import GatewaySessionStore
+
+    adapter = FakeAdapter()
+    registry = GatewayRegistry()
+    registry.register(adapter)
+    store = GatewaySessionStore(tmp_path / "gateway.sqlite")
+    dispatcher = GatewayDispatcher(
+        store=store,
+        registry=registry,
+        runner=lambda event, session, origin: None,
+    )
+
+    result = dispatcher.dispatch(
+        InboundEvent(
+            platform="feishu",
+            event_id="evt-empty",
+            event_type="message",
+            chat_id="oc_123",
+            text="explain cron architecture",
+            timestamp="2026-06-05T00:00:00+00:00",
+            raw={},
+        )
+    )
+
+    assert result.ok is True
+    assert adapter.sent
+    target, message = adapter.sent[0]
+    assert target.target_id == "oc_123"
+    assert "无法生成回复" in message.text
+    messages = store.list_messages(result.session_id)
+    assert [message.direction for message in messages] == ["inbound", "outbound"]
+    assert "无法生成回复" in messages[-1].text
+
+
 def test_gateway_dispatch_does_not_claim_event_when_runner_fails(tmp_path):
     from gateway.dispatch import GatewayDispatcher
     from gateway.registry import GatewayRegistry

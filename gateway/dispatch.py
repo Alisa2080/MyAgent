@@ -1,11 +1,19 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import logging
 from typing import Any, Callable
 
 from gateway.contracts import InboundEvent, OutboundMessage, PlatformMessageTarget
 from gateway.registry import GatewayRegistry
 from gateway.session_store import GatewaySession, GatewaySessionStore
+
+logger = logging.getLogger(__name__)
+
+_EMPTY_AGENT_RESPONSE_TEXT = (
+    "抱歉，本次请求已被接收，但我无法生成回复。"
+    "请稍后重试，或把问题拆得更具体一些。"
+)
 
 
 @dataclass(frozen=True)
@@ -115,6 +123,15 @@ class GatewayDispatcher:
                 "session_id": session.session_id,
             }
             response_text = self.runner(event, session, origin)
+            if not response_text:
+                logger.warning(
+                    "gateway dispatch: runner returned no response platform=%s event_id=%s chat_id=%s session_id=%s",
+                    event.platform,
+                    event.event_id,
+                    event.chat_id,
+                    session.session_id,
+                )
+                response_text = _EMPTY_AGENT_RESPONSE_TEXT
             if response_text:
                 adapter = self.registry.get(event.platform)
                 if adapter is None:
