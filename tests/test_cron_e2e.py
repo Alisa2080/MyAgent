@@ -376,7 +376,7 @@ def test_service_executes_due_job_and_delivers_feishu_text(isolated_cron_home):
 
     adapter = RecordingFeishuGatewayAdapter([SendResult(ok=True)])
     install_feishu_gateway_adapter(adapter)
-    job = create_due_job(deliver="feishu:oc_123")
+    job = create_due_job(deliver="feishu:oc_123:mid_456")
     runner = RecordingRunner(
         output_doc="# Feishu E2E Output\nbody",
         final_response="final feishu response",
@@ -410,6 +410,7 @@ def test_service_executes_due_job_and_delivers_feishu_text(isolated_cron_home):
         platform="feishu",
         target_type="chat_id",
         target_id="oc_123",
+        thread_id="mid_456",
     )
     assert "final feishu response" in message.text
     assert job["id"] in message.text

@@ -68,7 +68,7 @@ def test_origin_delivery_sends_gateway_origin(monkeypatch):
         assert target.platform == "feishu"
         assert target.target_type == "chat_id"
         assert target.target_id == "oc_123"
-        assert target.thread_id == "thread-1"
+        assert target.thread_id is None
         assert "Daily" in message.text
         assert "done" in message.text
     finally:
@@ -95,6 +95,39 @@ def test_origin_delivery_maps_retryable_gateway_failure(monkeypatch):
         assert result.delivered is False
         assert result.retryable is True
         assert result.error == "rate limit"
+    finally:
+        gateway_registry.clear_gateway_adapter_factories()
+
+
+def test_gateway_origin_delivery_sends_new_chat_message(monkeypatch):
+    import gateway.registry as gateway_registry
+    from cron.delivery_adapters import GatewayOriginDeliveryAdapter
+
+    fake = FakeGatewayAdapter()
+    gateway_registry.clear_gateway_adapter_factories()
+    gateway_registry.register_gateway_adapter_factory(lambda **kwargs: fake)
+    try:
+        adapter = GatewayOriginDeliveryAdapter()
+        job = {
+            "id": "job-1",
+            "origin": {
+                "source_type": "gateway",
+                "platform": "feishu",
+                "chat_id": "oc_123",
+                "thread_id": "thread-1",
+            },
+        }
+
+        result = adapter.deliver(delivery_event(), job, {"id": "run-1"})
+
+        assert result.delivered is True
+        target, message = fake.sent[0]
+        assert target.platform == "feishu"
+        assert target.target_type == "chat_id"
+        assert target.target_id == "oc_123"
+        assert target.thread_id is None
+        assert "Daily" in message.text
+        assert "done" in message.text
     finally:
         gateway_registry.clear_gateway_adapter_factories()
 

@@ -996,3 +996,29 @@ def test_main_cron_service_requires_nested_command(monkeypatch, tmp_path, capsys
 
     assert code == 2
     assert "Missing cron service command" in capsys.readouterr().out
+
+
+def test_gateway_service_install_accepts_with_cron(monkeypatch, tmp_path, capsys):
+    import agent_cli.command_handlers.gateway as gateway_handler
+    from agent_cli.main import main
+
+    seen = {}
+
+    def fake_handle(args, subcommand):
+        seen["subcommand"] = subcommand
+        seen["with_cron"] = args.with_cron
+        seen["transport"] = args.transport
+        seen["force"] = args.force
+        return 0
+
+    monkeypatch.setattr(gateway_handler, "handle_gateway_service", fake_handle)
+
+    exit_code = main(["gateway", "service", "install", "--with-cron", "--force"])
+
+    assert exit_code == 0
+    assert seen == {
+        "subcommand": "install",
+        "with_cron": True,
+        "transport": "feishu-ws",
+        "force": True,
+    }

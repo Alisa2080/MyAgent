@@ -356,3 +356,91 @@ def test_gateway_feishu_ws_does_not_warn_when_cron_service_is_healthy(monkeypatc
     output = capsys.readouterr().out
     assert "WARN" not in output
     assert "Cron service" not in output
+
+
+def test_gateway_service_install_with_cron_installs_gateway_then_cron(monkeypatch, capsys):
+    from types import SimpleNamespace
+    from agent_cli.command_handlers.gateway import handle_gateway_service
+    from gateway.service_manager import GatewayServiceManagerResult
+    from cron.service_manager import ServiceCommandResult
+
+    calls = []
+
+    def fake_gateway_install(*, transport, force):
+        calls.append(("gateway", transport, force))
+        return GatewayServiceManagerResult("Installed gateway service at /tmp/gateway.service.", 0)
+
+    def fake_cron_install(*, interval_seconds, lease_seconds, force):
+        calls.append(("cron", interval_seconds, lease_seconds, force))
+        return ServiceCommandResult("Installed cron service at /tmp/cron.service.", 0)
+
+    monkeypatch.setattr("gateway.service_manager.install_service", fake_gateway_install)
+    monkeypatch.setattr("cron.service_manager.install_service", fake_cron_install)
+
+    exit_code = handle_gateway_service(
+        SimpleNamespace(transport="feishu-ws", force=True, with_cron=True),
+        "install",
+    )
+
+    output = capsys.readouterr().out
+    assert exit_code == 0
+    assert calls == [
+        ("gateway", "feishu-ws", True),
+        ("cron", 60, 180, True),
+    ]
+    assert "Installed gateway service" in output
+    assert "Installed cron service" in output
+
+
+def test_gateway_service_install_with_cron_skips_cron_when_gateway_fails(monkeypatch, capsys):
+    from types import SimpleNamespace
+    from agent_cli.command_handlers.gateway import handle_gateway_service
+    from gateway.service_manager import GatewayServiceManagerResult
+
+    calls = []
+
+    def fake_gateway_install(*, transport, force):
+        calls.append(("gateway", transport, force))
+        return GatewayServiceManagerResult("gateway install failed", 2)
+
+    def fake_cron_install(**kwargs):
+        raise AssertionError("cron install must not run when gateway install fails")
+
+    monkeypatch.setattr("gateway.service_manager.install_service", fake_gateway_install)
+    monkeypatch.setattr("cron.service_manager.install_service", fake_cron_install)
+
+    exit_code = handle_gateway_service(
+        SimpleNamespace(transport="feishu-ws", force=False, with_cron=True),
+        "install",
+    )
+
+    output = capsys.readouterr().out
+    assert exit_code == 2
+    assert calls == [("gateway", "feishu-ws", False)]
+    assert "gateway install failed" in output
+
+
+def test_gateway_service_install_with_cron_returns_cron_failure(monkeypatch, capsys):
+    from types import SimpleNamespace
+    from agent_cli.command_handlers.gateway import handle_gateway_service
+    from gateway.service_manager import GatewayServiceManagerResult
+    from cron.service_manager import ServiceCommandResult
+
+    def fake_gateway_install(*, transport, force):
+        return GatewayServiceManagerResult("Installed gateway service at /tmp/gateway.service.", 0)
+
+    def fake_cron_install(*, interval_seconds, lease_seconds, force):
+        return ServiceCommandResult("cron install failed", 3)
+
+    monkeypatch.setattr("gateway.service_manager.install_service", fake_gateway_install)
+    monkeypatch.setattr("cron.service_manager.install_service", fake_cron_install)
+
+    exit_code = handle_gateway_service(
+        SimpleNamespace(transport="feishu-ws", force=False, with_cron=True),
+        "install",
+    )
+
+    output = capsys.readouterr().out
+    assert exit_code == 3
+    assert "Installed gateway service" in output
+    assert "cron install failed" in output

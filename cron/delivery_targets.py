@@ -134,11 +134,14 @@ def _parse_one(raw: str, *, origin: DeliveryIdentity | None) -> DeliveryTarget:
     if lowered == "feishu":
         return DeliveryTarget(raw=raw, target_type="platform", adapter_key="feishu")
     if lowered.startswith("feishu:"):
+        rest = raw.split(":", 1)[1]
+        chat_id, sep, thread_id = rest.partition(":")
         return DeliveryTarget(
             raw=raw,
             target_type="platform",
             adapter_key="feishu",
-            address=raw.split(":", 1)[1].strip() or None,
+            address=chat_id.strip() or None,
+            thread_id=(thread_id.strip() if sep else None) or None,
         )
     if ":" in raw:
         platform, rest = raw.split(":", 1)

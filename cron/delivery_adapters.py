@@ -76,7 +76,7 @@ class OriginDeliveryAdapter:
             platform=platform,
             target_type="chat_id",
             target_id=chat_id,
-            thread_id=origin.get("thread_id"),
+            thread_id=None,
         )
         message = OutboundMessage(
             text=_shorten_feishu_text(_format_origin_delivery_text(event, job, run), _FEISHU_MAX_TEXT_CHARS),
@@ -119,7 +119,7 @@ class GatewayOriginDeliveryAdapter:
             platform=platform,
             target_type="chat_id",
             target_id=chat_id,
-            thread_id=origin.get("thread_id"),
+            thread_id=None,
         )
         message = OutboundMessage(
             text=_shorten_feishu_text(_format_origin_delivery_text(event, job, run), _FEISHU_MAX_TEXT_CHARS),
@@ -358,7 +358,12 @@ class FeishuDeliveryAdapter:
         if adapter is None:
             return AdapterValidation(False, "feishu gateway adapter is not registered")
         result = adapter.validate_target(
-            PlatformMessageTarget(platform="feishu", target_type="chat_id", target_id=str(target.address))
+            PlatformMessageTarget(
+                platform="feishu",
+                target_type="chat_id",
+                target_id=str(target.address),
+                thread_id=target.thread_id,
+            )
         )
         return AdapterValidation(result.ok, result.error)
 
@@ -377,7 +382,12 @@ class FeishuDeliveryAdapter:
         if adapter is None:
             return DeliveryResult(False, retryable=False, error="feishu gateway adapter is not registered")
         result = adapter.send_text(
-            PlatformMessageTarget(platform="feishu", target_type="chat_id", target_id=str(event["address"])),
+            PlatformMessageTarget(
+                platform="feishu",
+                target_type="chat_id",
+                target_id=str(event["address"]),
+                thread_id=event.get("thread_id"),
+            ),
             OutboundMessage(text=_format_feishu_text(event, job, run)),
         )
         return DeliveryResult(result.ok, retryable=result.retryable, error=result.error)

@@ -209,10 +209,25 @@ def handle_gateway_service(args, subcommand):
     from gateway import service_manager
 
     if subcommand == "install":
-        return _print_result(service_manager.install_service(
+        gateway_result = service_manager.install_service(
             transport=getattr(args, "transport", "feishu-ws"),
             force=bool(getattr(args, "force", False)),
-        ))
+        )
+        if not bool(getattr(args, "with_cron", False)):
+            return _print_result(gateway_result)
+        if gateway_result.exit_code != 0:
+            return _print_result(gateway_result)
+
+        from cron import service_manager as cron_service_manager
+
+        cron_result = cron_service_manager.install_service(
+            interval_seconds=60,
+            lease_seconds=180,
+            force=bool(getattr(args, "force", False)),
+        )
+        print(gateway_result.message)
+        print(cron_result.message)
+        return cron_result.exit_code
     if subcommand == "start":
         return _print_result(service_manager.start_service())
     if subcommand == "stop":

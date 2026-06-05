@@ -136,6 +136,11 @@ def build_parser() -> argparse.ArgumentParser:
     gateway_service_install = gateway_service_subparsers.add_parser("install", parents=[public_options])
     gateway_service_install.add_argument("--transport", choices=["feishu-ws"], default="feishu-ws")
     gateway_service_install.add_argument("--force", action="store_true")
+    gateway_service_install.add_argument(
+        "--with-cron",
+        action="store_true",
+        help="Also install the cron service after gateway service install succeeds.",
+    )
     for action in ("start", "stop", "restart", "status", "uninstall"):
         gateway_service_subparsers.add_parser(action, parents=[public_options])
     gateway_logs = gateway_service_subparsers.add_parser("logs", parents=[public_options])

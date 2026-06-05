@@ -70,6 +70,19 @@ def test_reserved_platform_target_rejected_without_adapter():
     assert "unsupported delivery target" in result.error
 
 
+def test_parse_feishu_target_with_thread_id():
+    from cron.delivery_targets import parse_delivery_targets
+
+    targets = parse_delivery_targets("feishu:oc_123:mid_456", origin=None)
+
+    assert len(targets) == 1
+    target = targets[0]
+    assert target.adapter_key == "feishu"
+    assert target.target_type == "platform"
+    assert target.address == "oc_123"
+    assert target.thread_id == "mid_456"
+
+
 def test_build_delivery_registry_includes_registered_adapter_factory(monkeypatch):
     from cron.delivery_adapters import AdapterValidation, DeliveryResult
     import cron.delivery_registry as delivery_registry
