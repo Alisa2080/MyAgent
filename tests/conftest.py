@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sys
 import types
+import inspect
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -18,6 +19,18 @@ def _fake_tool(name=None, *tool_args, **tool_kwargs):
     def decorate(func):
         func.name = str(name or getattr(func, "__name__", "tool"))
         func.func = func
+        signature = inspect.signature(func)
+        injected = {
+            param_name
+            for param_name in signature.parameters
+            if param_name == "runtime"
+        }
+        func._injected_args_keys = injected
+        func.args = {
+            param_name: {}
+            for param_name in signature.parameters
+            if param_name not in injected
+        }
         return func
 
     if callable(name) and not tool_args and not tool_kwargs:
@@ -33,6 +46,16 @@ def _install_langchain_stubs(monkeypatch=None):
     if _is_real_package_installed("langchain") and _is_real_package_installed("langchain_core"):
         _clear_stubbed_modules("langchain")
         _clear_stubbed_modules("langchain_core")
+        return
+
+    existing_tools = sys.modules.get("langchain.tools")
+    existing_messages = sys.modules.get("langchain_core.messages")
+    if (
+        existing_tools is not None
+        and existing_messages is not None
+        and hasattr(existing_tools, "tool")
+        and hasattr(existing_messages, "ToolMessage")
+    ):
         return
 
     setter = monkeypatch.setitem if monkeypatch is not None else sys.modules.setdefault

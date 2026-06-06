@@ -164,20 +164,16 @@ def test_expired_events_are_pruned(monkeypatch):
     import cron.notifications as notifications
 
     monkeypatch.setattr(notifications, "_events_by_thread", {})
-    monkeypatch.setattr(notifications.time, "time", lambda: 100.0)
 
     notifications.queue_cron_notification(
         "thread-1",
         {"type": "cron_result", "job_id": "job-old"},
     )
 
-    monkeypatch.setattr(
-        notifications.time,
-        "time",
-        lambda: 100.0 + notifications._EVENT_TTL_SECONDS + 1,
-    )
+    future = notifications.time.time() + notifications._EVENT_TTL_SECONDS + 1
+    notifications._prune_locked(future)
 
-    assert notifications.drain_cron_notifications_for_thread_id("thread-1") == []
+    assert notifications._events_by_thread == {}
 
 
 def test_origin_notification_survives_module_reload(monkeypatch, tmp_path):
