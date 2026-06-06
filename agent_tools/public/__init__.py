@@ -1,5 +1,6 @@
 """Preferred public import surface for LangChain-facing tools."""
 
+import importlib
 import sys
 import types
 
@@ -8,7 +9,6 @@ from agent_tools.public.files import file_info, list_directory, patch, read_file
 from agent_tools.public.memory import memory_manage
 from agent_tools.public.skills import skill_manage, skill_view, skills_list
 from agent_tools.public.terminal import process, terminal
-from agent_tools.public.web import web_fetch, web_search
 
 
 def __getattr__(name: str):
@@ -16,6 +16,9 @@ def __getattr__(name: str):
         from agent_tools.public.cronjob import cronjob as cronjob_tool
 
         return cronjob_tool
+    if name in {"web_extract", "web_search"}:
+        web_tools = importlib.import_module("agent_tools.public.web")
+        return getattr(web_tools, name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
@@ -44,7 +47,7 @@ __all__ = [
     "skill_view",
     "skills_list",
     "terminal",
-    "web_fetch",
+    "web_extract",
     "web_search",
     "write_file",
 ]

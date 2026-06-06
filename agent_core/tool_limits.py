@@ -3,8 +3,8 @@ from langchain.agents.middleware import ToolCallLimitMiddleware
 
 WEB_SEARCH_RUN_LIMIT = 3
 WEB_SEARCH_THREAD_LIMIT = 8
-WEB_FETCH_RUN_LIMIT = 5
-WEB_FETCH_THREAD_LIMIT = 12
+WEB_EXTRACT_RUN_LIMIT = 5
+WEB_EXTRACT_THREAD_LIMIT = 12
 SEARCH_FILES_RUN_LIMIT = 8
 SEARCH_FILES_THREAD_LIMIT = 20
 TERMINAL_RUN_LIMIT = 8
@@ -27,9 +27,9 @@ def build_tool_call_limit_middleware(
             thread_limit=WEB_SEARCH_THREAD_LIMIT,
         ),
         ToolCallLimitMiddleware(
-            tool_name="web_fetch",
-            run_limit=WEB_FETCH_RUN_LIMIT,
-            thread_limit=WEB_FETCH_THREAD_LIMIT,
+            tool_name="web_extract",
+            run_limit=WEB_EXTRACT_RUN_LIMIT,
+            thread_limit=WEB_EXTRACT_THREAD_LIMIT,
         ),
         ToolCallLimitMiddleware(
             tool_name="search_files",

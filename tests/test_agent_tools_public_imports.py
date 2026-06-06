@@ -1,5 +1,14 @@
 import importlib
 import sys
+import types
+
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _stub_httpx_for_web_imports(monkeypatch):
+    if "httpx" not in sys.modules:
+        monkeypatch.setitem(sys.modules, "httpx", types.SimpleNamespace())
 
 
 def test_public_files_exports_existing_tool_objects():
@@ -36,18 +45,27 @@ def test_public_web_memory_and_skills_exports_existing_tool_objects():
     from agent_tools.public.skills import skill_manage as public_skill_manage
     from agent_tools.public.skills import skill_view as public_skill_view
     from agent_tools.public.skills import skills_list as public_skills_list
-    from agent_tools.public.web import web_fetch as public_web_fetch
+    from agent_tools.public.web import web_extract as public_web_extract
     from agent_tools.public.web import web_search as public_web_search
     from agent_tools.skill_manage import skill_manage
     from agent_tools.skills import skill_view, skills_list
-    from agent_tools.web import web_fetch, web_search
+    from agent_tools.web import web_extract, web_search
 
     assert public_memory_manage is memory_manage
     assert public_web_search is web_search
-    assert public_web_fetch is web_fetch
+    assert public_web_extract is web_extract
     assert public_skills_list is skills_list
     assert public_skill_view is skill_view
     assert public_skill_manage is skill_manage
+
+
+def test_web_fetch_removed_from_public_surfaces():
+    import agent_tools.public as public
+    import agent_tools.public.web as public_web
+
+    assert "web_fetch" not in public.__all__
+    assert not hasattr(public_web, "web_fetch")
+    assert not hasattr(public, "web_fetch")
 
 
 def test_shared_common_exports_existing_helpers():
@@ -111,6 +129,18 @@ def test_public_package_exports_clarify():
     from agent_tools.public import __all__, clarify
     assert "clarify" in __all__
     assert getattr(clarify, "name", None) == "clarify"
+
+
+def test_public_web_surface_replaces_web_fetch_with_web_extract():
+    import agent_tools.public as public
+    import agent_tools.public.web as public_web
+
+    assert "web_extract" in public.__all__
+    assert "web_fetch" not in public.__all__
+    assert hasattr(public, "web_extract")
+    assert hasattr(public_web, "web_extract")
+    assert not hasattr(public, "web_fetch")
+    assert not hasattr(public_web, "web_fetch")
 
 
 def test_public_package_does_not_eagerly_import_cronjob(monkeypatch):

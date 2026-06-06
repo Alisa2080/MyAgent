@@ -8,7 +8,7 @@ New runtime code should import LangChain tools from `agent_tools.public`:
 
 - `agent_tools.public.files`: `list_directory`, `read_file`, `write_file`, `patch`, `search_files`, `file_info`
 - `agent_tools.public.terminal`: `terminal`, `process`
-- `agent_tools.public.web`: `web_search`, `web_fetch`
+- `agent_tools.public.web`: `web_search`, `web_extract`
 - `agent_tools.public.memory`: `memory_manage`
 - `agent_tools.public.skills`: `skills_list`, `skill_view`, `skill_manage`
 
@@ -17,7 +17,7 @@ New runtime code should import LangChain tools from `agent_tools.public`:
 ```python
 from agent_tools.public.files import read_file, write_file
 from agent_tools.public.terminal import terminal, process
-from agent_tools.public.web import web_fetch, web_search
+from agent_tools.public.web import web_extract, web_search
 ```
 
 Compatibility imports remain supported for older code:
