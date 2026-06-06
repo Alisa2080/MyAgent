@@ -48,7 +48,7 @@ def test_tool_limits_include_web_extract_not_web_fetch(monkeypatch):
 
 
 def test_is_safe_url_blocks_private_and_local_targets():
-    from agent_tools.web_hermes.safety import is_safe_url
+    from agent_tools.web_toolkit.safety import is_safe_url
 
     unsafe_urls = [
         "http://127.0.0.1:8000",
@@ -67,7 +67,7 @@ def test_is_safe_url_blocks_private_and_local_targets():
 
 
 def test_is_safe_url_allows_public_https_hostname(monkeypatch):
-    from agent_tools.web_hermes import safety
+    from agent_tools.web_toolkit import safety
 
     monkeypatch.setattr(safety.socket, "getaddrinfo", lambda *args, **kwargs: [])
 
@@ -78,7 +78,7 @@ def test_is_safe_url_allows_public_https_hostname(monkeypatch):
 
 
 def test_is_safe_url_blocks_unresolvable_hostname(monkeypatch):
-    from agent_tools.web_hermes import safety
+    from agent_tools.web_toolkit import safety
 
     def raise_dns_error(*args, **kwargs):
         raise OSError("temporary DNS failure")
@@ -92,7 +92,7 @@ def test_is_safe_url_blocks_unresolvable_hostname(monkeypatch):
 
 
 def test_contains_embedded_secret_detects_raw_and_encoded_values():
-    from agent_tools.web_hermes.safety import contains_embedded_secret
+    from agent_tools.web_toolkit.safety import contains_embedded_secret
 
     assert contains_embedded_secret("https://example.com/?api_key=abc")
     assert contains_embedded_secret("https://example.com/?q=sk-abc123")
@@ -101,7 +101,7 @@ def test_contains_embedded_secret_detects_raw_and_encoded_values():
 
 
 def test_clean_base64_images_replaces_data_uri_payloads():
-    from agent_tools.web_hermes.content import clean_base64_images
+    from agent_tools.web_toolkit.content import clean_base64_images
 
     text = "before data:image/png;base64," + ("A" * 200) + " after"
 
@@ -112,7 +112,7 @@ def test_clean_base64_images_replaces_data_uri_payloads():
 
 
 def test_explicit_backend_selection_honors_agent_web_backend(monkeypatch):
-    from agent_tools.web_hermes import backends
+    from agent_tools.web_toolkit import backends
 
     monkeypatch.setenv("AGENT_WEB_BACKEND", "parallel")
     monkeypatch.setenv("PARALLEL_API_KEY", "parallel-key")
@@ -124,7 +124,7 @@ def test_explicit_backend_selection_honors_agent_web_backend(monkeypatch):
 
 
 def test_backend_auto_selection_priority(monkeypatch):
-    from agent_tools.web_hermes import backends
+    from agent_tools.web_toolkit import backends
 
     monkeypatch.delenv("AGENT_WEB_BACKEND", raising=False)
     monkeypatch.delenv("WEB_BACKEND", raising=False)
@@ -146,7 +146,7 @@ def test_backend_auto_selection_priority(monkeypatch):
 
 
 def test_missing_backend_configuration_raises_structured_error(monkeypatch):
-    from agent_tools.web_hermes import backends
+    from agent_tools.web_toolkit import backends
 
     for key in (
         "AGENT_WEB_BACKEND",
@@ -169,7 +169,7 @@ def test_missing_backend_configuration_raises_structured_error(monkeypatch):
 
 
 def test_missing_optional_sdk_fails_only_selected_backend(monkeypatch):
-    from agent_tools.web_hermes import backends
+    from agent_tools.web_toolkit import backends
 
     monkeypatch.setenv("AGENT_WEB_BACKEND", "firecrawl")
     monkeypatch.setenv("FIRECRAWL_API_KEY", "firecrawl-key")
@@ -185,7 +185,7 @@ def test_missing_optional_sdk_fails_only_selected_backend(monkeypatch):
 
 
 def test_normalize_search_result_shape():
-    from agent_tools.web_hermes.backends import normalize_search_results
+    from agent_tools.web_toolkit.backends import normalize_search_results
 
     results = normalize_search_results(
         "exa",
@@ -212,7 +212,7 @@ def test_normalize_search_result_shape():
 
 
 def test_normalize_extract_result_reads_provider_content_fields():
-    from agent_tools.web_hermes.backends import normalize_extract_result
+    from agent_tools.web_toolkit.backends import normalize_extract_result
 
     tavily_doc = normalize_extract_result(
         "tavily",
@@ -239,7 +239,7 @@ def test_normalize_extract_result_reads_provider_content_fields():
 
 
 def test_firecrawl_search_flattens_current_response_shape():
-    from agent_tools.web_hermes.backends import FirecrawlBackend
+    from agent_tools.web_toolkit.backends import FirecrawlBackend
 
     class FakeClient:
         def search(self, **kwargs):
@@ -266,7 +266,7 @@ def test_firecrawl_search_flattens_current_response_shape():
 
 
 def test_firecrawl_extract_supports_current_scrape_method():
-    from agent_tools.web_hermes.backends import FirecrawlBackend
+    from agent_tools.web_toolkit.backends import FirecrawlBackend
 
     calls = []
 
@@ -285,7 +285,7 @@ def test_firecrawl_extract_supports_current_scrape_method():
 
 
 def test_tavily_extract_uses_bearer_auth_and_markdown_format(monkeypatch):
-    from agent_tools.web_hermes.backends import TavilyBackend
+    from agent_tools.web_toolkit.backends import TavilyBackend
 
     calls = []
 
@@ -300,7 +300,7 @@ def test_tavily_extract_uses_bearer_auth_and_markdown_format(monkeypatch):
         calls.append((url, kwargs))
         return FakeResponse()
 
-    monkeypatch.setattr("agent_tools.web_hermes.backends.httpx.post", fake_post)
+    monkeypatch.setattr("agent_tools.web_toolkit.backends.httpx.post", fake_post)
 
     docs = TavilyBackend(api_key="tvly-key").extract(["https://example.com"], "html")
 
@@ -312,7 +312,7 @@ def test_tavily_extract_uses_bearer_auth_and_markdown_format(monkeypatch):
 
 
 def test_exa_extract_maps_html_request_to_text_content():
-    from agent_tools.web_hermes.backends import ExaBackend
+    from agent_tools.web_toolkit.backends import ExaBackend
 
     calls = []
 
@@ -578,3 +578,11 @@ def test_web_extract_summarization_failure_falls_back_to_bounded_raw(monkeypatch
     assert doc["content"].startswith("Raw page content.")
     assert doc["truncated"] is True
     assert doc["metadata"]["warnings"]
+
+
+def test_web_toolkit_import_path_is_project_native():
+    from agent_tools.web_toolkit import backends, content, safety
+
+    assert hasattr(backends, "get_backend")
+    assert hasattr(content, "clean_base64_images")
+    assert hasattr(safety, "is_safe_url")
