@@ -1,32 +1,32 @@
-# Hermes Background Process Governance Implementation Plan
+# Reference Implementation Background Process Governance Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Harden the Hermes-backed `terminal(background=True)` and `process(...)` integration with per-`task_id` background process quotas, automatic session cleanup hooks, and new-user-message interrupt wiring for blocking `process(action="wait")` calls.
+**Goal:** Harden the runtime-backed `terminal(background=True)` and `process(...)` integration with per-`task_id` background process quotas, automatic session cleanup hooks, and new-user-message interrupt wiring for blocking `process(action="wait")` calls.
 
-**Architecture:** Keep the existing project-native LangChain wrappers in `agent_tools/terminal_tools.py`. Add project-level governance around Hermes rather than modifying model-visible tool schemas. Runtime `task_id` remains derived from LangGraph `thread_id` and hidden from the model. Background process quotas are enforced before starting a new `terminal(background=True)` process. Session cleanup and interrupt behavior are exposed as explicit, small lifecycle APIs that the LangGraph/gateway layer can call when a user session ends or a new user message arrives.
+**Architecture:** Keep the existing project-native LangChain wrappers in `agent_tools/terminal_tools.py`. Add project-level governance around reference implementation rather than modifying model-visible tool schemas. Runtime `task_id` remains derived from LangGraph `thread_id` and hidden from the model. Background process quotas are enforced before starting a new `terminal(background=True)` process. Session cleanup and interrupt behavior are exposed as explicit, small lifecycle APIs that the LangGraph/gateway layer can call when a user session ends or a new user message arrives.
 
-**Tech Stack:** Python 3.11, LangChain/LangGraph `ToolRuntime`, vendored Hermes terminal toolkit, pytest.
+**Tech Stack:** Python 3.11, LangChain/LangGraph `ToolRuntime`, vendored terminal toolkit, pytest.
 
 ---
 
 ## Current State
 
-- `terminal(background=True)` starts tracked background processes through Hermes `process_registry`.
+- `terminal(background=True)` starts tracked background processes throughreference implementation `process_registry`.
 - `process(action="poll" | "log" | "wait" | "kill" | "write" | "submit" | "close")` manages those sessions and validates that `session_id` belongs to the current runtime-derived `task_id`.
-- Hermes has `MAX_PROCESSES = 64`, but this is a registry pruning threshold, not a strict per-session running-process quota.
-- `process_registry.wait()` checks Hermes interrupt state and can return `status="interrupted"`, but the project does not yet wire “new user message arrived” to Hermes `set_interrupt(...)`.
+- reference implementation has `MAX_PROCESSES = 64`, but this is a registry pruning threshold, not a strict per-session running-process quota.
+- `process_registry.wait()` checks reference implementation interrupt state and can return `status="interrupted"`, but the project does not yet wire “new user message arrived” to reference implementation `set_interrupt(...)`.
 - `cleanup_terminal_session_for_thread_id()` and `cleanup_terminal_session_for_runtime()` exist, but they are explicit helpers only; there is no project-level automatic session-end hook.
 
 ## Policy Decisions
 
-- Enforce a **per-`task_id` running background process quota** at the LangChain wrapper layer before calling Hermes `run_terminal(background=True)`.
+- Enforce a **per-`task_id` running background process quota** at the LangChain wrapper layer before callingreference implementation `run_terminal(background=True)`.
 - Default quota: `3` running background processes per `task_id`.
-- Configure quota with `HERMES_MAX_BACKGROUND_PROCESSES_PER_TASK`; invalid values fall back to `3`.
+- Configure quota with `AGENT_MAX_BACKGROUND_PROCESSES_PER_TASK`; invalid values fall back to `3`.
 - Count only live/running sessions for that `task_id`. Finished sessions should not consume quota.
 - Return a structured `tool_error("terminal", ..., code="background_quota_exceeded")` when quota is exceeded.
 - Serialize quota check plus background startup per `task_id` so concurrent starts cannot exceed the quota.
-- Keep global Hermes registry pruning unchanged.
+- Keep global reference implementation registry pruning unchanged.
 - Keep `terminal` and `process` human approval behavior unchanged.
 - Keep normal turns preserving background processes.
 - Add an explicit automatic-cleanup integration function that callers can bind to their session-end event.
@@ -58,7 +58,7 @@
 Add tests for:
 
 - default quota is `3`;
-- `HERMES_MAX_BACKGROUND_PROCESSES_PER_TASK=5` returns `5`;
+- `AGENT_MAX_BACKGROUND_PROCESSES_PER_TASK=5` returns `5`;
 - invalid, zero, or negative env values fall back to default;
 - live process count includes only sessions whose `task_id` matches and `exited is False`;
 - finished sessions do not consume quota.
@@ -72,7 +72,7 @@ from types import SimpleNamespace
 def test_default_background_quota(monkeypatch):
     from agent_core import terminal_process_policy as policy
 
-    monkeypatch.delenv("HERMES_MAX_BACKGROUND_PROCESSES_PER_TASK", raising=False)
+    monkeypatch.delenv("AGENT_MAX_BACKGROUND_PROCESSES_PER_TASK", raising=False)
 
     assert policy.max_background_processes_per_task() == 3
 
@@ -103,10 +103,10 @@ from __future__ import annotations
 import os
 from typing import Any
 
-from agent_tools.hermes_terminal_toolkit.process_registry import process_registry
+from agent_tools.terminal_toolkit.process_registry import process_registry
 
 DEFAULT_MAX_BACKGROUND_PROCESSES_PER_TASK = 3
-MAX_BACKGROUND_PROCESSES_ENV = "HERMES_MAX_BACKGROUND_PROCESSES_PER_TASK"
+MAX_BACKGROUND_PROCESSES_ENV = "AGENT_MAX_BACKGROUND_PROCESSES_PER_TASK"
 
 
 def max_background_processes_per_task() -> int:
@@ -190,7 +190,7 @@ In `agent_tools/terminal_tools.py`:
 - import `background_quota_available`;
 - after deriving `task_id`, before calling `run_terminal`, check quota only when `background is True`;
 - return structured error if quota is exceeded.
-- hold a per-`task_id` `background_quota_guard(task_id)` while checking quota and starting the Hermes background process.
+- hold a per-`task_id` `background_quota_guard(task_id)` while checking quota and starting the reference implementation background process.
 
 Expected behavior:
 
@@ -203,7 +203,7 @@ if background:
             f"Background process quota exceeded for this session ({current}/{limit}).",
             code="background_quota_exceeded",
             data={"current": current, "limit": limit},
-            meta={"backend": "hermes_terminal_toolkit"},
+            meta={"backend": "terminal_toolkit"},
         )
 ```
 
@@ -291,12 +291,12 @@ Expected: tests pass.
 Add tests for:
 
 - registering a running agent execution thread for a LangGraph `thread_id`;
-- interrupting a registered thread calls Hermes `set_interrupt(True, thread_id=<python-thread-ident>)`;
+- interrupting a registered thread callsreference implementation `set_interrupt(True, thread_id=<python-thread-ident>)`;
 - clearing an execution registration calls `set_interrupt(False, thread_id=<python-thread-ident>)`;
 - interrupting an unknown `thread_id` returns `interrupted=False`;
 - thread registration is safe under a lock.
 
-The Hermes interrupt API is thread-ident based, while this project’s session identity is LangGraph `thread_id`. The missing bridge is a registry:
+The reference implementation interrupt API is thread-ident based, while this project’s session identity is LangGraph `thread_id`. The missing bridge is a registry:
 
 ```text
 LangGraph thread_id -> active Python execution thread ident
@@ -310,7 +310,7 @@ Add to `agent_core/terminal_lifecycle.py`:
 import threading
 from contextlib import contextmanager
 
-from agent_tools.hermes_terminal_toolkit.interrupt import set_interrupt
+from agent_tools.terminal_toolkit.interrupt import set_interrupt
 
 _active_execution_threads: dict[str, set[int]] = {}
 _active_execution_lock = threading.Lock()
@@ -373,7 +373,7 @@ The gateway or caller must do this:
 1. Before starting an agent run for `thread_id`, wrap the run in `terminal_execution_scope(thread_id)`.
 2. When a new user message arrives for the same `thread_id` while an earlier run is still waiting, call `interrupt_terminal_wait_for_thread_id(thread_id)`.
 3. Then start/resume the new run normally.
-4. `process(action="wait")` will detect Hermes interrupt and return `status="interrupted"` within roughly one second.
+4. `process(action="wait")` will detect reference implementation interrupt and return `status="interrupted"` within roughly one second.
 
 - [x] **Step 5: Run lifecycle tests**
 
@@ -390,14 +390,14 @@ Expected: tests pass.
 **Files:**
 - Modify: `README.md`
 
-- [x] **Step 1: Update Hermes Terminal Session Contract**
+- [x] **Step 1: Update Terminal Session Contract**
 
 Add a “Background process governance” subsection:
 
 - `terminal(background=True)` is allowed for dev servers, watchers, and long-running jobs.
 - Each LangGraph session-derived `task_id` has a default quota of 3 running background processes.
-- Configure with `HERMES_MAX_BACKGROUND_PROCESSES_PER_TASK`.
-- Commands that look like long-lived servers/watchers must use `background=True`; Hermes rejects common foreground server patterns.
+- Configure with `AGENT_MAX_BACKGROUND_PROCESSES_PER_TASK`.
+- Commands that look like long-lived servers/watchers must use `background=True`; reference implementation rejects common foreground server patterns.
 - Normal turns preserve background processes.
 - Explicit session close should call `end_terminal_session(thread_id)`.
 - New user messages should call `interrupt_terminal_wait_for_thread_id(thread_id)` before starting/replacing the active run.
@@ -428,7 +428,7 @@ Document that this repository does not own the external gateway/session-close ev
 - [x] **Step 2: Run existing shell/session regression tests**
 
 ```bash
-/home/miku/miniforge3/envs/langchain/bin/python -m pytest tests/test_execute_command_runtime_smoke.py tests/test_shell_task_id.py tests/test_session_context.py tests/test_hermes_shell_adapter_task_id.py -v
+/home/miku/miniforge3/envs/langchain/bin/python -m pytest tests/test_execute_command_runtime_smoke.py tests/test_shell_task_id.py tests/test_session_context.py tests/test_shell_adapter_task_id.py -v
 ```
 
 - [x] **Step 3: Compile touched modules**
@@ -450,14 +450,14 @@ Expected: all checks pass.
 ## Acceptance Criteria
 
 - Starting a fourth running background process for the same `task_id` fails by default with `background_quota_exceeded`.
-- Quota is configurable by `HERMES_MAX_BACKGROUND_PROCESSES_PER_TASK`.
+- Quota is configurable by `AGENT_MAX_BACKGROUND_PROCESSES_PER_TASK`.
 - Quota enforcement does not affect foreground commands.
 - Quota counts only running sessions for the current runtime-derived `task_id`.
 - Existing process ownership checks remain intact.
-- `end_terminal_session(thread_id)` kills running processes for that session and cleans the Hermes environment.
-- Automatic cleanup refuses missing `thread_id` rather than accidentally targeting Hermes `default`.
+- `end_terminal_session(thread_id)` kills running processes for that session and cleans the terminal environment.
+- Automatic cleanup refuses missing `thread_id` rather than accidentally targetingreference implementation `default`.
 - `terminal_execution_scope(thread_id)` registers the active Python execution thread.
-- `interrupt_terminal_wait_for_thread_id(thread_id)` signals Hermes interrupt for the registered execution thread.
+- `interrupt_terminal_wait_for_thread_id(thread_id)` signals reference implementation interrupt for the registered execution thread.
 - Unknown or inactive `thread_id` interrupt calls are no-ops with a structured response.
 - `process(action="wait")` remains bounded by `TERMINAL_TIMEOUT` and can return `status="interrupted"` when the outer caller signals a new user message.
 - Long-lived servers remain allowed through `terminal(background=True)`, subject to quota and explicit session cleanup.
@@ -466,10 +466,10 @@ Expected: all checks pass.
 ## Risks And Constraints
 
 - The repository does not currently contain the external gateway/session manager. New-message interrupt and automatic session-end cleanup can only be fully activated where user-message and session-close events are received.
-- Hermes interrupt is Python-thread-ident based, while LangGraph session identity is `thread_id`; the bridge must register active runs correctly or interrupts will be no-ops.
+- reference implementation interrupt is Python-thread-ident based, while LangGraph session identity is `thread_id`; the bridge must register active runs correctly or interrupts will be no-ops.
 - Multiple active runs for the same LangGraph `thread_id` are tracked as `thread_id -> set[thread_ident]`, and a new-message interrupt signals all active registered execution threads for that LangGraph thread.
 - Long-lived servers can still consume ports, CPU, memory, and disk. Quota reduces process count but does not enforce resource usage; container-level limits or OS-level cgroups are separate concerns.
-- Restart recovery is best effort. Host-backed sessions may recover as detached; sandbox-backed process PIDs may be skipped by Hermes.
+- Restart recovery is best effort. Host-backed sessions may recover as detached; sandbox-backed process PIDs may be skipped by reference implementation.
 
 ## Implementation Order
 

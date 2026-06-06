@@ -8,7 +8,7 @@ Improve the project-native `agent_cli` so it is consistent to invoke,
 diagnosable in local environments, accurately documented, and more transparent
 about the active session.
 
-This phase builds on the existing CLI rather than porting Hermes's full CLI
+This phase builds on the existing CLI rather than porting reference implementation's full CLI
 stack. The current CLI already has `chat`, `ask`, `sessions`, `doctor`,
 PromptSession input, slash commands, profiles, dotenv/config loading, HITL
 approval handling, skill commands, background tasks, banner, and themes. The
@@ -17,7 +17,7 @@ work here tightens the user-facing surfaces around those features.
 ## Non-Goals
 
 - No full-screen TUI.
-- No Hermes model picker, provider switching framework, gateway, browser, voice,
+- Noreference implementation model picker, provider switching framework, gateway, browser, voice,
   plugin framework, MCP hot reload, or skin engine.
 - No changes to the agent runtime, model selection core, LangGraph checkpoint
   storage format, or tool execution policy.

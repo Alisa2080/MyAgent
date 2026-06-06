@@ -15,7 +15,7 @@ The cron runtime already has an optional subprocess runner boundary:
 - user-level systemd and launchd service installation already propagates
   selected environment variables into the installed service.
 
-Hermes is the runtime reference: a long-lived cron process should schedule and
+Reference implementation is the runtime reference: a long-lived cron process should schedule and
 supervise work, while actual agent execution should cross an isolation boundary
 so crashes, file descriptors, terminal subprocesses, browser daemons, and
 cached client state do not accumulate in the scheduler process.

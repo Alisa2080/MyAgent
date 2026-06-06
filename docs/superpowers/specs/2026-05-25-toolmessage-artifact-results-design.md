@@ -25,7 +25,7 @@ Public wrappers currently return JSON strings produced by `tool_ok` and `tool_er
 Examples:
 
 - `agent_tools/public/files.py` decodes file toolkit JSON in `_wrap_file_tool_result` and wraps it again as `tool_ok` or `tool_error`.
-- `agent_tools/public/terminal.py` decodes Hermes terminal JSON in `_decode_hermes_payload`, maps statuses, and wraps the result again.
+- `agent_tools/public/terminal.py` decodes terminal JSON in `_decode_terminal_payload`, maps statuses, and wraps the result again.
 - `agent_tools/public/cronjob.py` converts cron implementation dictionaries into `tool_ok` or `tool_error`.
 
 This creates three concrete problems:
@@ -192,7 +192,7 @@ Low-level toolkits may continue returning legacy JSON strings during this migrat
 This applies to:
 
 - file toolkit functions such as `read_file_tool`, `write_file_tool`, `patch_tool`, and `search_tool`
-- Hermes terminal functions such as `run_terminal` and `run_process`
+- terminal functions such as `run_terminal` and `run_process`
 - any other lower-level helper that is not itself exported as a public LangChain tool
 
 The boundary rule is simple: public tools return `ToolMessage`; lower-level helpers can be migrated later.
@@ -219,7 +219,7 @@ For invalid lower-level JSON:
 For command failures:
 
 - `content`: concise failure summary, such as `Command exited with code 1.`
-- `artifact.data`: complete Hermes payload including stdout/stderr
+- `artifact.data`: complete reference implementation payload including stdout/stderr
 - `artifact.error.code`: `command_failed` or `timeout`
 
 For policy failures:

@@ -4,7 +4,7 @@
 
 **Goal:** Add first-class Enterprise WeChat group robot webhook delivery for cron jobs.
 
-**Architecture:** Add a native `wecom` delivery target and `WeComDeliveryAdapter` that plugs into the existing cron delivery registry, dispatcher, retry, and service tick flow. Keep Hermes gateway routing, personal WeChat, application messages, mentions, media, and message splitting out of scope.
+**Architecture:** Add a native `wecom` delivery target and `WeComDeliveryAdapter` that plugs into the existing cron delivery registry, dispatcher, retry, and service tick flow. Keep gateway reference routing, personal WeChat, application messages, mentions, media, and message splitting out of scope.
 
 **Tech Stack:** Python, pytest, cron `StateStore`/`DeliveryStore`, existing `DeliveryRegistry`, existing HTTP sender shape `(url, payload, timeout) -> (status, body)`.
 

@@ -9,7 +9,7 @@ leaders; run records capture activity, timeout, stale, and delivery state.
 
 The remaining gap is operational. Today cron jobs do not fire automatically
 unless an embedding application calls `start_cron_scheduler(...)` or a user keeps
-`agent cron serve` running in the foreground. Hermes is a useful reference for
+`agent cron serve` running in the foreground. reference implementation is a useful reference for
 the desired user experience: its cron commands warn when the gateway is not
 running and point users to an install command. This project should apply that
 logic to the existing cron service instead of reworking the scheduler.

@@ -3,7 +3,7 @@
 ## Goal
 
 Introduce a small runtime identity abstraction that centralizes how the project
-derives LangGraph thread identity, Hermes task identity, and LangChain tool call
+derives LangGraph thread identity, runtime task identity, and LangChain tool call
 identity.
 
 The design should prepare the codebase for a future policy middleware, but the
@@ -12,20 +12,20 @@ in tool wrappers.
 
 ## Current Context
 
-The project already derives Hermes task ids from LangGraph thread ids in
+The project already derives runtime task ids from LangGraph thread ids in
 `agent_core.session_context`. The current rules are correct and must remain
 stable:
 
 - `runtime.execution_info.thread_id` is preferred.
 - `runtime.config["configurable"]["thread_id"]` is the fallback.
-- Missing or empty thread ids use the Hermes `"default"` task id.
+- Missing or empty thread ids use thereference implementation `"default"` task id.
 - Non-empty thread ids are hashed into a path-safe id using the existing
   `lg_` prefix plus the first 24 hex chars of a sha256 digest.
 
 Duplicated runtime identity extraction currently appears in the public file,
 terminal, process, and cron tool wrappers. These wrappers separately extract
 `task_id`, `tool_call_id`, or `thread_id` before passing values to policy,
-approval, Hermes, and cron origin logic.
+approval, reference implementation, and cron origin logic.
 
 ## Recommended Approach
 
@@ -67,7 +67,7 @@ First implementation should update these call sites:
 - `agent_tools/public/terminal.py`
   - Replace repeated task id and tool call id extraction with
     `RuntimeContext.from_runtime(runtime)`.
-  - Keep terminal/process policy decisions and Hermes calls unchanged.
+  - Keep terminal/process policy decisions and reference implementation calls unchanged.
 - `agent_tools/public/cronjob.py`
   - Replace `_runtime_thread_id(runtime)` with `RuntimeContext.from_runtime(runtime).thread_id`.
 
@@ -87,7 +87,7 @@ This change must not:
 - Change approval, audit, or policy decision semantics.
 - Rewrite `FlexibleHumanInTheLoopMiddleware`.
 - Introduce a policy-aware runtime context object.
-- Change Hermes terminal, process registry, file backend, cron job, or cleanup
+- Change terminal, process registry, file backend, cron job, or cleanup
   behavior.
 
 ## Data Flow
@@ -100,7 +100,7 @@ ctx = RuntimeContext.from_runtime(runtime)
 
 Then:
 
-- Use `ctx.task_id` for Hermes task isolation and backend path policy.
+- Use `ctx.task_id` for reference implementation task isolation and backend path policy.
 - Use `ctx.tool_call_id` for approval consumption.
 - Use `ctx.thread_id` for cron origin metadata.
 - Use `ctx.thread_source` only for diagnostics or future middleware decisions.
@@ -121,8 +121,8 @@ present and truthy. It does not affect task id derivation.
 The existing functions remain public and keep their behavior:
 
 ```python
-hermes_task_id_from_thread_id(thread_id)
-hermes_task_id_from_runtime(runtime)
+runtime_task_id_from_thread_id(thread_id)
+runtime_task_id_from_runtime(runtime)
 ```
 
 They can delegate to `RuntimeContext`, but their observable outputs must stay
@@ -155,13 +155,13 @@ Extend `tests/test_session_context.py` to cover:
 - Empty thread ids use the `"default"` task id.
 - `tool_call_id` is extracted when present.
 - `has_thread` and `is_default_task` reflect the resolved identity.
-- `hermes_task_id_from_runtime()` and `hermes_task_id_from_thread_id()` remain
+- `runtime_task_id_from_runtime()` and `runtime_task_id_from_thread_id()` remain
   backward compatible.
 
 Existing file and terminal wrapper tests should continue to verify that:
 
 - Tool schemas do not expose runtime identity fields.
-- ToolNode config injection still maps to the expected Hermes task id.
+- ToolNode config injection still maps to the expected runtime task id.
 - Reviewed tool calls without `tool_call_id` retain current approval behavior.
 
 ## Rollout

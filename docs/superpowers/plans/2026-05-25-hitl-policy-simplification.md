@@ -50,7 +50,7 @@ def test_mixed_same_tool_policy_only_interrupts_review_call(monkeypatch):
     import agent_core.human_loop as human_loop
     from agent_core.permissions.approvals import clear_approvals, consume_approval
     from agent_core.permissions.models import PolicyDecision
-    from agent_core.session_context import hermes_task_id_from_thread_id
+    from agent_core.session_context import runtime_task_id_from_thread_id
 
     clear_approvals()
     seen_payloads = []
@@ -102,7 +102,7 @@ def test_mixed_same_tool_policy_only_interrupts_review_call(monkeypatch):
 
     assert (
         consume_approval(
-            task_id=hermes_task_id_from_thread_id("thread-1"),
+            task_id=runtime_task_id_from_thread_id("thread-1"),
             tool_call_id="allow-call",
             tool_name="terminal",
             args=_terminal_policy_args("pwd"),
@@ -112,7 +112,7 @@ def test_mixed_same_tool_policy_only_interrupts_review_call(monkeypatch):
     )
     assert (
         consume_approval(
-            task_id=hermes_task_id_from_thread_id("thread-1"),
+            task_id=runtime_task_id_from_thread_id("thread-1"),
             tool_call_id="review-call",
             tool_name="terminal",
             args=_terminal_policy_args("pip install rich"),
@@ -194,7 +194,7 @@ def test_policy_approval_digest_uses_policy_arg_builder(monkeypatch):
     import agent_core.human_loop as human_loop
     from agent_core.permissions.approvals import clear_approvals, consume_approval
     from agent_core.permissions.models import PolicyDecision
-    from agent_core.session_context import hermes_task_id_from_thread_id
+    from agent_core.session_context import runtime_task_id_from_thread_id
 
     clear_approvals()
 
@@ -233,7 +233,7 @@ def test_policy_approval_digest_uses_policy_arg_builder(monkeypatch):
     assert result is not None
     assert (
         consume_approval(
-            task_id=hermes_task_id_from_thread_id("thread-1"),
+            task_id=runtime_task_id_from_thread_id("thread-1"),
             tool_call_id="call-builder",
             tool_name="terminal",
             args={"command": "pip install rich", "builder_marker": "from-builder"},
@@ -243,7 +243,7 @@ def test_policy_approval_digest_uses_policy_arg_builder(monkeypatch):
     )
     assert (
         consume_approval(
-            task_id=hermes_task_id_from_thread_id("thread-1"),
+            task_id=runtime_task_id_from_thread_id("thread-1"),
             tool_call_id="call-builder",
             tool_name="terminal",
             args=_terminal_policy_args("pip install rich"),
@@ -292,7 +292,7 @@ Replace `_policy_decision_for_tool_call` in `agent_core/human_loop.py` with:
 ```python
     @classmethod
     def _policy_decision_for_tool_call(cls, tool_call: ToolCall, runtime: Runtime[Any]) -> Any:
-        task_id = hermes_task_id_from_runtime(runtime)
+        task_id = runtime_task_id_from_runtime(runtime)
         return tool_policy.evaluate_tool_call(
             tool_name=tool_call["name"],
             args=cls._policy_args_for_tool_call(tool_call),
@@ -673,4 +673,4 @@ If no cleanup is needed, do not create an empty commit.
 - Type consistency:
   - `Runtime[Any]`, `ToolCall`, and `dict[str, Any]` match existing `agent_core/human_loop.py`.
   - `POLICY_ARG_BUILDERS` exists in `agent_core.policy_tool_middleware`.
-  - Approval consumption tests use existing `consume_approval` and `hermes_task_id_from_thread_id`.
+  - Approval consumption tests use existing `consume_approval` and `runtime_task_id_from_thread_id`.

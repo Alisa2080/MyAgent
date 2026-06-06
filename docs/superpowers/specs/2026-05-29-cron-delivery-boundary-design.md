@@ -30,9 +30,9 @@ rules, including webhook URL validation and unsupported platform checks. That
 means a new adapter can be parseable but still require edits to core enqueue
 logic before it works end to end.
 
-Hermes is useful as a semantic reference for resolving comma-separated targets
+Reference implementation is useful as a semantic reference for resolving comma-separated targets
 and preserving platform/chat/thread identity. It should not be copied as the
-implementation shape, because Hermes keeps delivery behavior in a monolithic
+implementation shape, because reference implementation keeps delivery behavior in a monolithic
 `_deliver_result()` path. The current project already has a stronger
 registry/dispatcher model.
 

@@ -8,7 +8,7 @@
   - `public/`: preferred import location for LangChain tools exposed to agents.
   - `shared/`: first-party helper modules used by tool wrappers.
   - `file_toolkit/`: internal workspace file operation implementation.
-  - `terminal_toolkit/`: imported terminal toolkit toolkit implementation.
+  - `terminal_toolkit/`: imported terminal toolkit implementation.
   - Top-level modules such as `file_tools.py` and `terminal_tools.py` are compatibility shims during migration.
 - `agent_tools/file_toolkit/`: internal file operation implementation used by `agent_tools/file_tools.py`.
   - `file_tools.py`: JSON-returning primitive orchestration functions for read/write/patch/search. This is not a LangChain tool module.

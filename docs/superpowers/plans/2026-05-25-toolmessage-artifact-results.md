@@ -18,7 +18,7 @@
 - Modify `agent_core/policy_tool_middleware.py`: policy short-circuit results should use `tool_failure` so middleware-produced errors also follow the artifact contract.
 - Modify `tests/test_policy_tool_middleware.py`: assert policy errors through `ToolMessage.artifact` instead of JSON content.
 - Modify `agent_tools/public/files.py`: return `ToolMessage` from all file public wrappers and private public-boundary implementations.
-- Modify `tests/test_permissions_file_wrappers.py`, `tests/test_file_tools_runtime_task_id.py`, and file-related portions of `tests/test_file_tools_hermes_env.py`: migrate wrapper assertions to artifact access.
+- Modify `tests/test_permissions_file_wrappers.py`, `tests/test_file_tools_runtime_task_id.py`, and file-related portions of `tests/test_file_tools_active_env.py`: migrate wrapper assertions to artifact access.
 - Modify `agent_tools/public/terminal.py`: return `ToolMessage` from terminal and process wrappers.
 - Modify `tests/test_terminal_tools.py`, `tests/test_permissions_terminal_wrappers.py`, `tests/test_permissions_process_wrappers.py`, and `tests/test_permissions_docker_network.py`: migrate terminal/process assertions.
 - Modify `agent_tools/public/cronjob.py`, `agent_tools/public/memory.py`, `agent_tools/public/skills.py`, `agent_tools/public/skill_manage_impl.py`, `agent_tools/public/web.py`, and `agent_core/delegation.py`: migrate remaining public tools.
@@ -505,7 +505,7 @@ git commit -m "refactor: return artifact policy tool errors"
 - Modify: `agent_tools/public/files.py`
 - Modify: `tests/test_permissions_file_wrappers.py`
 - Modify: `tests/test_file_tools_runtime_task_id.py`
-- Modify: `tests/test_file_tools_hermes_env.py`
+- Modify: `tests/test_file_tools_active_env.py`
 
 - [ ] **Step 1: Add a local test helper for file result assertions**
 
@@ -704,7 +704,7 @@ assert "{" not in tool_message.content[:1]
 Run:
 
 ```bash
-pytest tests/test_permissions_file_wrappers.py tests/test_file_tools_runtime_task_id.py tests/test_file_tools_hermes_env.py -q
+pytest tests/test_permissions_file_wrappers.py tests/test_file_tools_runtime_task_id.py tests/test_file_tools_active_env.py -q
 ```
 
 Expected: PASS.
@@ -712,7 +712,7 @@ Expected: PASS.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add agent_tools/public/files.py tests/test_permissions_file_wrappers.py tests/test_file_tools_runtime_task_id.py tests/test_file_tools_hermes_env.py
+git add agent_tools/public/files.py tests/test_permissions_file_wrappers.py tests/test_file_tools_runtime_task_id.py tests/test_file_tools_active_env.py
 git commit -m "refactor: return artifact results from file tools"
 ```
 
@@ -796,33 +796,33 @@ Change `_terminal_impl`, `terminal`, `_process_impl`, and `process` return annot
 Replace invalid JSON handling:
 
 ```python
-def _decode_hermes_payload(raw: str) -> dict:
+def _decode_terminal_payload(raw: str) -> dict:
 ```
 
 with:
 
 ```python
-def _decode_hermes_payload(raw: str) -> tuple[dict, str | None]:
+def _decode_terminal_payload(raw: str) -> tuple[dict, str | None]:
     try:
         payload = json.loads(raw)
     except json.JSONDecodeError:
-        return {"raw": raw}, "Hermes terminal returned invalid JSON."
+        return {"raw": raw}, "terminal returned invalid JSON."
     if not isinstance(payload, dict):
-        return {"raw": raw}, f"Hermes terminal returned unexpected payload type: {type(payload).__name__}"
+        return {"raw": raw}, f"terminal returned unexpected payload type: {type(payload).__name__}"
     return payload, None
 ```
 
 Use the shared builder:
 
 ```python
-    payload, decode_error = _decode_hermes_payload(raw)
+    payload, decode_error = _decode_terminal_payload(raw)
     if decode_error:
         return tool_failure(
             "terminal",
             decode_error,
             code="invalid_response",
             data=payload,
-            meta={"backend": "hermes_terminal_toolkit"},
+            meta={"backend": "terminal_toolkit"},
             runtime=runtime,
             content="Tool returned invalid response.",
         )
@@ -837,7 +837,7 @@ For backend errors:
             str(payload["error"]),
             code=_status_code_from_payload(payload),
             data=payload,
-            meta={"backend": "hermes_terminal_toolkit"},
+            meta={"backend": "terminal_toolkit"},
             runtime=runtime,
         )
 ```
@@ -852,7 +852,7 @@ For nonzero exit:
             f"Command exited with code {exit_code}.",
             code=code,
             data=payload,
-            meta={"backend": "hermes_terminal_toolkit"},
+            meta={"backend": "terminal_toolkit"},
             runtime=runtime,
         )
 ```
@@ -872,7 +872,7 @@ For success:
         "terminal",
         data=payload,
         message=message,
-        meta={"backend": "hermes_terminal_toolkit"},
+        meta={"backend": "terminal_toolkit"},
         runtime=runtime,
         content=content,
     )

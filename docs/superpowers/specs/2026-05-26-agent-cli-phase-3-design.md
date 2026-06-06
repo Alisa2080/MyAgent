@@ -9,8 +9,8 @@ approval continuation, a startup banner, and lightweight display themes to the
 project-native `agent_cli`.
 
 Phase 3 keeps the current ordinary terminal REPL. It does not introduce a
-full-screen TUI, daemon, persistent worker process, Hermes skin engine, or
-Hermes approval panel.
+full-screen TUI, daemon, persistent worker process, skin engine, or
+approval panel.
 
 The selected architecture is a concurrent in-process thread task registry:
 each `/background <prompt>` creates an independent CLI session/LangGraph thread
@@ -21,9 +21,9 @@ and runs a worker thread inside the current CLI process.
 - No background task survival after the CLI process exits.
 - No daemon, pid registry, subprocess worker pool, or cross-process recovery.
 - No forced Python thread termination.
-- No full-screen TUI, spinner, inline diff renderer, or Hermes sudo panel.
+- No full-screen TUI, spinner, inline diff renderer, or toolkit sudo panel.
 - No runtime `/theme` switching.
-- No port of Hermes `skin_engine.py`; themes are small CLI color presets.
+- No port of reference implementation `skin_engine.py`; themes are small CLI color presets.
 - No model/API integration changes outside existing `agent_core` builders and
   runner calls.
 
@@ -44,14 +44,14 @@ Phase 1 and Phase 2 already provide:
 The project also already contains terminal/process lifecycle support:
 
 - `agent_core.agent_runner.invoke_agent_with_terminal_notifications()` invokes
-  the agent and automatically resumes the same LangGraph thread for Hermes
+  the agent and automatically resumes the same LangGraph thread for reference implementation
   terminal completion notifications.
 - `agent_core.terminal_lifecycle.interrupt_terminal_wait_for_thread_id()` can
   interrupt blocking terminal/process waits for a specific LangGraph thread.
-- `agent_core.terminal_notifications` routes Hermes terminal completion events
+- `agent_core.terminal_notifications` routes terminal completion events
   by task/thread.
 
-Phase 3 should reuse these project-native pieces instead of copying Hermes's
+Phase 3 should reuse these project-native pieces instead of copying the reference implementation's
 gateway, TUI, or long-running worker architecture.
 
 ## Architecture
@@ -116,7 +116,7 @@ used by foreground `submit_message()`.
    ```
 
 6. The existing terminal notification runner may auto-resume the same thread
-   when Hermes terminal/process completion notifications arrive.
+   when terminal/process completion notifications arrive.
 7. If the worker sees queued steer messages after a turn, it consumes them in
    order and invokes the same LangGraph thread again.
 8. If the worker receives a HITL interrupt, it stores the interrupt payload,
@@ -198,7 +198,7 @@ MVP queue view for active task states:
 - `stopping`
 
 Because Phase 3 allows concurrent background workers, `/queue` is not a serial
-execution queue. It exists to preserve the Hermes-style mental model and give a
+execution queue. It exists to preserve the project-style mental model and give a
 short active-work view.
 
 ### `/steer <task_id> <message>`
@@ -350,7 +350,7 @@ Rules:
 - Include cwd, profile when available, CLI home, model, session id, core
   commands, and background status counts.
 - Use a narrow fallback for terminals that cannot fit the boxed layout.
-- Do not display an ASCII logo or two-column Hermes-style tool inventory.
+- Do not display an ASCII logo or two-column project-style tool inventory.
 - `/status` remains focused on the current foreground session.
 - `/tasks` owns detailed background task display.
 
@@ -367,8 +367,8 @@ Supported values:
 
 - `default`: Boxed Console with small status colors.
 - `mono`: no color; suitable for logs, CI, and low-color terminals.
-- `slate`: cool-toned status colors inspired by Hermes slate, without adopting
-  the Hermes skin engine.
+- `slate`: cool-toned status colors inspired by reference slate, without adopting
+  the skin engine.
 
 Theme applies to:
 

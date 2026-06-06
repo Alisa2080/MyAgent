@@ -2,11 +2,11 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Remove the model-visible `execute_command` tool and migrate project guidance, limits, approval wiring, tests, and docs to the stronger Hermes-backed `terminal` and `process` tools without losing foreground shell execution, background process management, session isolation, human approval, or safety behavior.
+**Goal:** Remove the model-visible `execute_command` tool and migrate project guidance, limits, approval wiring, tests, and docs to the stronger runtime-backed `terminal` and `process` tools without losing foreground shell execution, background process management, session isolation, human approval, or safety behavior.
 
-**Architecture:** Make `terminal` the single model-visible shell execution entry point. Keep `process` for background process lifecycle operations. Remove `execute_command` from parent-agent tool registration, human approval config, tool-call limits, system prompt, README runtime contract, and compatibility exports. Decide whether to delete `agent_tools/shell.py` and `agent_tools/hermes_shell_adapter.py` outright or retain them as unregistered internal legacy modules for one release; the recommended path is direct deletion after tests are migrated because `terminal` already provides foreground execution, background execution, runtime-derived `task_id`, Hermes guards, and non-local backend support.
+**Architecture:** Make `terminal` the single model-visible shell execution entry point. Keep `process` for background process lifecycle operations. Remove `execute_command` from parent-agent tool registration, human approval config, tool-call limits, system prompt, README runtime contract, and compatibility exports. Decide whether to delete `agent_tools/shell.py` and `agent_tools/terminal_shell_adapter.py` outright or retain them as unregistered internal legacy modules for one release; the recommended path is direct deletion after tests are migrated because `terminal` already provides foreground execution, background execution, runtime-derived `task_id`, reference implementation guards, and non-local backend support.
 
-**Tech Stack:** Python 3.11, LangChain/LangGraph `ToolRuntime`, vendored Hermes terminal toolkit, pytest.
+**Tech Stack:** Python 3.11, LangChain/LangGraph `ToolRuntime`, vendored terminal toolkit, pytest.
 
 ---
 
@@ -17,13 +17,13 @@
 - `agent_core/tool_limits.py`: defines `EXECUTE_COMMAND_*` limits and builds a middleware entry for `execute_command`.
 - `agent_core/system_prompt.py`: tells the parent agent to use `execute_command`.
 - `agent_tools/shell.py`: defines the LangChain `execute_command` tool and its stricter project-side command blocker.
-- `agent_tools/hermes_shell_adapter.py`: local-only adapter used by `execute_command`.
+- `agent_tools/terminal_shell_adapter.py`: local-only adapter used by `execute_command`.
 - `agent_tools/general.py`: compatibility export includes `execute_command`.
 - `README.md`: documents `execute_command` as one of three shell tools.
 - Tests:
   - `tests/test_execute_command_runtime_smoke.py`
   - `tests/test_shell_task_id.py`
-  - `tests/test_hermes_shell_adapter_task_id.py`
+  - `tests/test_shell_adapter_task_id.py`
   - existing terminal tests indirectly assume parent tools include terminal/process.
 
 ## Policy Decisions
@@ -40,9 +40,9 @@
   - use `process(action="poll" | "log" | "wait" | "kill")` to manage background sessions;
   - use `pty=True` only for interactive CLI/REPL-style commands;
   - do not use terminal for routine `ls/find/grep/rg/cat` exploration when file tools can do it.
-- Keep Hermes built-in guard plus human approval as the safety model.
+- Keep reference implementation built-in guard plus human approval as the safety model.
 - Preserve runtime-derived `task_id` isolation through `terminal` and `process`.
-- Preserve backend support by using `terminal` directly instead of the local-only `hermes_shell_adapter`.
+- Preserve backend support by using `terminal` directly instead of the local-only `terminal_shell_adapter`.
 - Treat direct Python callers of `execute_command.invoke(...)` as unsupported after this migration unless the user explicitly requests a backward-compatible internal shim.
 
 ---
@@ -127,8 +127,8 @@ In `agent_core/builders.py`:
 - delete the `execute_command` entry from `HUMAN_INTERRUPT_ON`;
 - keep `terminal` and `process`;
 - optionally refine descriptions:
-  - `terminal`: “Review this Hermes terminal command before it executes.”
-  - `process`: “Review this Hermes background process action before it executes.”
+  - `terminal`: “Review this terminal command before it executes.”
+  - `process`: “Review this reference implementation background process action before it executes.”
 
 - [x] **Step 3: Update tool limits**
 
@@ -206,20 +206,20 @@ If there is no existing prompt test file, run the newly added prompt test file.
 
 **Files:**
 - Delete or retire: `agent_tools/shell.py`
-- Delete or retire: `agent_tools/hermes_shell_adapter.py`
+- Delete or retire: `agent_tools/terminal_shell_adapter.py`
 - Delete/migrate tests:
   - `tests/test_execute_command_runtime_smoke.py`
   - `tests/test_shell_task_id.py`
-  - `tests/test_hermes_shell_adapter_task_id.py`
+  - `tests/test_shell_adapter_task_id.py`
 
 - [x] **Step 1: Decide deletion vs internal legacy shim**
 
-Recommended: delete `agent_tools/shell.py` and `agent_tools/hermes_shell_adapter.py` because:
+Recommended: delete `agent_tools/shell.py` and `agent_tools/terminal_shell_adapter.py` because:
 
 - `terminal` covers foreground execution;
 - `terminal` supports background execution;
 - `terminal` uses runtime-derived `task_id`;
-- `terminal` supports Hermes non-local backends;
+- `terminal` supports reference implementation non-local backends;
 - `execute_command` had a local-only adapter and duplicated safety policy.
 
 Alternative: keep `_execute_command_impl` as an unregistered internal function for one release if external direct Python callers exist. If retained, it must not be imported by `BASE_TOOLS`, `HUMAN_INTERRUPT_ON`, prompt, or README as a supported tool.
@@ -229,16 +229,16 @@ Alternative: keep `_execute_command_impl` as an unregistered internal function f
 Delete execute-command-specific tests or convert their important assertions into terminal tests:
 
 - Runtime injection: already covered by `test_terminal_toolnode_injects_runtime_thread`.
-- Dangerous command guard: already covered by `test_terminal_preserves_hermes_guard_block_response`, but add one direct test that `terminal` passes `force=False`.
+- Dangerous command guard: already covered by `test_terminal_preserves_toolkit_guard_block_response`, but add one direct test that `terminal` passes `force=False`.
 - Direct `.invoke()` compatibility: no longer required for removed tool.
-- Local-only adapter behavior: delete because terminal should support Hermes backends.
+- Local-only adapter behavior: delete because terminal should support runtime backends.
 
 - [x] **Step 3: Remove files if no imports remain**
 
 Run:
 
 ```bash
-rg -n "agent_tools\\.shell|hermes_shell_adapter|execute_command|run_foreground_command" .
+rg -n "agent_tools\\.shell|terminal_shell_adapter|execute_command|run_foreground_command" .
 ```
 
 Then delete implementation files only if the remaining matches are old docs/plans that do not affect runtime. If old plan docs keep historical mentions, leave them unless the project prefers rewriting historical plans.
@@ -262,8 +262,8 @@ Expected: no import errors.
 
 Change from “three shell-related tools” to “two shell-related tools”:
 
-- `terminal`: Hermes terminal tool for foreground and background commands.
-- `process`: Hermes process tool for background process polling, logs, waiting, stdin, and killing.
+- `terminal`: terminal tool for foreground and background commands.
+- `process`: terminal process tool for background process polling, logs, waiting, stdin, and killing.
 
 Remove:
 
@@ -328,7 +328,7 @@ If the full suite is too slow or has unrelated failures, document the exact subs
 - [x] **Step 5: Check references**
 
 ```bash
-rg -n "execute_command|EXECUTE_COMMAND|hermes_shell_adapter|run_foreground_command" agent_core agent_tools tests README.md
+rg -n "execute_command|EXECUTE_COMMAND|terminal_shell_adapter|run_foreground_command" agent_core agent_tools tests README.md
 ```
 
 Expected:
@@ -354,15 +354,15 @@ git diff --check
 - System prompt instructs the model to use `terminal` for shell work and `process` for background process management.
 - System prompt no longer mentions `execute_command`.
 - README no longer lists `execute_command` as a supported shell tool.
-- `terminal` tests cover runtime `task_id` injection, Hermes guard passthrough, foreground command failure behavior, background quota, and ToolNode runtime injection.
+- `terminal` tests cover runtime `task_id` injection, reference implementation guard passthrough, foreground command failure behavior, background quota, and ToolNode runtime injection.
 - `process` tests cover scoped list/action behavior and cross-task session denial.
-- No runtime imports of `agent_tools.shell`, `agent_tools.hermes_shell_adapter`, or `execute_command` remain.
+- No runtime imports of `agent_tools.shell`, `agent_tools.terminal_shell_adapter`, or `execute_command` remain.
 - Existing functionality is preserved through `terminal(background=False)` for foreground shell commands and `terminal(background=True)` plus `process(...)` for long-running processes.
 
 ## Risks And Mitigations
 
-- **Risk:** `execute_command` had stricter project-side blocking than Hermes guard.
-  - **Mitigation:** rely on Hermes `force=False` plus human approval; if stricter local policy is still required, move the non-overlapping blocker rules into `terminal` before deleting `shell.py`.
+- **Risk:** `execute_command` had stricter project-side blocking than reference implementation guard.
+  - **Mitigation:** rely onreference implementation `force=False` plus human approval; if stricter local policy is still required, move the non-overlapping blocker rules into `terminal` before deleting `shell.py`.
 
 - **Risk:** External direct Python callers might import `agent_tools.shell.execute_command`.
   - **Mitigation:** run `rg`; if no internal callers exist, delete. If external callers are expected, keep a deprecated unregistered shim for one release.
@@ -382,6 +382,6 @@ git diff --check
 2. Remove `execute_command` from `BASE_TOOLS`, approval config, and tool limits.
 3. Rewrite system prompt shell guidance to `terminal/process`.
 4. Update README.
-5. Delete or retire `agent_tools/shell.py` and `agent_tools/hermes_shell_adapter.py`.
+5. Delete or retire `agent_tools/shell.py` and `agent_tools/terminal_shell_adapter.py`.
 6. Delete or migrate execute-command-specific tests.
 7. Run full verification and reference scan.

@@ -266,11 +266,11 @@ Actionable messages:
 - If no job is due but the user wants an immediate acceptance test, suggest
   `agent cron run JOB_ID`.
 
-## Hermes Reference
+## Legacy Reference
 
-Hermes keeps cron status understandable by answering three operational
+Reference implementation keeps cron status understandable by answering three operational
 questions: whether the gateway is running, how many active jobs exist, and when
-the next run is due. This project has a richer runtime than Hermes because it
+the next run is due. This project has a richer runtime than reference implementation because it
 tracks jobs, runs, deliveries, service status, leader leases, and service env in
 separate persistent stores.
 

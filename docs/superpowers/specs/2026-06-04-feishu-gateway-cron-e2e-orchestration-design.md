@@ -4,7 +4,7 @@ Date: 2026-06-04
 
 ## Summary
 
-Add the remaining Feishu gateway cron integration work needed for the Hermes-style experience. The system should have one true end-to-end acceptance test from Feishu inbound event through cron job creation, cron service execution, origin delivery, and Feishu outbound send. Cron reports created from a gateway origin should default to a new message in the original chat, not a reply to the original message. Gateway service installation should optionally install the cron service with `--with-cron`, while runtime startup continues to warn rather than auto-start cron.
+Add the remaining Feishu gateway cron integration work needed for the project-style experience. The system should have one true end-to-end acceptance test from Feishu inbound event through cron job creation, cron service execution, origin delivery, and Feishu outbound send. Cron reports created from a gateway origin should default to a new message in the original chat, not a reply to the original message. Gateway service installation should optionally install the cron service with `--with-cron`, while runtime startup continues to warn rather than auto-start cron.
 
 ## Goals
 

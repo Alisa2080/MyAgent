@@ -11,7 +11,7 @@ The cron system already has the larger architectural pieces in place:
 - Cron jobs, runs, and deliveries are persisted in SQLite through `StateStore`.
 - Automatic scheduling now creates a run record before execution and advances `next_run_at` on completion.
 
-The next gap is execution observability. A running cron job is still mostly a black box: the system can say that a job is running, but not what phase it is in, whether it is making progress, or why it was stopped. Timeout behavior is also still mostly global and duration-based, while the Hermes reference design treats inactivity as the healthier default signal.
+The next gap is execution observability. A running cron job is still mostly a black box: the system can say that a job is running, but not what phase it is in, whether it is making progress, or why it was stopped. Timeout behavior is also still mostly global and duration-based, while the archived reference design treats inactivity as the healthier default signal.
 
 This design covers two goals:
 
@@ -35,11 +35,11 @@ This design covers two goals:
   - running jobs
   - stale running jobs
   - latest failed run
-- Implement stage-level activity now, while preserving a stable interface for future Hermes-style fine-grained agent activity.
+- Implement stage-level activity now, while preserving a stable interface for future project-style fine-grained agent activity.
 
 ## Non-Goals
 
-- Full Hermes-style tool/API/stream delta instrumentation inside the agent runtime.
+- Full project-style tool/API/stream delta instrumentation inside the agent runtime.
 - New delivery platforms such as Slack, Discord, or email.
 - New run-management commands such as `cron logs`, `cron runs`, or delivery retry commands.
 - Concurrency policy changes.
@@ -165,7 +165,7 @@ Recommended shape:
 - Subprocess parent loop writes heartbeat while waiting for child completion.
 - Subprocess child may remain unaware in the first phase, but the protocol should allow child-to-parent activity messages later.
 
-This preserves a clean path for future Hermes-style fine-grained activity:
+This preserves a clean path for future project-style fine-grained activity:
 
 - API call started/completed
 - tool call started/completed

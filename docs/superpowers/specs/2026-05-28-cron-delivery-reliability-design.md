@@ -11,7 +11,7 @@ This design focuses on four outcomes:
 - `cron test-delivery` verifies a target without running an agent job.
 - `cron status` shows scheduler, job, and delivery queue health clearly.
 
-The first delivery targets are `origin`, `local`, and `webhook`. Full Hermes-style multi-platform adapters are intentionally out of scope for this phase.
+The first delivery targets are `origin`, `local`, and `webhook`. Full project-style multi-platform adapters are intentionally out of scope for this phase.
 
 ## Current Context
 
@@ -28,7 +28,7 @@ The current delivery path has three limits:
 - `_deliver_result()` only supports `local` and `origin`.
 - Status output does not explain pending, failed, or undeliverable results.
 
-The `hermes_agent_cron/` reference files provide useful patterns for target parsing, delivery routing, richer CLI status, and diagnostics. They should be treated as reference material, not copied wholesale, because they depend on Hermes-specific gateway and platform types.
+The `cron_reference/` reference files provide useful patterns for target parsing, delivery routing, richer CLI status, and diagnostics. They should be treated as reference material, not copied wholesale, because they depend onreference implementation-specific gateway and platform types.
 
 ## Non-Goals
 
@@ -304,7 +304,7 @@ Add focused tests for:
 - `cron doctor` returns correct ok, warn, and fail exit codes.
 - `cron test-delivery` uses delivery path and does not run an agent.
 
-Hermes reference tests under `hermes_agent_cron/` should guide expected behavior, but test code should be written against this repository's module boundaries.
+archived reference tests under `cron_reference/` should guide expected behavior, but test code should be written against this repository's module boundaries.
 
 ## Rollout
 

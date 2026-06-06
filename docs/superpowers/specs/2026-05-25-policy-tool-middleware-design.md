@@ -27,7 +27,7 @@ This design keeps the existing human review request flow intact. `FlexibleHumanI
 
 The current tool wrappers contain repeated execution-gating logic:
 
-- `agent_tools/public/terminal.py` normalizes terminal and process policy args, evaluates `tool_policy`, consumes approval for review decisions, converts deny/review failures into `tool_error`, and then calls Hermes.
+- `agent_tools/public/terminal.py` normalizes terminal and process policy args, evaluates `tool_policy`, consumes approval for review decisions, converts deny/review failures into `tool_error`, and then calls reference implementation.
 - `agent_tools/public/files.py` repeats the review approval path for `write_file` and `patch`, while also handling file-specific path classification and approved write roots.
 
 This duplication makes it easy for behavior to drift across tools. A future policy change must be updated in several wrappers, and each wrapper must remember the same sequence: derive runtime identity, evaluate policy, consume approval, return a standard error on deny, then execute.
@@ -94,7 +94,7 @@ For direct tool implementation calls that bypass middleware, wrappers keep a com
 
 Middleware handles policy evaluation, deny, and review approval consumption.
 
-The wrapper keeps Hermes execution. If a review grant exists, the wrapper applies the same behavior as today:
+The wrapper keeps reference implementation execution. If a review grant exists, the wrapper applies the same behavior as today:
 
 - `force=True`
 - `allow_network_once=True` when the approval permits it
@@ -105,7 +105,7 @@ The wrapper no longer owns the main policy decision path.
 
 Middleware handles policy evaluation, deny, and review approval consumption.
 
-The wrapper keeps Hermes/process execution. Process approval has no new execution-specific side effect in this phase, so the wrapper becomes business execution plus result normalization.
+The wrapper keeps reference implementation/process execution. Process approval has no new execution-specific side effect in this phase, so the wrapper becomes business execution plus result normalization.
 
 ### `write_file`
 

@@ -4,8 +4,8 @@ Date: 2026-05-22
 
 ## Goal
 
-Port the Hermes cron system into this LangChain agent project without bringing
-over the Hermes Gateway, platform adapters, CLI, REST API, or `AIAgent`
+Port the cron reference system into this LangChain agent project without bringing
+over the Gateway Reference, platform adapters, CLI, REST API, or `AIAgent`
 runtime.
 
 The first implementation should provide:
@@ -22,8 +22,8 @@ CLI development is explicitly out of scope for this design.
 ## Current Baseline
 
 The repository already contains an untracked `cron/` directory copied from
-Hermes. Those files preserve useful behavior, but still depend on Hermes-only
-modules and concepts such as `hermes_constants`, `hermes_time`, `hermes_cli`,
+Reference implementation. Those files preserve useful behavior, but still depend on reference-only
+modules and concepts such as `cron_constants`, `archived_reference_time`, `cron_cli`,
 `gateway.*`, `tools.*`, platform delivery adapters, and `run_agent.AIAgent`.
 
 The current project boundaries are different:
@@ -31,21 +31,21 @@ The current project boundaries are different:
 - `agent_core/builders.py` constructs LangChain agents.
 - `agent_core/agent_runner.py` manages terminal notification continuation.
 - `agent_tools/public/*` exposes LangChain-facing tools.
-- `agent_core/session_context.py` maps LangGraph `thread_id` values to Hermes
+- `agent_core/session_context.py` maps LangGraph `thread_id` values to reference implementation
   terminal task ids.
-- The Hermes terminal toolkit is still part of this project, and already uses
-  `HERMES_HOME` as one of its home-directory inputs.
+- The terminal toolkit is still part of this project, and already uses
+  `TOOLKIT_HOME` as one of its home-directory inputs.
 
-The port should preserve Hermes cron semantics where they remain useful, but
+The port should preserve cron reference semantics where they remain useful, but
 translate runtime integration into the current LangChain project shape.
 
 ## Approach
 
 Use a project-native boundary split rather than directly patching the copied
-Hermes files in place.
+reference files in place.
 
 The copied behavior is the reference for scheduling, persistence, wake gates,
-and at-most-once execution. The new integration replaces Hermes Gateway,
+and at-most-once execution. The new integration replaces Gateway Reference,
 platform adapter, registry, and `AIAgent` dependencies with current project
 APIs.
 
@@ -76,12 +76,12 @@ surface independently testable.
 
 ## Storage Paths
 
-Cron data follows the existing Hermes terminal home ecosystem.
+Cron data follows the existing terminal home ecosystem.
 
 Resolution should prioritize:
 
-1. `HERMES_HOME`, when set.
-2. The current Hermes terminal toolkit home behavior when no `HERMES_HOME` is
+1. `TOOLKIT_HOME`, when set.
+2. The current terminal toolkit home behavior when no `TOOLKIT_HOME` is
    configured.
 
 Cron files live under the selected home:
@@ -110,7 +110,7 @@ process.
 
 ## Job Schema
 
-The first version keeps Hermes-compatible fields, but only some affect
+The first version keeps provider-compatible fields, but only some affect
 execution.
 
 Active fields:
@@ -156,7 +156,7 @@ when present, but the first implementation does not depend on them.
 
 ## Schedule Parsing
 
-Preserve the four Hermes schedule forms:
+Preserve the four reference implementation schedule forms:
 
 - Duration one-shot: `30m`, `2h`, `1d`.
 - Interval: `every 30m`, `every 2h`.
@@ -187,7 +187,7 @@ Tick behavior:
 6. Advance `next_run_at` before execution to preserve at-most-once semantics.
 7. Run jobs with `workdir` sequentially.
 8. Run jobs without `workdir` in parallel, bounded by
-   `HERMES_CRON_MAX_PARALLEL` when set.
+   `AGENT_CRON_MAX_PARALLEL` when set.
 9. Save output and mark each job run.
 
 `mark_job_run()` updates:
@@ -248,13 +248,13 @@ The first implementation accepts only:
 Platform delivery targets such as `telegram:...` or `slack:...` should return
 a clear unsupported-delivery error.
 
-The tool keeps critical prompt scanning from Hermes: block obvious prompt
+The tool keeps critical prompt scanning from reference implementation: block obvious prompt
 injection, secret exfiltration, backdoor, and destructive patterns. It also
 validates `context_from`, `script`, and `workdir` at create/update boundaries.
 
 ## Runner Agent
 
-Cron jobs run through this project's LangChain agent stack, not Hermes
+Cron jobs run through this project's LangChain agent stack, not reference implementation
 `AIAgent`.
 
 The runner builds a fresh cron agent per job using current model config:
@@ -338,7 +338,7 @@ Rules:
 - absolute paths, Windows drive-root paths, and `~` are rejected;
 - resolved paths must stay inside the cron scripts directory;
 - scripts run before the agent;
-- timeout is controlled by `HERMES_CRON_SCRIPT_TIMEOUT`, defaulting to 120
+- timeout is controlled by `AGENT_CRON_SCRIPT_TIMEOUT`, defaulting to 120
   seconds.
 
 Script stdout and stderr are captured, truncated to a bounded size, injected
@@ -354,9 +354,9 @@ Wake-gate behavior:
 
 ## Timeout
 
-Use `HERMES_CRON_TIMEOUT`, defaulting to 600 seconds.
+Use `AGENT_CRON_TIMEOUT`, defaulting to 600 seconds.
 
-Hermes used an inactivity timeout based on `AIAgent` activity tracking. This
+Reference implementation used an inactivity timeout based on `AIAgent` activity tracking. This
 project's LangChain agent does not currently expose equivalent activity
 signals, so the first version should implement a whole-agent invoke timeout.
 
@@ -448,12 +448,12 @@ The first implementation does not include:
 
 - CLI `/cron` commands;
 - REST API;
-- Hermes Gateway integration;
+- Gateway Reference integration;
 - Telegram, Slack, Matrix, Discord, email, SMS, or webhook delivery;
 - Matrix E2EE delivery;
 - native media attachment parsing or sending;
-- Hermes `AIAgent`;
-- Hermes provider routing, credential pools, or `config.yaml` compatibility;
+- reference implementation `AIAgent`;
+- reference implementation provider routing, credential pools, or `config.yaml` compatibility;
 - per-job `model/provider/base_url` execution overrides;
 - SQLite session storage;
 - leader election beyond the tick file lock;
@@ -462,7 +462,7 @@ The first implementation does not include:
 ## Open Implementation Notes
 
 The implementation should prefer small modules and narrow tests over editing a
-large copied Hermes file until it imports. The copied `cron/` files can be used
+large copied reference file until it imports. The copied `cron/` files can be used
 as behavior references, but the final code should import through this project's
 `agent_core.*` and `agent_tools.*` boundaries.
 

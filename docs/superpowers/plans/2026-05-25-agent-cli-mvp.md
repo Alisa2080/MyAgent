@@ -4,7 +4,7 @@
 
 **Goal:** Build a minimal `python -m agent_cli` CLI that runs the existing LangGraph/LangChain agent with SQLite checkpoint persistence, lightweight session metadata, slash commands, and basic approve/reject interrupt handling.
 
-**Architecture:** Replace the copied Hermes CLI runtime path with small project-native modules. LangGraph checkpointing stores conversation state keyed by `configurable.thread_id`; a CLI-owned SQLite table stores session list metadata only. Agent execution goes through `agent_core.agent_runner.invoke_agent_with_terminal_notifications`.
+**Architecture:** Replace the copied CLI reference runtime path with small project-native modules. LangGraph checkpointing stores conversation state keyed by `configurable.thread_id`; a CLI-owned SQLite table stores session list metadata only. Agent execution goes through `agent_core.agent_runner.invoke_agent_with_terminal_notifications`.
 
 **Tech Stack:** Python stdlib `argparse`, `sqlite3`, `dataclasses`, `uuid`; existing `agent_core` and `agent_tools`; LangGraph SQLite checkpointer when installed.
 
@@ -25,9 +25,9 @@ Create or replace these runtime files:
 - `agent_cli/rendering.py`: small formatting helpers.
 - `agent_cli/paths.py`: CLI home and database path resolution.
 
-Move current Hermes-derived files into:
+Move currentreference implementation-derived files into:
 
-- `agent_cli/_hermes_reference/`
+- `agent_cli/_archived_reference/`
 
 Modify:
 
@@ -44,43 +44,43 @@ Create tests:
 
 ---
 
-### Task 1: Isolate Hermes Reference Files
+### Task 1: Isolate Legacy Reference Files
 
 **Files:**
-- Move: `agent_cli/banner.py` -> `agent_cli/_hermes_reference/banner.py`
-- Move: `agent_cli/cli.py` -> `agent_cli/_hermes_reference/cli.py`
-- Move: `agent_cli/config.py` -> `agent_cli/_hermes_reference/config.py`
-- Move: `agent_cli/main.py` -> `agent_cli/_hermes_reference/main.py`
-- Move: `agent_cli/session.py` -> `agent_cli/_hermes_reference/session.py`
-- Move: `agent_cli/session_context.py` -> `agent_cli/_hermes_reference/session_context.py`
-- Move: `agent_cli/skill_commands.py` -> `agent_cli/_hermes_reference/skill_commands.py`
-- Move: `agent_cli/skin_engine.py` -> `agent_cli/_hermes_reference/skin_engine.py`
-- Create: `agent_cli/_hermes_reference/__init__.py`
+- Move: `agent_cli/banner.py` -> `agent_cli/_archived_reference/banner.py`
+- Move: `agent_cli/cli.py` -> `agent_cli/_archived_reference/cli.py`
+- Move: `agent_cli/config.py` -> `agent_cli/_archived_reference/config.py`
+- Move: `agent_cli/main.py` -> `agent_cli/_archived_reference/main.py`
+- Move: `agent_cli/session.py` -> `agent_cli/_archived_reference/session.py`
+- Move: `agent_cli/session_context.py` -> `agent_cli/_archived_reference/session_context.py`
+- Move: `agent_cli/skill_commands.py` -> `agent_cli/_archived_reference/skill_commands.py`
+- Move: `agent_cli/skin_engine.py` -> `agent_cli/_archived_reference/skin_engine.py`
+- Create: `agent_cli/_archived_reference/__init__.py`
 
-- [ ] **Step 1: Move the copied Hermes files out of the runtime path**
+- [ ] **Step 1: Move the copied reference files out of the runtime path**
 
 Run:
 
 ```bash
-mkdir -p agent_cli/_hermes_reference
-git mv agent_cli/banner.py agent_cli/_hermes_reference/banner.py
-git mv agent_cli/cli.py agent_cli/_hermes_reference/cli.py
-git mv agent_cli/config.py agent_cli/_hermes_reference/config.py
-git mv agent_cli/main.py agent_cli/_hermes_reference/main.py
-git mv agent_cli/session.py agent_cli/_hermes_reference/session.py
-git mv agent_cli/session_context.py agent_cli/_hermes_reference/session_context.py
-git mv agent_cli/skill_commands.py agent_cli/_hermes_reference/skill_commands.py
-git mv agent_cli/skin_engine.py agent_cli/_hermes_reference/skin_engine.py
+mkdir -p agent_cli/_archived_reference
+git mv agent_cli/banner.py agent_cli/_archived_reference/banner.py
+git mv agent_cli/cli.py agent_cli/_archived_reference/cli.py
+git mv agent_cli/config.py agent_cli/_archived_reference/config.py
+git mv agent_cli/main.py agent_cli/_archived_reference/main.py
+git mv agent_cli/session.py agent_cli/_archived_reference/session.py
+git mv agent_cli/session_context.py agent_cli/_archived_reference/session_context.py
+git mv agent_cli/skill_commands.py agent_cli/_archived_reference/skill_commands.py
+git mv agent_cli/skin_engine.py agent_cli/_archived_reference/skin_engine.py
 ```
 
-Expected: commands succeed and `agent_cli/` no longer contains the Hermes runtime files at top level.
+Expected: commands succeed and `agent_cli/` no longer contains the reference implementation runtime files at top level.
 
 - [ ] **Step 2: Add a package marker for the reference folder**
 
-Create `agent_cli/_hermes_reference/__init__.py`:
+Create `agent_cli/_archived_reference/__init__.py`:
 
 ```python
-"""Copied Hermes CLI source kept as reference material only.
+"""Copied CLI reference source kept as reference material only.
 
 Modules in this package are not imported by the Agent CLI MVP runtime.
 """
@@ -94,13 +94,13 @@ Run:
 find agent_cli -maxdepth 1 -type f -printf '%f\n' | sort
 ```
 
-Expected output includes no Hermes files except package files created in later tasks.
+Expected output includes no reference files except package files created in later tasks.
 
 - [ ] **Step 4: Commit**
 
 ```bash
 git add agent_cli
-git commit -m "refactor: isolate hermes cli reference files"
+git commit -m "refactor: isolate archived_reference cli reference files"
 ```
 
 ---
@@ -1886,7 +1886,7 @@ Spec coverage:
 - `build_agent(checkpointer=...)` integration is covered in Task 6.
 - REPL, ask, and slash commands are covered in Tasks 3, 9, and 10.
 - Basic approve/reject interrupt handling is covered in Tasks 7 and 9.
-- Hermes reference isolation is covered in Task 1.
+- archived reference isolation is covered in Task 1.
 - Tests and usage documentation are covered in Tasks 11 and 12.
 
 Placeholder scan:

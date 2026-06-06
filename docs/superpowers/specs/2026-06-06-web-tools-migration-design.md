@@ -1,4 +1,4 @@
-# Hermes Web Tools Migration Design
+# Web Tools Migration Design
 
 ## Context
 
@@ -7,9 +7,9 @@ The current agent project exposes web tools through `agent_tools.public.web` and
 - `web_search`: TinyFish metadata search.
 - `web_fetch`: TinyFish page content fetch.
 
-The pasted Hermes implementation in `agent_tools/web_tools.py` provides a stronger web toolset with provider routing, dedicated extraction, URL safety checks, base64 cleanup, and optional LLM post-processing. It is not directly compatible with this project because it imports Hermes-specific modules such as `agent.auxiliary_client`, `tools.registry`, `tools.url_safety`, `tools.website_policy`, `tools.debug_helpers`, and managed Nous tool-gateway helpers.
+The pasted reference implementation in `agent_tools/web_tools.py` provides a stronger web toolset with provider routing, dedicated extraction, URL safety checks, base64 cleanup, and optional LLM post-processing. It is not directly compatible with this project because it imports reference implementation-specific modules such as `agent.auxiliary_client`, `tools.registry`, `tools.url_safety`, `tools.website_policy`, `tools.debug_helpers`, and managed Nous tool-gateway helpers.
 
-The migration should replace the current TinyFish tools with a Hermes-compatible LangChain-native implementation. The agent-facing tools after migration are:
+The migration should replace the current TinyFish tools with a provider-compatible LangChain-native implementation. The agent-facing tools after migration are:
 
 - `web_search`
 - `web_extract`
@@ -18,10 +18,10 @@ The migration should replace the current TinyFish tools with a Hermes-compatible
 
 ## Goals
 
-1. Replace the current TinyFish web tool surface with Hermes-compatible `web_search` and `web_extract`.
+1. Replace the current TinyFish web tool surface with provider-compatible `web_search` and `web_extract`.
 2. Preserve the current project's LangChain-native public tool pattern: `@tool`, Pydantic args schemas, injected `ToolRuntime`, and `ToolMessage` results through `tool_success` / `tool_failure`.
-3. Support Hermes-style provider routing across Firecrawl, Parallel, Tavily, and Exa without making any one SDK a hard import-time dependency.
-4. Port the important safety behavior from Hermes:
+3. Support provider-compatible provider routing across Firecrawl, Parallel, Tavily, and Exa without making any one SDK a hard import-time dependency.
+4. Port the important safety behavior from reference implementation:
    - SSRF blocking for private, loopback, link-local, localhost, metadata, and non-HTTP(S) targets.
    - Embedded secret / token exfiltration blocking in URL strings, including URL-decoded forms.
    - Redirect final-URL safety checks when a backend exposes the final URL.
@@ -33,8 +33,8 @@ The migration should replace the current TinyFish tools with a Hermes-compatible
 
 1. Keep `web_fetch` as a public agent tool.
 2. Port `web_crawl` in this migration.
-3. Port Hermes `tools.registry` registration.
-4. Port Hermes managed Nous tool-gateway integration as a required path.
+3. Port reference implementation `tools.registry` registration.
+4. Port reference implementation managed Nous tool-gateway integration as a required path.
 5. Implement a full website policy / robots framework in this phase.
 6. Add a hard dependency on every provider SDK.
 
@@ -173,7 +173,7 @@ Adapter output should be normalized before returning tool artifacts.
 
 ## URL Safety
 
-Implement project-local URL safety helpers because the Hermes helpers are not present.
+Implement project-local URL safety helpers because the reference implementation helpers are not present.
 
 `is_safe_url(url: str) -> tuple[bool, str | None]` should reject:
 
@@ -220,7 +220,7 @@ If a provider does not expose redirect details, rely on pre-request validation a
 
 ### Base64 Cleanup
 
-Port Hermes `clean_base64_images` behavior:
+Port reference implementation `clean_base64_images` behavior:
 
 - Replace `data:image/...;base64,...` payloads with `[BASE64_IMAGE_REMOVED]`.
 - Remove obviously large base64-like blocks when they are embedded in HTML or Markdown.
@@ -231,7 +231,7 @@ Each extracted document should be capped by `max_chars_per_url`. The default is 
 
 ### Optional LLM Processing
 
-This project does not currently have Hermes' `agent.auxiliary_client`, so the first implementation should provide a small optional summarization hook:
+This project does not currently have the reference implementation's `agent.auxiliary_client`, so the first implementation should provide a small optional summarization hook:
 
 - If `use_llm_processing=False`, skip summarization.
 - If content length is below `min_length`, skip summarization.
@@ -315,10 +315,10 @@ Required tests:
 ## Migration Risks
 
 1. Removing `web_fetch` may break tests, docs, or external imports. This is intentional for the agent-facing surface, but compatibility expectations should be updated explicitly.
-2. Provider SDK APIs may differ from the pasted Hermes assumptions. Adapters should normalize defensively and tests should mock minimal response shapes.
+2. Provider SDK APIs may differ from the pasted reference implementation assumptions. Adapters should normalize defensively and tests should mock minimal response shapes.
 3. URL safety checks can over-block legitimate private-network use cases. This project should default secure; private URL support can be added later behind an explicit opt-in.
 4. LLM post-processing can introduce latency or failure. It must remain optional and non-fatal.
-5. Full Hermes behavior includes managed gateway and crawl. Those are intentionally excluded from this migration to keep the replacement focused and maintainable.
+5. Full reference implementation behavior includes managed gateway and crawl. Those are intentionally excluded from this migration to keep the replacement focused and maintainable.
 
 ## Acceptance Criteria
 

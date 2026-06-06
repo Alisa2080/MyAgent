@@ -18,7 +18,7 @@ The project already has the core gateway path:
 - Cron delivery supports gateway `origin` delivery through `OriginDeliveryAdapter`.
 - `gateway serve` currently runs an HTTP callback server only.
 
-The missing piece is a Feishu WebSocket transport. Hermes/cron reference logic is most useful for long-lived service behavior: status files, heartbeats, service env, foreground service loops, and systemd/launchd service management.
+The missing piece is a Feishu WebSocket transport. reference implementation/cron reference logic is most useful for long-lived service behavior: status files, heartbeats, service env, foreground service loops, and systemd/launchd service management.
 
 ## Non-Goals
 

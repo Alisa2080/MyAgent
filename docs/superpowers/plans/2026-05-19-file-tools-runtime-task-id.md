@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Make public file tools derive their tracking task id from LangGraph `ToolRuntime`, matching Hermes terminal/process task identity, and remove model-visible `task_id` from file tool schemas.
+**Goal:** Make public file tools derive their tracking task id from LangGraph `ToolRuntime`, matching terminal/process task identity, and remove model-visible `task_id` from file tool schemas.
 
-**Architecture:** Keep low-level `agent_tools.file_toolkit.file_tools` APIs unchanged for now because they already accept `task_id` and are useful for direct tests/internal callers. Change only the public LangChain facade in `agent_tools/public/files.py` so model-facing tools receive `ToolRuntime`, derive `task_id` via `hermes_task_id_from_runtime()`, and pass that internal id into the existing low-level file toolkit. Add regression tests mirroring `tests/test_terminal_tools.py`.
+**Architecture:** Keep low-level `agent_tools.file_toolkit.file_tools` APIs unchanged for now because they already accept `task_id` and are useful for direct tests/internal callers. Change only the public LangChain facade in `agent_tools/public/files.py` so model-facing tools receive `ToolRuntime`, derive `task_id` via `runtime_task_id_from_runtime()`, and pass that internal id into the existing low-level file toolkit. Add regression tests mirroring `tests/test_terminal_tools.py`.
 
 **Tech Stack:** Python, LangChain `@tool`, LangChain `ToolRuntime`, LangGraph `ToolNode`, pytest, existing `agent_core.session_context`.
 
@@ -14,7 +14,7 @@
 
 - Modify `agent_tools/public/files.py`
   - Import `ToolRuntime`.
-  - Import `hermes_task_id_from_runtime`.
+  - Import `runtime_task_id_from_runtime`.
   - Remove `task_id` fields from model-facing input schemas.
   - Add private implementation helpers (`_read_file_impl`, `_write_file_impl`, `_patch_impl`, `_search_files_impl`) that accept `runtime`.
   - Keep low-level calls to `read_file_tool`, `write_file_tool`, `patch_tool`, `search_tool` with an internally derived `task_id`.
@@ -141,7 +141,7 @@ from types import SimpleNamespace
 
 def test_read_file_injects_runtime_thread_as_task_id(monkeypatch):
     import agent_tools.public.files as file_tools
-    from agent_core.session_context import hermes_task_id_from_thread_id
+    from agent_core.session_context import runtime_task_id_from_thread_id
 
     calls = []
 
@@ -160,14 +160,14 @@ def test_read_file_injects_runtime_thread_as_task_id(monkeypatch):
     payload = json.loads(raw)
 
     assert payload["ok"] is True
-    assert calls[0]["task_id"] == hermes_task_id_from_thread_id("file-read-thread")
+    assert calls[0]["task_id"] == runtime_task_id_from_thread_id("file-read-thread")
     assert calls[0]["path"] == "README.md"
     assert "task_id" not in payload.get("meta", {})
 
 
 def test_write_file_injects_runtime_thread_as_task_id(monkeypatch):
     import agent_tools.public.files as file_tools
-    from agent_core.session_context import hermes_task_id_from_thread_id
+    from agent_core.session_context import runtime_task_id_from_thread_id
 
     calls = []
 
@@ -183,14 +183,14 @@ def test_write_file_injects_runtime_thread_as_task_id(monkeypatch):
     payload = json.loads(raw)
 
     assert payload["ok"] is True
-    assert calls[0]["task_id"] == hermes_task_id_from_thread_id("file-write-thread")
+    assert calls[0]["task_id"] == runtime_task_id_from_thread_id("file-write-thread")
     assert calls[0]["content"] == "hello"
     assert "task_id" not in payload.get("meta", {})
 
 
 def test_search_files_injects_runtime_thread_as_task_id(monkeypatch):
     import agent_tools.public.files as file_tools
-    from agent_core.session_context import hermes_task_id_from_thread_id
+    from agent_core.session_context import runtime_task_id_from_thread_id
 
     calls = []
 
@@ -216,14 +216,14 @@ def test_search_files_injects_runtime_thread_as_task_id(monkeypatch):
     payload = json.loads(raw)
 
     assert payload["ok"] is True
-    assert calls[0]["task_id"] == hermes_task_id_from_thread_id("file-search-thread")
+    assert calls[0]["task_id"] == runtime_task_id_from_thread_id("file-search-thread")
     assert calls[0]["pattern"] == "TODO"
     assert "task_id" not in payload.get("meta", {})
 
 
 def test_patch_injects_runtime_thread_as_task_id(monkeypatch):
     import agent_tools.public.files as file_tools
-    from agent_core.session_context import hermes_task_id_from_thread_id
+    from agent_core.session_context import runtime_task_id_from_thread_id
 
     calls = []
 
@@ -247,7 +247,7 @@ def test_patch_injects_runtime_thread_as_task_id(monkeypatch):
     payload = json.loads(raw)
 
     assert payload["ok"] is True
-    assert calls[0]["task_id"] == hermes_task_id_from_thread_id("file-patch-thread")
+    assert calls[0]["task_id"] == runtime_task_id_from_thread_id("file-patch-thread")
     assert calls[0]["old_string"] == "old"
     assert "task_id" not in payload.get("meta", {})
 ```
@@ -282,7 +282,7 @@ git commit -m "test: cover runtime scoped file tools"
 In `agent_tools/public/files.py`, add:
 
 ```python
-from agent_core.session_context import hermes_task_id_from_runtime
+from agent_core.session_context import runtime_task_id_from_runtime
 ```
 
 - [ ] **Step 2: Add private implementation helpers**
@@ -291,7 +291,7 @@ Insert these helpers after `_wrap_file_tool_result()`:
 
 ```python
 def _task_id_from_runtime(runtime: ToolRuntime | None) -> str:
-    return hermes_task_id_from_runtime(runtime)
+    return runtime_task_id_from_runtime(runtime)
 
 
 def _read_file_impl(path: str, offset: int = 1, limit: int = 500, runtime: ToolRuntime | None = None) -> str:
@@ -520,7 +520,7 @@ def test_read_file_toolnode_injects_runtime_thread(monkeypatch):
     from langgraph.prebuilt import ToolNode
 
     import agent_tools.public.files as file_tools
-    from agent_core.session_context import hermes_task_id_from_thread_id
+    from agent_core.session_context import runtime_task_id_from_thread_id
     from agent_tools.public.files import read_file
 
     calls = []
@@ -558,7 +558,7 @@ def test_read_file_toolnode_injects_runtime_thread(monkeypatch):
     payload = json.loads(result["messages"][-1].content)
 
     assert payload["ok"] is True
-    assert calls[0]["task_id"] == hermes_task_id_from_thread_id("toolnode-file-read-thread")
+    assert calls[0]["task_id"] == runtime_task_id_from_thread_id("toolnode-file-read-thread")
     assert "task_id" not in payload.get("meta", {})
 
 
@@ -568,7 +568,7 @@ def test_write_file_toolnode_injects_runtime_thread(monkeypatch):
     from langgraph.prebuilt import ToolNode
 
     import agent_tools.public.files as file_tools
-    from agent_core.session_context import hermes_task_id_from_thread_id
+    from agent_core.session_context import runtime_task_id_from_thread_id
     from agent_tools.public.files import write_file
 
     calls = []
@@ -606,7 +606,7 @@ def test_write_file_toolnode_injects_runtime_thread(monkeypatch):
     payload = json.loads(result["messages"][-1].content)
 
     assert payload["ok"] is True
-    assert calls[0]["task_id"] == hermes_task_id_from_thread_id("toolnode-file-write-thread")
+    assert calls[0]["task_id"] == runtime_task_id_from_thread_id("toolnode-file-write-thread")
     assert calls[0]["content"] == "hello world"
 ```
 
@@ -634,7 +634,7 @@ def test_search_files_toolnode_injects_runtime_thread(monkeypatch):
     from langgraph.prebuilt import ToolNode
 
     import agent_tools.public.files as file_tools
-    from agent_core.session_context import hermes_task_id_from_thread_id
+    from agent_core.session_context import runtime_task_id_from_thread_id
     from agent_tools.public.files import search_files
 
     calls = []
@@ -672,7 +672,7 @@ def test_search_files_toolnode_injects_runtime_thread(monkeypatch):
     payload = json.loads(result["messages"][-1].content)
 
     assert payload["ok"] is True
-    assert calls[0]["task_id"] == hermes_task_id_from_thread_id("toolnode-file-search-thread")
+    assert calls[0]["task_id"] == runtime_task_id_from_thread_id("toolnode-file-search-thread")
 
 
 def test_patch_toolnode_injects_runtime_thread(monkeypatch):
@@ -681,7 +681,7 @@ def test_patch_toolnode_injects_runtime_thread(monkeypatch):
     from langgraph.prebuilt import ToolNode
 
     import agent_tools.public.files as file_tools
-    from agent_core.session_context import hermes_task_id_from_thread_id
+    from agent_core.session_context import runtime_task_id_from_thread_id
     from agent_tools.public.files import patch
 
     calls = []
@@ -724,7 +724,7 @@ def test_patch_toolnode_injects_runtime_thread(monkeypatch):
     payload = json.loads(result["messages"][-1].content)
 
     assert payload["ok"] is True
-    assert calls[0]["task_id"] == hermes_task_id_from_thread_id("toolnode-file-patch-thread")
+    assert calls[0]["task_id"] == runtime_task_id_from_thread_id("toolnode-file-patch-thread")
 ```
 
 - [ ] **Step 4: Run all file runtime tests**
@@ -783,7 +783,7 @@ Run:
 pytest tests/test_file_tools_runtime_task_id.py::test_file_tool_impl_falls_back_to_default_task_id_without_runtime -v
 ```
 
-Expected: PASS because `hermes_task_id_from_runtime(None)` already returns `"default"`.
+Expected: PASS because `runtime_task_id_from_runtime(None)` already returns `"default"`.
 
 - [ ] **Step 3: If it fails, fix `_task_id_from_runtime()`**
 
@@ -791,7 +791,7 @@ Use this exact implementation:
 
 ```python
 def _task_id_from_runtime(runtime: ToolRuntime | None) -> str:
-    return hermes_task_id_from_runtime(runtime)
+    return runtime_task_id_from_runtime(runtime)
 ```
 
 - [ ] **Step 4: Run all file runtime tests**
@@ -867,7 +867,7 @@ git diff -- agent_tools/public/files.py tests/test_file_tools_runtime_task_id.py
 Expected:
 - `agent_tools/public/files.py` no longer exposes `task_id` in Pydantic schemas.
 - Public tool functions accept `runtime: ToolRuntime`.
-- Private helpers derive task id with `hermes_task_id_from_runtime(runtime)`.
+- Private helpers derive task id with `runtime_task_id_from_runtime(runtime)`.
 - Low-level file toolkit APIs still receive `task_id`.
 - No public response metadata includes `task_id`.
 
@@ -886,9 +886,9 @@ If no edits were needed, do not create an empty commit.
 
 ## Self-Review
 
-**Spec coverage:** The plan covers unified task identity for public file tools, removes model-visible `task_id`, derives the id from `ToolRuntime` using the same `hermes_task_id_from_runtime()` function used by terminal/process, and preserves low-level file toolkit compatibility.
+**Spec coverage:** The plan covers unified task identity for public file tools, removes model-visible `task_id`, derives the id from `ToolRuntime` using the same `runtime_task_id_from_runtime()` function used by terminal/process, and preserves low-level file toolkit compatibility.
 
-**Out of scope by design:** This plan does not integrate file tools with Hermes active environments, sandbox path mapping, container-aware safety checks, or backend-aware file state. Those are separate follow-up plans because this task is limited to task identity.
+**Out of scope by design:** This plan does not integrate file tools with reference implementation active environments, sandbox path mapping, container-aware safety checks, or backend-aware file state. Those are separate follow-up plans because this task is limited to task identity.
 
 **Placeholder scan:** No task contains TBD-style placeholders. The only conditional instruction is for the possible `ToolRuntime` default-position compatibility issue, and it includes exact replacement code and verification.
 

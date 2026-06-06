@@ -2,21 +2,21 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Replace the regex-based compound background command rewrite with the Hermes state-machine implementation so `A && B &` and similar forms are rewritten correctly without corrupting quoted strings, redirects, grouped commands, comments, or simple background commands.
+**Goal:** Replace the regex-based compound background command rewrite with the reference implementation state-machine implementation so `A && B &` and similar forms are rewritten correctly without corrupting quoted strings, redirects, grouped commands, comments, or simple background commands.
 
-**Architecture:** Keep the existing call site in `BaseEnvironment.execute()` unchanged: every foreground shell command still passes through `rewrite_compound_background()` after sudo preparation and before shell wrapping. Limit the change to `agent_tools/hermes_terminal_toolkit/command_utils.py` plus focused unit coverage. Do not introduce a full shell tokenizer; port Hermes' lightweight scanner/state machine that tracks quote/token boundaries, comments, parentheses, brace groups, chain operators, redirects, and real background `&` operators.
+**Architecture:** Keep the existing call site in `BaseEnvironment.execute()` unchanged: every foreground shell command still passes through `rewrite_compound_background()` after sudo preparation and before shell wrapping. Limit the change to `agent_tools/terminal_toolkit/command_utils.py` plus focused unit coverage. Do not introduce a full shell tokenizer; port reference implementation's lightweight scanner/state machine that tracks quote/token boundaries, comments, parentheses, brace groups, chain operators, redirects, and real background `&` operators.
 
-**Tech Stack:** Python 3.11, vendored Hermes terminal toolkit, pytest.
+**Tech Stack:** Python 3.11, vendored terminal toolkit, pytest.
 
 ---
 
 ## Current State
 
-- Current regex implementation lives in `agent_tools/hermes_terminal_toolkit/command_utils.py`.
-- Current caller is `agent_tools/hermes_terminal_toolkit/environments/base.py`, which imports and calls `rewrite_compound_background(exec_command)`.
+- Current regex implementation lives in `agent_tools/terminal_toolkit/command_utils.py`.
+- Current caller is `agent_tools/terminal_toolkit/environments/base.py`, which imports and calls `rewrite_compound_background(exec_command)`.
 - The regex only matches one-line shapes like `^(.*(?:&&|\|\||;)) tail &$`.
 - The regex can mis-handle shell syntax because it does not know whether `&` appears inside quotes, comments, redirects (`&>`, `2>&1`), parenthesized subshells, or existing brace groups.
-- Hermes reference file `/home/miku/projects/hermes-agent-main/tools/terminal_tool.py` has the desired state-machine version under `_rewrite_compound_background()`.
+- archived reference file `/home/miku/projects/reference-agent-main/tools/terminal_tool.py` has the desired state-machine version under `_rewrite_compound_background()`.
 
 ## Behavioral Contract
 
@@ -43,8 +43,8 @@
 
 ## File Structure
 
-- Modify `agent_tools/hermes_terminal_toolkit/command_utils.py`: replace regex `rewrite_compound_background()` with Hermes' state-machine implementation adapted to this module's public function name.
-- Modify `agent_tools/hermes_terminal_toolkit/command_utils.py`: add `_looks_like_env_assignment()` only if also porting Hermes' sudo env-assignment fix in the same file; otherwise leave sudo behavior unchanged to keep scope tight.
+- Modify `agent_tools/terminal_toolkit/command_utils.py`: replace regex `rewrite_compound_background()` with the reference implementation's state-machine implementation adapted to this module's public function name.
+- Modify `agent_tools/terminal_toolkit/command_utils.py`: add `_looks_like_env_assignment()` only if also porting reference implementation's sudo env-assignment fix in the same file; otherwise leave sudo behavior unchanged to keep scope tight.
 - Create `tests/test_command_utils.py`: focused unit tests for compound background rewriting.
 - Extend `tests/test_terminal_tools.py` only if an integration-level assertion is needed; unit tests should be enough because `BaseEnvironment.execute()` already calls the helper.
 
@@ -63,7 +63,7 @@ Create `tests/test_command_utils.py`:
 ```python
 import pytest
 
-from agent_tools.hermes_terminal_toolkit.command_utils import rewrite_compound_background
+from agent_tools.terminal_toolkit.command_utils import rewrite_compound_background
 
 
 @pytest.mark.parametrize(
@@ -119,15 +119,15 @@ git commit -m "test: cover compound background rewrite edge cases"
 
 ---
 
-## Task 2: Replace Regex Rewrite with Hermes State Machine
+## Task 2: Replace Regex Rewrite with reference implementation State Machine
 
 **Files:**
-- Modify: `agent_tools/hermes_terminal_toolkit/command_utils.py`
+- Modify: `agent_tools/terminal_toolkit/command_utils.py`
 - Test: `tests/test_command_utils.py`
 
 - [ ] **Step 1: Replace `rewrite_compound_background()` implementation**
 
-In `agent_tools/hermes_terminal_toolkit/command_utils.py`, replace the current regex implementation with this adapted Hermes implementation. Keep the public function name `rewrite_compound_background` because `BaseEnvironment.execute()` imports that name.
+In `agent_tools/terminal_toolkit/command_utils.py`, replace the current regex implementation with this adapted reference implementation. Keep the public function name `rewrite_compound_background` because `BaseEnvironment.execute()` imports that name.
 
 ```python
 def rewrite_compound_background(command: str) -> str:
@@ -258,7 +258,7 @@ Check whether `re` is still used elsewhere in `command_utils.py`.
 Run:
 
 ```bash
-rg -n "\bre\." agent_tools/hermes_terminal_toolkit/command_utils.py
+rg -n "\bre\." agent_tools/terminal_toolkit/command_utils.py
 ```
 
 Expected:
@@ -277,7 +277,7 @@ Expected: all tests pass.
 - [ ] **Step 4: Commit implementation**
 
 ```bash
-git add agent_tools/hermes_terminal_toolkit/command_utils.py tests/test_command_utils.py
+git add agent_tools/terminal_toolkit/command_utils.py tests/test_command_utils.py
 git commit -m "fix: rewrite compound background commands with scanner"
 ```
 
@@ -338,13 +338,13 @@ git commit -m "test: cover compound background terminal regressions"
 
 ---
 
-## Task 4: Decide Whether to Port Hermes' Sudo Env-assignment Scanner Fix
+## Task 4: Decide Whether to Port reference implementation's Sudo Env-assignment Scanner Fix
 
 **Files:**
-- Optional Modify: `agent_tools/hermes_terminal_toolkit/command_utils.py`
+- Optional Modify: `agent_tools/terminal_toolkit/command_utils.py`
 - Optional Modify: `tests/test_command_utils.py`
 
-- [ ] **Step 1: Compare current sudo scanner with Hermes reference**
+- [ ] **Step 1: Compare current sudo scanner with archived reference**
 
 Current project `_rewrite_real_sudo_invocations()` treats command start as false after any token, so it does not rewrite:
 
@@ -352,14 +352,14 @@ Current project `_rewrite_real_sudo_invocations()` treats command start as false
 FOO=bar sudo apt-get update
 ```
 
-Hermes reference adds `_looks_like_env_assignment()` and keeps `command_start=True` across leading `NAME=value` tokens.
+archived reference adds `_looks_like_env_assignment()` and keeps `command_start=True` across leading `NAME=value` tokens.
 
 - [ ] **Step 2: If scope allows, add sudo env-assignment tests**
 
 Append:
 
 ```python
-from agent_tools.hermes_terminal_toolkit.command_utils import _rewrite_real_sudo_invocations
+from agent_tools.terminal_toolkit.command_utils import _rewrite_real_sudo_invocations
 
 
 def test_rewrite_real_sudo_invocations_after_env_assignment():
@@ -402,7 +402,7 @@ Expected: all tests pass.
 - [ ] **Step 5: Commit only if included**
 
 ```bash
-git add agent_tools/hermes_terminal_toolkit/command_utils.py tests/test_command_utils.py
+git add agent_tools/terminal_toolkit/command_utils.py tests/test_command_utils.py
 git commit -m "fix: preserve sudo rewrite after env assignments"
 ```
 
@@ -413,8 +413,8 @@ If keeping scope strictly to compound background rewriting, skip this task and l
 ## Task 5: Final Verification
 
 **Files:**
-- Verify: `agent_tools/hermes_terminal_toolkit/command_utils.py`
-- Verify: `agent_tools/hermes_terminal_toolkit/environments/base.py`
+- Verify: `agent_tools/terminal_toolkit/command_utils.py`
+- Verify: `agent_tools/terminal_toolkit/environments/base.py`
 - Verify: `tests/test_command_utils.py`
 
 - [ ] **Step 1: Run focused test suite**
@@ -428,7 +428,7 @@ Expected: all tests pass.
 - [ ] **Step 2: Compile touched Python modules**
 
 ```bash
-/home/miku/miniforge3/envs/langchain/bin/python -m py_compile agent_tools/hermes_terminal_toolkit/command_utils.py agent_tools/hermes_terminal_toolkit/environments/base.py
+/home/miku/miniforge3/envs/langchain/bin/python -m py_compile agent_tools/terminal_toolkit/command_utils.py agent_tools/terminal_toolkit/environments/base.py
 ```
 
 Expected: no output and exit code `0`.
@@ -436,7 +436,7 @@ Expected: no output and exit code `0`.
 - [ ] **Step 3: Inspect final diff**
 
 ```bash
-git diff -- agent_tools/hermes_terminal_toolkit/command_utils.py tests/test_command_utils.py
+git diff -- agent_tools/terminal_toolkit/command_utils.py tests/test_command_utils.py
 ```
 
 Expected:
@@ -461,7 +461,7 @@ Expected:
 
 ```bash
 git status --short
-git add agent_tools/hermes_terminal_toolkit/command_utils.py tests/test_command_utils.py
+git add agent_tools/terminal_toolkit/command_utils.py tests/test_command_utils.py
 git commit -m "fix: harden compound background command rewrite"
 ```
 
@@ -480,7 +480,7 @@ git commit -m "fix: harden compound background command rewrite"
 
 ## Self-review
 
-- Spec coverage: The plan directly replaces the regex compound-background rewrite with the Hermes state-machine version and keeps project-specific public names/call sites intact.
+- Spec coverage: The plan directly replaces the regex compound-background rewrite with the reference implementation state-machine version and keeps project-specific public names/call sites intact.
 - Placeholder scan: No implementation step depends on TBD behavior; code snippets and commands are concrete.
 - Type/signature consistency: Existing public function name `rewrite_compound_background(command: str) -> str` is preserved, so `BaseEnvironment.execute()` requires no change.
 

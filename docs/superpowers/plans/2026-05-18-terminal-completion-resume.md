@@ -2,18 +2,18 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Consume Hermes `process_registry.completion_queue` inside the LangChain/LangGraph project runtime and trigger bounded same-thread agent continuation when background terminal processes complete or match watch patterns.
+**Goal:** Consumereference implementation `process_registry.completion_queue` inside the LangChain/LangGraph project runtime and trigger bounded same-thread agent continuation when background terminal processes complete or match watch patterns.
 
-**Architecture:** Add a project-native notification bridge instead of modifying Hermes internals. A small queue-drain module non-blockingly drains Hermes' global `completion_queue`, routes events by runtime-derived Hermes `task_id`, formats scoped events into `[IMPORTANT: ...]` user messages, and an opt-in agent runner invokes the same LangGraph thread again after each turn when relevant background events exist. CLI UI behavior is intentionally out of scope; future CLI/server code should call the runner/helper APIs introduced here.
+**Architecture:** Add a project-native notification bridge instead of modifying reference implementation internals. A small queue-drain module non-blockingly drains reference implementation's global `completion_queue`, routes events by runtime-derived reference implementation `task_id`, formats scoped events into `[IMPORTANT: ...]` user messages, and an opt-in agent runner invokes the same LangGraph thread again after each turn when relevant background events exist. CLI UI behavior is intentionally out of scope; future CLI/server code should call the runner/helper APIs introduced here.
 
-**Tech Stack:** Python 3.12, LangChain/LangGraph agents, Hermes terminal toolkit `process_registry`, existing `agent_core.session_context` task-id helpers, pytest via `/home/miku/miniforge3/envs/langchain/bin/python`.
+**Tech Stack:** Python 3.12, LangChain/LangGraph agents, terminal toolkit `process_registry`, existing `agent_core.session_context` task-id helpers, pytest via `/home/miku/miniforge3/envs/langchain/bin/python`.
 
 ---
 
 ## Current State
 
 - `agent_tools/terminal_tools.py` already exposes `notify_on_complete` and `watch_patterns` on `terminal(background=True)`.
-- Hermes already produces events into `process_registry.completion_queue`.
+- reference implementation already produces events into `process_registry.completion_queue`.
 - Current project has no consumer for that queue, so completion/watch events remain invisible to the LangChain agent.
 - Current project has no CLI or server loop in this repository; `agent.py` only exposes `agent = build_agent()`.
 - Existing lifecycle APIs already handle startup recovery, session cleanup, and new-message interrupt wiring.
@@ -22,8 +22,8 @@
 
 In scope:
 
-- Non-blocking drain of Hermes `completion_queue`.
-- Per-session routing using LangGraph `thread_id -> Hermes task_id`.
+- Non-blocking drain of reference implementation `completion_queue`.
+- Per-session routing using LangGraph `thread_id -> reference implementation task_id`.
 - Event formatting into concise `[IMPORTANT: ...]` user messages.
 - Bounded automatic same-thread continuation after an agent turn.
 - Tests for routing, formatting, queue safety, and bounded continuation.
@@ -34,7 +34,7 @@ Out of scope:
 - CLI UI or REPL loop implementation.
 - Push notifications to external clients.
 - Websocket/SSE streaming to users.
-- Changing Hermes producer behavior unless a minimal `task_id` field is needed for safer routing.
+- Changing reference implementation producer behavior unless a minimal `task_id` field is needed for safer routing.
 
 ## File Structure
 
@@ -50,9 +50,9 @@ Out of scope:
   - Drains terminal notifications after each turn.
   - Triggers bounded same-thread continuation with formatted messages.
 
-- Modify `agent_tools/hermes_terminal_toolkit/process_registry.py`
+- Modify `agent_tools/terminal_toolkit/process_registry.py`
   - Add `task_id` to completion/watch events where the source session is known.
-  - Keep existing event fields intact for Hermes compatibility.
+  - Keep existing event fields intact for reference implementation compatibility.
 
 - Modify `README.md`
   - Document notification bridge responsibilities and exact API calls for future CLI/server layers.
@@ -65,10 +65,10 @@ Out of scope:
 
 ---
 
-### Task 1: Add `task_id` to Hermes Queue Events
+### Task 1: Add `task_id` to reference implementation Queue Events
 
 **Files:**
-- Modify: `agent_tools/hermes_terminal_toolkit/process_registry.py`
+- Modify: `agent_tools/terminal_toolkit/process_registry.py`
 - Test: `tests/test_terminal_notifications.py`
 
 - [ ] **Step 1: Write failing tests for event task routing**
@@ -82,10 +82,10 @@ from types import SimpleNamespace
 
 def test_drain_routes_completion_event_by_task_id(monkeypatch):
     import agent_core.terminal_notifications as notifications
-    from agent_core.session_context import hermes_task_id_from_thread_id
+    from agent_core.session_context import runtime_task_id_from_thread_id
 
     queue = Queue()
-    task_id = hermes_task_id_from_thread_id("thread-1")
+    task_id = runtime_task_id_from_thread_id("thread-1")
     queue.put(
         {
             "type": "completion",
@@ -108,10 +108,10 @@ def test_drain_routes_completion_event_by_task_id(monkeypatch):
 
 def test_drain_routes_completion_event_by_registry_session_when_task_id_missing(monkeypatch):
     import agent_core.terminal_notifications as notifications
-    from agent_core.session_context import hermes_task_id_from_thread_id
+    from agent_core.session_context import runtime_task_id_from_thread_id
 
     queue = Queue()
-    task_id = hermes_task_id_from_thread_id("thread-1")
+    task_id = runtime_task_id_from_thread_id("thread-1")
     queue.put(
         {
             "type": "completion",
@@ -138,11 +138,11 @@ def test_drain_routes_completion_event_by_registry_session_when_task_id_missing(
 
 def test_drain_preserves_other_session_events(monkeypatch):
     import agent_core.terminal_notifications as notifications
-    from agent_core.session_context import hermes_task_id_from_thread_id
+    from agent_core.session_context import runtime_task_id_from_thread_id
 
     queue = Queue()
-    task_1 = hermes_task_id_from_thread_id("thread-1")
-    task_2 = hermes_task_id_from_thread_id("thread-2")
+    task_1 = runtime_task_id_from_thread_id("thread-1")
+    task_2 = runtime_task_id_from_thread_id("thread-2")
     queue.put({"type": "completion", "task_id": task_2, "session_id": "proc_2", "command": "job2"})
     queue.put({"type": "completion", "task_id": task_1, "session_id": "proc_1", "command": "job1"})
 
@@ -166,9 +166,9 @@ Run:
 
 Expected: FAIL with `ModuleNotFoundError: No module named 'agent_core.terminal_notifications'`.
 
-- [ ] **Step 3: Add `task_id` to known Hermes producer events**
+- [ ] **Step 3: Add `task_id` to known reference implementation producer events**
 
-In `agent_tools/hermes_terminal_toolkit/process_registry.py`, update every event emitted from a known `ProcessSession` to include `"task_id": session.task_id`.
+In `agent_tools/terminal_toolkit/process_registry.py`, update every event emitted from a known `ProcessSession` to include `"task_id": session.task_id`.
 
 For `_check_watch_patterns()` `watch_disabled` event, include:
 
@@ -207,8 +207,8 @@ from collections import defaultdict, deque
 from queue import Empty
 from typing import Any
 
-from agent_core.session_context import hermes_task_id_from_thread_id
-from agent_tools.hermes_terminal_toolkit.process_registry import process_registry
+from agent_core.session_context import runtime_task_id_from_thread_id
+from agent_tools.terminal_toolkit.process_registry import process_registry
 
 _GLOBAL_TASK_ID = "__global__"
 _pending_events_by_task: dict[str, deque[dict[str, Any]]] = defaultdict(deque)
@@ -221,7 +221,7 @@ def _event_task_id(event: dict[str, Any]) -> str | None:
 
     thread_id = event.get("thread_id")
     if isinstance(thread_id, str) and thread_id:
-        return hermes_task_id_from_thread_id(thread_id)
+        return runtime_task_id_from_thread_id(thread_id)
 
     session_id = event.get("session_id")
     if isinstance(session_id, str) and session_id:
@@ -260,16 +260,16 @@ def drain_terminal_notifications_for_thread_id(
     max_events: int = 10,
     include_global: bool = True,
 ) -> list[dict[str, Any]]:
-    """Return queued Hermes terminal events for this LangGraph thread.
+    """Return queued terminal events for this LangGraph thread.
 
-    This drains the global Hermes queue into per-task buffers without dropping
+    This drains the global reference implementation queue into per-task buffers without dropping
     events for other sessions.
     """
     if not thread_id:
         return []
 
     _drain_completion_queue(max_drain=max_drain)
-    task_id = hermes_task_id_from_thread_id(thread_id)
+    task_id = runtime_task_id_from_thread_id(thread_id)
     events: list[dict[str, Any]] = []
 
     while _pending_events_by_task[task_id] and len(events) < max_events:
@@ -295,13 +295,13 @@ Expected: PASS for the three routing tests.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add agent_tools/hermes_terminal_toolkit/process_registry.py agent_core/terminal_notifications.py tests/test_terminal_notifications.py
-git commit -m "feat: route Hermes terminal notifications by task"
+git add agent_tools/terminal_toolkit/process_registry.py agent_core/terminal_notifications.py tests/test_terminal_notifications.py
+git commit -m "feat: route terminal notifications by task"
 ```
 
 ---
 
-### Task 2: Format Hermes Events as Agent Continuation Messages
+### Task 2: Format reference implementation Events as Agent Continuation Messages
 
 **Files:**
 - Modify: `agent_core/terminal_notifications.py`
@@ -420,7 +420,7 @@ def format_terminal_notification_message(
     *,
     max_output_chars: int = 1200,
 ) -> str:
-    """Format Hermes background events as one model-visible continuation message."""
+    """Format reference implementation background events as one model-visible continuation message."""
     if not events:
         return ""
 
@@ -430,7 +430,7 @@ def format_terminal_notification_message(
     )
     return (
         "[IMPORTANT: Background terminal update]\n"
-        "One or more Hermes background processes produced notifications for this conversation.\n"
+        "One or more reference implementation background processes produced notifications for this conversation.\n"
         f"{formatted_events}\n\n"
         "Decide whether to inspect logs with process(action='log'|'poll'), continue the task, "
         "report completion to the user, or kill the process if it is no longer needed."
@@ -576,7 +576,7 @@ from agent_core.terminal_notifications import (
 )
 
 DEFAULT_MAX_AUTO_RESUMES = 3
-MAX_AUTO_RESUMES_ENV = "HERMES_TERMINAL_MAX_AUTO_RESUMES"
+MAX_AUTO_RESUMES_ENV = "TERMINAL_MAX_AUTO_RESUMES"
 
 
 def _thread_id_from_config(config: dict[str, Any] | None) -> str | None:
@@ -760,11 +760,11 @@ In `README.md`, add this subsection under `Embedding applications are responsibl
 ```markdown
 Background completion notifications:
 
-- Hermes queues background process events in `process_registry.completion_queue` when `terminal(background=True, notify_on_complete=True)` exits or when `watch_patterns` match.
+- reference implementation queues background process events in `process_registry.completion_queue` when `terminal(background=True, notify_on_complete=True)` exits or when `watch_patterns` match.
 - This project consumes those events through `agent_core.terminal_notifications.drain_terminal_notifications_for_thread_id(thread_id)`.
 - Embedding applications that want automatic continuation should call `agent_core.agent_runner.invoke_agent_with_terminal_notifications(agent, input_data, config)`.
-- The runner uses the same `configurable.thread_id` for continuation messages, so the resumed turn stays in the same LangGraph conversation thread and maps to the same Hermes `task_id`.
-- Auto-resume is bounded by `HERMES_TERMINAL_MAX_AUTO_RESUMES`, default `3`, to avoid loops caused by noisy background processes.
+- The runner uses the same `configurable.thread_id` for continuation messages, so the resumed turn stays in the same LangGraph conversation thread and maps to the samereference implementation `task_id`.
+- Auto-resume is bounded by `TERMINAL_MAX_AUTO_RESUMES`, default `3`, to avoid loops caused by noisy background processes.
 - CLI-specific display, idle polling, websocket delivery, and user-facing push notifications are not implemented here; future CLI/server code should build on these helper APIs.
 ```
 
@@ -793,9 +793,9 @@ from queue import Queue
 def test_runner_drains_real_queue_and_passes_formatted_notification(monkeypatch):
     import agent_core.agent_runner as runner
     import agent_core.terminal_notifications as notifications
-    from agent_core.session_context import hermes_task_id_from_thread_id
+    from agent_core.session_context import runtime_task_id_from_thread_id
 
-    task_id = hermes_task_id_from_thread_id("thread-1")
+    task_id = runtime_task_id_from_thread_id("thread-1")
     queue = Queue()
     queue.put(
         {
@@ -883,7 +883,7 @@ Expected: PASS.
 Run:
 
 ```bash
-/home/miku/miniforge3/envs/langchain/bin/python -m py_compile agent_core/terminal_notifications.py agent_core/agent_runner.py agent_core/terminal_lifecycle.py agent_tools/terminal_tools.py agent_tools/hermes_terminal_toolkit/process_registry.py
+/home/miku/miniforge3/envs/langchain/bin/python -m py_compile agent_core/terminal_notifications.py agent_core/agent_runner.py agent_core/terminal_lifecycle.py agent_tools/terminal_tools.py agent_tools/terminal_toolkit/process_registry.py
 ```
 
 Expected: no output and exit code `0`.
@@ -904,7 +904,7 @@ Use `superpowers:requesting-code-review` with scope:
 
 ```text
 Review range: main..HEAD
-Focus: Hermes completion_queue consumption, per-task notification routing, event formatting, bounded same-thread auto-resume, no CLI coupling, lifecycle compatibility, tests, and README contract.
+Focus: reference implementation completion_queue consumption, per-task notification routing, event formatting, bounded same-thread auto-resume, no CLI coupling, lifecycle compatibility, tests, and README contract.
 ```
 
 Expected: reviewer reports no Critical/Important findings, or findings are fixed through `superpowers:receiving-code-review`.
@@ -914,7 +914,7 @@ Expected: reviewer reports no Critical/Important findings, or findings are fixed
 If verification or review fixes changed files, commit:
 
 ```bash
-git add agent_core/terminal_notifications.py agent_core/agent_runner.py agent_tools/hermes_terminal_toolkit/process_registry.py tests/test_terminal_notifications.py tests/test_agent_runner.py README.md
+git add agent_core/terminal_notifications.py agent_core/agent_runner.py agent_tools/terminal_toolkit/process_registry.py tests/test_terminal_notifications.py tests/test_agent_runner.py README.md
 git commit -m "fix: harden terminal notification resume flow"
 ```
 
@@ -923,16 +923,16 @@ git commit -m "fix: harden terminal notification resume flow"
 ## Design Notes
 
 - Queue consumption must be non-blocking. Agent runs should never wait indefinitely for background events.
-- Draining the global Hermes queue is destructive, so events for other sessions must be buffered instead of dropped.
+- Draining the global reference implementation queue is destructive, so events for other sessions must be buffered instead of dropped.
 - `task_id` is still hidden from model-visible tool schemas. It is only used internally for event routing.
-- The continuation message is intentionally a user message, matching Hermes CLI's `_pending_input` approach, but the content is generated by trusted project code.
+- The continuation message is intentionally a user message, matching CLI reference's `_pending_input` approach, but the content is generated by trusted project code.
 - Auto-resume is opt-in via `invoke_agent_with_terminal_notifications()` because this repository currently lacks a server/CLI event loop.
 - The exported `agent` in `agent.py` should not be wrapped until there is an explicit runtime that owns user-session semantics. LangGraph Studio or other embedders may expect a plain graph.
 - Global watch overflow events do not include user output and may be delivered to the next session-specific drain. This is acceptable for now because they describe toolkit-wide throttling, not private process data.
 
 ## Self-Review
 
-- Spec coverage: The plan consumes Hermes `completion_queue`, handles `completion`, `watch_match`, `watch_disabled`, and global overflow event types, and triggers bounded same-thread continuation. CLI work is explicitly excluded.
+- Spec coverage: The plan consumesreference implementation `completion_queue`, handles `completion`, `watch_match`, `watch_disabled`, and global overflow event types, and triggers bounded same-thread continuation. CLI work is explicitly excluded.
 - Placeholder scan: No `TBD`, vague "add tests", or undefined implementation steps remain.
-- Type consistency: `thread_id` remains LangGraph-facing, `task_id` remains Hermes-facing, and the new runner accepts the same `agent.invoke(input_data, config)` shape already used by this codebase.
+- Type consistency: `thread_id` remains LangGraph-facing, `task_id` remains reference implementation-facing, and the new runner accepts the same `agent.invoke(input_data, config)` shape already used by this codebase.
 

@@ -4,7 +4,7 @@
 
 Add first-class Enterprise WeChat group robot delivery for cron jobs while staying inside the current cron runtime and delivery architecture.
 
-The first release supports Enterprise WeChat group robot webhooks only. It does not add personal WeChat delivery, Enterprise WeChat application messages, live Hermes gateway routing, mentions, media upload, or multi-message splitting.
+The first release supports Enterprise WeChat group robot webhooks only. It does not add personal WeChat delivery, Enterprise WeChat application messages, live gateway reference routing, mentions, media upload, or multi-message splitting.
 
 ## Context
 
@@ -16,7 +16,7 @@ The current cron system already has the runtime pieces needed for a production d
 - `DeliveryRegistry` validates delivery targets and supports default adapters plus registered adapter factories.
 - `WebhookDeliveryAdapter` already establishes the retry classification pattern for HTTP delivery.
 
-Hermes treats platforms such as `wecom` and `weixin` as platform delivery targets and routes them through a gateway/platform adapter layer. This project should not copy that whole gateway layer for the first WeCom milestone. The current project is better served by a native `wecom` delivery adapter that plugs into the existing delivery event, retry, and observability model.
+Reference implementation treats platforms such as `wecom` and `weixin` as platform delivery targets and routes them through a gateway/platform adapter layer. This project should not copy that whole gateway layer for the first WeCom milestone. The current project is better served by a native `wecom` delivery adapter that plugs into the existing delivery event, retry, and observability model.
 
 ## Scope
 
@@ -38,7 +38,7 @@ Out of scope:
 - `mentioned_list` and `mentioned_mobile_list`.
 - Attachment/media forwarding.
 - Automatic splitting into multiple messages.
-- Hermes live gateway adapter routing.
+- reference implementation live gateway adapter routing.
 
 ## Delivery Target Semantics
 

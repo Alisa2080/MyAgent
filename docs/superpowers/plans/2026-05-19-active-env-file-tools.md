@@ -1,18 +1,18 @@
-# Hermes Active Env File Tools Implementation Plan
+# Reference Implementation Active Env File Tools Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Extract shared Hermes active-environment acquisition into `get_or_create_active_env(task_id, workdir=None, timeout=None)` and make file tools wrap that Hermes environment instead of `LocalTerminalEnvironment`.
+**Goal:** Extract shared reference implementation active-environment acquisition into `get_or_create_active_env(task_id, workdir=None, timeout=None)` and make file tools wrap that terminal environment instead of `LocalTerminalEnvironment`.
 
-**Architecture:** Move the environment creation/reuse path out of `terminal_tool()` into a public helper in `agent_tools/hermes_terminal_toolkit/terminal_tool.py`. `terminal_tool()` and `agent_tools/file_toolkit/file_tools.py` will both use that helper, so local, Docker, Singularity, and SSH commands share `_active_environments`, creation locks, idle activity tracking, and cleanup behavior. File operations remain shell-based through `ShellFileOperations`; only the backend object changes.
+**Architecture:** Move the environment creation/reuse path out of `terminal_tool()` into a public helper in `agent_tools/terminal_toolkit/terminal_tool.py`. `terminal_tool()` and `agent_tools/file_toolkit/file_tools.py` will both use that helper, so local, Docker, Singularity, and SSH commands share `_active_environments`, creation locks, idle activity tracking, and cleanup behavior. File operations remain shell-based through `ShellFileOperations`; only the backend object changes.
 
-**Tech Stack:** Python 3.11, pytest, LangChain tool wrappers, vendored Hermes terminal toolkit, existing `ShellFileOperations`.
+**Tech Stack:** Python 3.11, pytest, LangChain tool wrappers, vendored terminal toolkit, existing `ShellFileOperations`.
 
 ---
 
 ## File Structure
 
-- Modify: `agent_tools/hermes_terminal_toolkit/terminal_tool.py`
+- Modify: `agent_tools/terminal_toolkit/terminal_tool.py`
   - Add `get_or_create_active_env(task_id, workdir=None, timeout=None)`.
   - Add small internal helpers for environment image/config construction if needed.
   - Refactor `terminal_tool()` to call the new helper instead of duplicating `_active_environments` / `_creation_locks` logic.
@@ -20,7 +20,7 @@
 
 - Modify: `agent_tools/file_toolkit/file_tools.py`
   - Replace `LocalTerminalEnvironment` usage with `get_or_create_active_env()`.
-  - Keep `_file_ops_cache` keyed by Hermes `task_id`.
+  - Keep `_file_ops_cache` keyed byreference implementation `task_id`.
   - Avoid holding `_file_ops_lock` while creating Docker/Singularity/SSH environments.
 
 - Modify: `agent_tools/file_toolkit/__init__.py` only if public exports need adjustment.
@@ -29,13 +29,13 @@
 - Modify: `agent_tools/file_toolkit/terminal_environment.py`
   - Expected: no change in this plan. It remains as a legacy/minimal adapter for direct internal use unless later cleanup removes it.
 
-- Create: `tests/test_hermes_active_env.py`
+- Create: `tests/test_active_env.py`
   - Unit-test helper creation/reuse behavior without starting real Docker/Singularity/SSH.
   - Unit-test `terminal_tool()` delegates env acquisition to the helper.
   - Unit-test `cleanup_vm()` and idle cleanup clear file-op cache.
 
-- Create: `tests/test_file_tools_hermes_env.py`
-  - Unit-test file toolkit `_get_file_ops()` wraps the Hermes env returned by `get_or_create_active_env()`.
+- Create: `tests/test_file_tools_active_env.py`
+  - Unit-test file toolkit `_get_file_ops()` wraps the terminal env returned by `get_or_create_active_env()`.
   - Unit-test cache refresh when the active env object changes.
 
 - Existing regression tests:
@@ -47,13 +47,13 @@
 ## Non-Goals
 
 - Do not redesign workspace mapping for Docker/Singularity/SSH in this plan.
-- Do not convert `list_directory` / `file_info` to Hermes-backed shell operations in this plan.
+- Do not convert `list_directory` / `file_info` to runtime-backed shell operations in this plan.
 - Do not remove `LocalTerminalEnvironment`; after this change it should simply stop being the default backend for model-visible file tools.
 - Do not add real Docker/Singularity/SSH integration tests that require host services; keep this plan unit-testable in the current CI environment.
 
 ## Behavior Contract
 
-- `get_or_create_active_env(task_id, workdir=None, timeout=None)` returns the active environment object for the resolved Hermes task id.
+- `get_or_create_active_env(task_id, workdir=None, timeout=None)` returns the active environment object for the resolved runtime task id.
 - The helper owns `_get_env_config()`, `_start_cleanup_thread()`, `_active_environments`, `_last_activity`, `_creation_locks`, and environment construction.
 - The helper normalizes `task_id` through `_resolve_container_task_id()`.
 - `timeout` controls the timeout used when creating a new environment; existing environments are reused unchanged.
@@ -66,12 +66,12 @@
 ### Task 1: Add Failing Active-Env Helper Tests
 
 **Files:**
-- Create: `tests/test_hermes_active_env.py`
-- Test: `tests/test_hermes_active_env.py`
+- Create: `tests/test_active_env.py`
+- Test: `tests/test_active_env.py`
 
 - [ ] **Step 1: Write helper creation/reuse tests**
 
-Create `tests/test_hermes_active_env.py` with:
+Create `tests/test_active_env.py` with:
 
 ```python
 import json
@@ -126,7 +126,7 @@ def _fake_config(env_type="local"):
 
 
 def test_get_or_create_active_env_creates_and_reuses(monkeypatch):
-    from agent_tools.hermes_terminal_toolkit import terminal_tool
+    from agent_tools.terminal_toolkit import terminal_tool
 
     _reset_terminal_env_state(monkeypatch, terminal_tool)
     created = []
@@ -152,7 +152,7 @@ def test_get_or_create_active_env_creates_and_reuses(monkeypatch):
 
 
 def test_get_or_create_active_env_uses_timeout_for_new_environment(monkeypatch):
-    from agent_tools.hermes_terminal_toolkit import terminal_tool
+    from agent_tools.terminal_toolkit import terminal_tool
 
     _reset_terminal_env_state(monkeypatch, terminal_tool)
     created = []
@@ -171,7 +171,7 @@ def test_get_or_create_active_env_uses_timeout_for_new_environment(monkeypatch):
 
 
 def test_get_or_create_active_env_builds_docker_config(monkeypatch):
-    from agent_tools.hermes_terminal_toolkit import terminal_tool
+    from agent_tools.terminal_toolkit import terminal_tool
 
     _reset_terminal_env_state(monkeypatch, terminal_tool)
     created = []
@@ -205,18 +205,18 @@ def test_get_or_create_active_env_builds_docker_config(monkeypatch):
 Run:
 
 ```bash
-PYTHONPATH=. pytest tests/test_hermes_active_env.py -q
+PYTHONPATH=. pytest tests/test_active_env.py -q
 ```
 
-Expected: FAIL with `AttributeError: module 'agent_tools.hermes_terminal_toolkit.terminal_tool' has no attribute 'get_or_create_active_env'`.
+Expected: FAIL with `AttributeError: module 'agent_tools.terminal_toolkit.terminal_tool' has no attribute 'get_or_create_active_env'`.
 
 - [ ] **Step 3: Commit failing helper tests**
 
 Run:
 
 ```bash
-git add tests/test_hermes_active_env.py
-git commit -m "test: cover shared Hermes active env helper"
+git add tests/test_active_env.py
+git commit -m "test: cover shared reference implementation active env helper"
 ```
 
 ---
@@ -224,12 +224,12 @@ git commit -m "test: cover shared Hermes active env helper"
 ### Task 2: Implement `get_or_create_active_env`
 
 **Files:**
-- Modify: `agent_tools/hermes_terminal_toolkit/terminal_tool.py`
-- Test: `tests/test_hermes_active_env.py`
+- Modify: `agent_tools/terminal_toolkit/terminal_tool.py`
+- Test: `tests/test_active_env.py`
 
 - [ ] **Step 1: Add helper implementation**
 
-In `agent_tools/hermes_terminal_toolkit/terminal_tool.py`, insert this helper after `_cleanup_thread_worker()` and before `_start_cleanup_thread()`:
+In `agent_tools/terminal_toolkit/terminal_tool.py`, insert this helper after `_cleanup_thread_worker()` and before `_start_cleanup_thread()`:
 
 ```python
 def _image_for_env_type(config: dict, env_type: str) -> str:
@@ -272,7 +272,7 @@ def get_or_create_active_env(
     workdir: Optional[str] = None,
     timeout: Optional[int] = None,
 ):
-    """Return the active Hermes environment for *task_id*, creating it if needed.
+    """Return the active terminal environment for *task_id*, creating it if needed.
 
     This is the single owner of environment config resolution, environment
     creation locks, active-env reuse, and last-activity tracking.  ``workdir``
@@ -344,7 +344,7 @@ def get_or_create_active_env(
 Run:
 
 ```bash
-PYTHONPATH=. pytest tests/test_hermes_active_env.py::test_get_or_create_active_env_creates_and_reuses tests/test_hermes_active_env.py::test_get_or_create_active_env_uses_timeout_for_new_environment tests/test_hermes_active_env.py::test_get_or_create_active_env_builds_docker_config -q
+PYTHONPATH=. pytest tests/test_active_env.py::test_get_or_create_active_env_creates_and_reuses tests/test_active_env.py::test_get_or_create_active_env_uses_timeout_for_new_environment tests/test_active_env.py::test_get_or_create_active_env_builds_docker_config -q
 ```
 
 Expected: PASS.
@@ -364,8 +364,8 @@ Expected: PASS. `terminal_tool()` has not been refactored yet, so this verifies 
 Run:
 
 ```bash
-git add agent_tools/hermes_terminal_toolkit/terminal_tool.py tests/test_hermes_active_env.py
-git commit -m "feat: add shared Hermes active env helper"
+git add agent_tools/terminal_toolkit/terminal_tool.py tests/test_active_env.py
+git commit -m "feat: add shared reference implementation active env helper"
 ```
 
 ---
@@ -373,17 +373,17 @@ git commit -m "feat: add shared Hermes active env helper"
 ### Task 3: Refactor `terminal_tool()` To Use The Helper
 
 **Files:**
-- Modify: `agent_tools/hermes_terminal_toolkit/terminal_tool.py`
-- Test: `tests/test_hermes_active_env.py`
+- Modify: `agent_tools/terminal_toolkit/terminal_tool.py`
+- Test: `tests/test_active_env.py`
 - Test: `tests/test_terminal_tools.py`
 
 - [ ] **Step 1: Add failing delegation test**
 
-Append this test to `tests/test_hermes_active_env.py`:
+Append this test to `tests/test_active_env.py`:
 
 ```python
 def test_terminal_tool_uses_get_or_create_active_env(monkeypatch):
-    from agent_tools.hermes_terminal_toolkit import terminal_tool
+    from agent_tools.terminal_toolkit import terminal_tool
 
     fake_env = FakeEnv(cwd="/workspace")
     helper_calls = []
@@ -424,14 +424,14 @@ def test_terminal_tool_uses_get_or_create_active_env(monkeypatch):
 Run:
 
 ```bash
-PYTHONPATH=. pytest tests/test_hermes_active_env.py::test_terminal_tool_uses_get_or_create_active_env -q
+PYTHONPATH=. pytest tests/test_active_env.py::test_terminal_tool_uses_get_or_create_active_env -q
 ```
 
 Expected: FAIL because `terminal_tool()` still contains inline environment lookup/creation and never calls the helper.
 
 - [ ] **Step 3: Replace inline environment acquisition in `terminal_tool()`**
 
-In `agent_tools/hermes_terminal_toolkit/terminal_tool.py`, keep the initial command validation, config loading, timeout/background guidance, approval guard, and workdir validation. Replace the large block from `_start_cleanup_thread()` through `_create_environment(...)` with:
+In `agent_tools/terminal_toolkit/terminal_tool.py`, keep the initial command validation, config loading, timeout/background guidance, approval guard, and workdir validation. Replace the large block from `_start_cleanup_thread()` through `_create_environment(...)` with:
 
 ```python
         env = get_or_create_active_env(
@@ -502,7 +502,7 @@ Keep the existing background and foreground execution code after this point unch
 Run:
 
 ```bash
-PYTHONPATH=. pytest tests/test_hermes_active_env.py::test_terminal_tool_uses_get_or_create_active_env tests/test_terminal_tools.py -q
+PYTHONPATH=. pytest tests/test_active_env.py::test_terminal_tool_uses_get_or_create_active_env tests/test_terminal_tools.py -q
 ```
 
 Expected: PASS.
@@ -522,23 +522,23 @@ Expected: PASS.
 Run:
 
 ```bash
-git add agent_tools/hermes_terminal_toolkit/terminal_tool.py tests/test_hermes_active_env.py
-git commit -m "refactor: share Hermes env acquisition in terminal tool"
+git add agent_tools/terminal_toolkit/terminal_tool.py tests/test_active_env.py
+git commit -m "refactor: share terminal env acquisition in terminal tool"
 ```
 
 ---
 
-### Task 4: Make File Tools Wrap Hermes Active Env
+### Task 4: Make File Tools Wrap reference implementation Active Env
 
 **Files:**
 - Modify: `agent_tools/file_toolkit/file_tools.py`
-- Create: `tests/test_file_tools_hermes_env.py`
-- Test: `tests/test_file_tools_hermes_env.py`
+- Create: `tests/test_file_tools_active_env.py`
+- Test: `tests/test_file_tools_active_env.py`
 - Test: `tests/test_file_tools_runtime_task_id.py`
 
 - [ ] **Step 1: Write failing file-ops backend tests**
 
-Create `tests/test_file_tools_hermes_env.py` with:
+Create `tests/test_file_tools_active_env.py` with:
 
 ```python
 class FakeEnv:
@@ -558,7 +558,7 @@ class FakeEnv:
         return {"output": "", "returncode": 0}
 
 
-def test_get_file_ops_wraps_hermes_active_env(monkeypatch):
+def test_get_file_ops_wraps_runtime_active_env(monkeypatch):
     import agent_tools.file_toolkit.file_tools as file_tools
 
     fake_env = FakeEnv(cwd="/workspace")
@@ -627,7 +627,7 @@ def test_get_file_ops_refreshes_wrapper_when_cached_env_changes(monkeypatch):
 Run:
 
 ```bash
-PYTHONPATH=. pytest tests/test_file_tools_hermes_env.py -q
+PYTHONPATH=. pytest tests/test_file_tools_active_env.py -q
 ```
 
 Expected: FAIL because `agent_tools.file_toolkit.file_tools` has no `get_or_create_active_env` import and `_get_file_ops()` still creates `LocalTerminalEnvironment`.
@@ -643,14 +643,14 @@ from agent_tools.file_toolkit.terminal_environment import LocalTerminalEnvironme
 to:
 
 ```python
-from agent_tools.hermes_terminal_toolkit.terminal_tool import get_or_create_active_env
+from agent_tools.terminal_toolkit.terminal_tool import get_or_create_active_env
 ```
 
 Then replace `_get_file_ops()` with:
 
 ```python
 def _get_file_ops(task_id: str = "default") -> ShellFileOperations:
-    """Get or create ShellFileOperations backed by this task's Hermes env."""
+    """Get or create ShellFileOperations backed by this task's terminal env."""
     effective_task_id = task_id or "default"
 
     with _file_ops_lock:
@@ -689,7 +689,7 @@ __all__ = [
 Run:
 
 ```bash
-PYTHONPATH=. pytest tests/test_file_tools_hermes_env.py -q
+PYTHONPATH=. pytest tests/test_file_tools_active_env.py -q
 ```
 
 Expected: PASS.
@@ -709,26 +709,26 @@ Expected: PASS.
 Run:
 
 ```bash
-git add agent_tools/file_toolkit/file_tools.py tests/test_file_tools_hermes_env.py
-git commit -m "refactor: back file tools with Hermes active env"
+git add agent_tools/file_toolkit/file_tools.py tests/test_file_tools_active_env.py
+git commit -m "refactor: back file tools with reference implementation active env"
 ```
 
 ---
 
-### Task 5: Clear File-Ops Cache When Hermes Environments Are Cleaned
+### Task 5: Clear File-Ops Cache When reference implementation Environments Are Cleaned
 
 **Files:**
-- Modify: `agent_tools/hermes_terminal_toolkit/terminal_tool.py`
-- Modify: `tests/test_hermes_active_env.py`
-- Test: `tests/test_hermes_active_env.py`
+- Modify: `agent_tools/terminal_toolkit/terminal_tool.py`
+- Modify: `tests/test_active_env.py`
+- Test: `tests/test_active_env.py`
 
 - [ ] **Step 1: Add failing cleanup cache tests**
 
-Append these tests to `tests/test_hermes_active_env.py`:
+Append these tests to `tests/test_active_env.py`:
 
 ```python
 def test_cleanup_vm_clears_file_ops_cache(monkeypatch):
-    from agent_tools.hermes_terminal_toolkit import terminal_tool
+    from agent_tools.terminal_toolkit import terminal_tool
     import agent_tools.file_toolkit.file_tools as file_tools
 
     _reset_terminal_env_state(monkeypatch, terminal_tool)
@@ -747,7 +747,7 @@ def test_cleanup_vm_clears_file_ops_cache(monkeypatch):
 
 
 def test_cleanup_inactive_envs_clears_file_ops_cache(monkeypatch):
-    from agent_tools.hermes_terminal_toolkit import terminal_tool
+    from agent_tools.terminal_toolkit import terminal_tool
     import agent_tools.file_toolkit.file_tools as file_tools
 
     _reset_terminal_env_state(monkeypatch, terminal_tool)
@@ -771,14 +771,14 @@ def test_cleanup_inactive_envs_clears_file_ops_cache(monkeypatch):
 Run:
 
 ```bash
-PYTHONPATH=. pytest tests/test_hermes_active_env.py::test_cleanup_vm_clears_file_ops_cache tests/test_hermes_active_env.py::test_cleanup_inactive_envs_clears_file_ops_cache -q
+PYTHONPATH=. pytest tests/test_active_env.py::test_cleanup_vm_clears_file_ops_cache tests/test_active_env.py::test_cleanup_inactive_envs_clears_file_ops_cache -q
 ```
 
 Expected: FAIL because cleanup currently does not clear `_file_ops_cache`.
 
 - [ ] **Step 3: Add file-op cache invalidation helper**
 
-In `agent_tools/hermes_terminal_toolkit/terminal_tool.py`, add this helper near `cleanup_vm()`:
+In `agent_tools/terminal_toolkit/terminal_tool.py`, add this helper near `cleanup_vm()`:
 
 ```python
 def _clear_file_ops_cache_for_task(task_id: str) -> None:
@@ -830,7 +830,7 @@ def cleanup_vm(task_id: str):
 Run:
 
 ```bash
-PYTHONPATH=. pytest tests/test_hermes_active_env.py::test_cleanup_vm_clears_file_ops_cache tests/test_hermes_active_env.py::test_cleanup_inactive_envs_clears_file_ops_cache -q
+PYTHONPATH=. pytest tests/test_active_env.py::test_cleanup_vm_clears_file_ops_cache tests/test_active_env.py::test_cleanup_inactive_envs_clears_file_ops_cache -q
 ```
 
 Expected: PASS.
@@ -850,8 +850,8 @@ Expected: PASS.
 Run:
 
 ```bash
-git add agent_tools/hermes_terminal_toolkit/terminal_tool.py tests/test_hermes_active_env.py
-git commit -m "fix: clear file ops cache when Hermes envs clean up"
+git add agent_tools/terminal_toolkit/terminal_tool.py tests/test_active_env.py
+git commit -m "fix: clear file ops cache when terminal envs clean up"
 ```
 
 ---
@@ -859,20 +859,20 @@ git commit -m "fix: clear file ops cache when Hermes envs clean up"
 ### Task 6: Add End-To-End Local File Tool Smoke Test
 
 **Files:**
-- Modify: `tests/test_file_tools_hermes_env.py`
-- Test: `tests/test_file_tools_hermes_env.py`
+- Modify: `tests/test_file_tools_active_env.py`
+- Test: `tests/test_file_tools_active_env.py`
 
-- [ ] **Step 1: Add local Hermes-backed file operation smoke test**
+- [ ] **Step 1: Add local runtime-backed file operation smoke test**
 
-Append this test to `tests/test_file_tools_hermes_env.py`:
+Append this test to `tests/test_file_tools_active_env.py`:
 
 ```python
 import json
 
 
-def test_file_tools_use_shared_local_hermes_env_for_real_file_ops(tmp_path, monkeypatch):
+def test_file_tools_use_shared_local_runtime_env_for_real_file_ops(tmp_path, monkeypatch):
     import agent_tools.file_toolkit.file_tools as file_tools
-    from agent_tools.hermes_terminal_toolkit import terminal_tool
+    from agent_tools.terminal_toolkit import terminal_tool
 
     file_tools.clear_file_ops_cache()
     terminal_tool.cleanup_vm("task-real-file")
@@ -883,12 +883,12 @@ def test_file_tools_use_shared_local_hermes_env_for_real_file_ops(tmp_path, monk
 
     write_raw = file_tools.write_file_tool(
         path="notes.txt",
-        content="hello from hermes env\n",
+        content="hello from runtime env\n",
         task_id="task-real-file",
     )
     write_payload = json.loads(write_raw)
     assert write_payload.get("error") is None
-    assert write_payload["bytes_written"] == len("hello from hermes env\n")
+    assert write_payload["bytes_written"] == len("hello from runtime env\n")
 
     read_raw = file_tools.read_file_tool(
         path="notes.txt",
@@ -898,7 +898,7 @@ def test_file_tools_use_shared_local_hermes_env_for_real_file_ops(tmp_path, monk
     )
     read_payload = json.loads(read_raw)
     assert read_payload.get("error") is None
-    assert "hello from hermes env" in read_payload["content"]
+    assert "hello from runtime env" in read_payload["content"]
 
     active = terminal_tool.get_active_env("task-real-file")
     assert active is not None
@@ -912,7 +912,7 @@ def test_file_tools_use_shared_local_hermes_env_for_real_file_ops(tmp_path, monk
 Run:
 
 ```bash
-PYTHONPATH=. pytest tests/test_file_tools_hermes_env.py::test_file_tools_use_shared_local_hermes_env_for_real_file_ops -q
+PYTHONPATH=. pytest tests/test_file_tools_active_env.py::test_file_tools_use_shared_local_runtime_env_for_real_file_ops -q
 ```
 
 Expected: PASS.
@@ -922,7 +922,7 @@ Expected: PASS.
 Run:
 
 ```bash
-PYTHONPATH=. pytest tests/test_file_tools_hermes_env.py tests/test_file_tools_runtime_task_id.py tests/test_terminal_tools.py tests/test_terminal_lifecycle.py tests/test_process_lifecycle.py -q
+PYTHONPATH=. pytest tests/test_file_tools_active_env.py tests/test_file_tools_runtime_task_id.py tests/test_terminal_tools.py tests/test_terminal_lifecycle.py tests/test_process_lifecycle.py -q
 ```
 
 Expected: PASS.
@@ -932,8 +932,8 @@ Expected: PASS.
 Run:
 
 ```bash
-git add tests/test_file_tools_hermes_env.py
-git commit -m "test: smoke file tools through shared Hermes env"
+git add tests/test_file_tools_active_env.py
+git commit -m "test: smoke file tools through shared terminal env"
 ```
 
 ---
@@ -942,7 +942,7 @@ git commit -m "test: smoke file tools through shared Hermes env"
 
 **Files:**
 - Modify: `agent_tools/file_toolkit/README.md`
-- Modify: `agent_tools/hermes_terminal_toolkit/README.md`
+- Modify: `agent_tools/terminal_toolkit/README.md`
 - Test: full focused suite
 
 - [ ] **Step 1: Update file toolkit README**
@@ -952,7 +952,7 @@ In `agent_tools/file_toolkit/README.md`, add this paragraph near the usage secti
 ```markdown
 ## Backend
 
-Model-facing file tools use `ShellFileOperations` against the active Hermes
+Model-facing file tools use `ShellFileOperations` against the active reference implementation
 terminal environment for the current runtime-derived `task_id`. This means
 `read_file`, `write_file`, `patch`, and `search_files` run through the same
 backend selected by `TERMINAL_ENV` (`local`, `docker`, `singularity`, or `ssh`)
@@ -961,15 +961,15 @@ callers may still instantiate `ShellFileOperations` with any object that exposes
 `execute(command, cwd=..., timeout=..., stdin_data=...)`.
 ```
 
-- [ ] **Step 2: Update Hermes terminal toolkit README**
+- [ ] **Step 2: Update terminal toolkit README**
 
-In `agent_tools/hermes_terminal_toolkit/README.md`, add this paragraph near the environment/lifecycle section:
+In `agent_tools/terminal_toolkit/README.md`, add this paragraph near the environment/lifecycle section:
 
 ```markdown
 ## Shared Active Environments
 
 `get_or_create_active_env(task_id, workdir=None, timeout=None)` is the shared
-entry point for acquiring a Hermes backend environment. The terminal tool and
+entry point for acquiring a runtime backend environment. The terminal tool and
 file toolkit both use it, so task-scoped commands and shell-backed file
 operations share `_active_environments`, creation locks, last-activity updates,
 idle cleanup, and explicit `cleanup_vm(task_id)` teardown.
@@ -980,7 +980,7 @@ idle cleanup, and explicit `cleanup_vm(task_id)` teardown.
 Run:
 
 ```bash
-PYTHONPATH=. pytest tests/test_hermes_active_env.py tests/test_file_tools_hermes_env.py tests/test_file_tools_runtime_task_id.py tests/test_terminal_tools.py tests/test_terminal_lifecycle.py tests/test_process_lifecycle.py -q
+PYTHONPATH=. pytest tests/test_active_env.py tests/test_file_tools_active_env.py tests/test_file_tools_runtime_task_id.py tests/test_terminal_tools.py tests/test_terminal_lifecycle.py tests/test_process_lifecycle.py -q
 ```
 
 Expected: PASS.
@@ -990,7 +990,7 @@ Expected: PASS.
 Run:
 
 ```bash
-PYTHONPATH=. python -m compileall agent_tools/hermes_terminal_toolkit agent_tools/file_toolkit agent_tools/public tests -q
+PYTHONPATH=. python -m compileall agent_tools/terminal_toolkit agent_tools/file_toolkit agent_tools/public tests -q
 ```
 
 Expected: exit code 0.
@@ -1000,7 +1000,7 @@ Expected: exit code 0.
 Run:
 
 ```bash
-git diff -- agent_tools/hermes_terminal_toolkit/terminal_tool.py agent_tools/file_toolkit/file_tools.py agent_tools/file_toolkit/README.md agent_tools/hermes_terminal_toolkit/README.md tests/test_hermes_active_env.py tests/test_file_tools_hermes_env.py
+git diff -- agent_tools/terminal_toolkit/terminal_tool.py agent_tools/file_toolkit/file_tools.py agent_tools/file_toolkit/README.md agent_tools/terminal_toolkit/README.md tests/test_active_env.py tests/test_file_tools_active_env.py
 ```
 
 Expected:
@@ -1015,15 +1015,15 @@ Expected:
 Run:
 
 ```bash
-git add agent_tools/file_toolkit/README.md agent_tools/hermes_terminal_toolkit/README.md
-git commit -m "docs: document shared Hermes env file tools"
+git add agent_tools/file_toolkit/README.md agent_tools/terminal_toolkit/README.md
+git commit -m "docs: document shared terminal env file tools"
 ```
 
 ---
 
 ## Risk Notes
 
-- The file toolkit currently uses host-path checks for dedup and staleness. This plan makes file operations run through Hermes envs but does not fully solve backend-aware path stat for Docker/Singularity/SSH. That remains a follow-up.
+- The file toolkit currently uses host-path checks for dedup and staleness. This plan makes file operations run through terminal envs but does not fully solve backend-aware path stat for Docker/Singularity/SSH. That remains a follow-up.
 - If `TERMINAL_ENV=docker` and the workspace is not mounted into the container, file tools will correctly run in Docker but may not see the host repository. Use `TERMINAL_DOCKER_MOUNT_CWD_TO_WORKSPACE=true` or configured Docker volumes until workspace mapping is addressed in a later plan.
 - `LocalTerminalEnvironment` stays in the tree to avoid breaking direct internal imports. A later cleanup can remove it after checking external callers.
 - `get_or_create_active_env()` intentionally creates envs before file reads/searches. Docker image pulls and SSH connection setup can therefore happen from file tools for the first time.
@@ -1037,6 +1037,6 @@ git commit -m "docs: document shared Hermes env file tools"
 
 ## Self-Review
 
-- Spec coverage: The plan extracts `get_or_create_active_env(task_id, workdir=None, timeout=None)`, moves `_get_env_config()` and active environment locking into it, refactors `terminal_tool()`, and makes file tools wrap the shared Hermes env.
+- Spec coverage: The plan extracts `get_or_create_active_env(task_id, workdir=None, timeout=None)`, moves `_get_env_config()` and active environment locking into it, refactors `terminal_tool()`, and makes file tools wrap the shared terminal env.
 - Placeholder scan: No `TBD`, `TODO`, or unspecified test steps remain.
 - Type consistency: The plan consistently uses `task_id`, `workdir`, `timeout`, `ShellFileOperations`, `clear_file_ops_cache`, and `get_or_create_active_env`.

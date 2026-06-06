@@ -3,7 +3,7 @@
 ## Goal
 
 Improve the current minimal `agent_cli` into a more usable local terminal CLI
-without adopting the full Hermes TUI, gateway, plugin, background-task, or skin
+without adopting the full TUI reference, gateway, plugin, background-task, or skin
 systems.
 
 Phase 1 focuses on:
@@ -24,7 +24,7 @@ session index.
 - No full-screen TUI.
 - No spinner, inline diff renderer, or approval panel.
 - No background prompt execution, queueing, or steering.
-- No Hermes gateway, plugin, skin, browser, voice, or multi-platform session
+- No gateway reference, plugin, skin, browser, voice, or multi-platform session
   context port.
 - No network/model health check in `doctor`.
 - No complete transcript duplication in the CLI metadata table.
@@ -55,7 +55,7 @@ Keep the current small module layout and add focused helpers:
 - `agent_cli/session_store.py`: lightweight session metadata.
 - `agent_cli/checkpoints.py`: LangGraph SQLite checkpointer lifecycle.
 
-Hermes reference files under `agent_cli/_hermes_reference` and
+archived reference files under `agent_cli/_archived_reference` and
 `agent_cli.backup-before-agent-cli-mvp-20260526` are treated as design
 references only. Phase 1 borrows patterns, not source-level structure.
 
@@ -108,7 +108,7 @@ The completer provides:
 - `/skill` argument completion from existing local skill metadata.
 - File path completion for `/export`.
 
-It does not implement Hermes dynamic model probing, plugin commands, gateway
+It does not implementreference implementation dynamic model probing, plugin commands, gateway
 commands, or `@file` context expansion.
 
 ## Session Status

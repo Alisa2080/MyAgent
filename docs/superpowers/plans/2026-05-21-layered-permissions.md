@@ -4,9 +4,9 @@
 
 **Goal:** Build a unified, profile-aware permission system that automatically allows low-risk workspace work, reviews risky file/shell actions, denies sensitive operations, and enforces Docker network isolation for hosted/prod.
 
-**Architecture:** Add `agent_core.permissions` as the policy source of truth, then wire it into the existing HITL middleware and public file/terminal wrappers. Keep low-level file and Hermes terminal toolkits as defensive backstops, with narrowly scoped extension points for approved workspace escapes and one-shot Docker network leases.
+**Architecture:** Add `agent_core.permissions` as the policy source of truth, then wire it into the existing HITL middleware and public file/terminal wrappers. Keep low-level file and terminal toolkits as defensive backstops, with narrowly scoped extension points for approved workspace escapes and one-shot Docker network leases.
 
-**Tech Stack:** Python, LangChain/LangGraph middleware, Pydantic tool schemas, Hermes terminal toolkit, pytest.
+**Tech Stack:** Python, LangChain/LangGraph middleware, Pydantic tool schemas, terminal toolkit, pytest.
 
 ---
 
@@ -26,10 +26,10 @@
 - Modify `agent_tools/file_toolkit/file_tools.py`: pass approved write roots to low-level operations for approved ordinary escapes.
 - Modify `agent_tools/file_toolkit/file_operations.py`: support temporary approved write roots while preserving sensitive denylist.
 - Modify `agent_tools/public/terminal.py`: enforce wrapper-level terminal/process policy, consume approvals, and forward one-shot network grants.
-- Modify `agent_tools/hermes_terminal_toolkit/terminal.py`: pass `allow_network_once` into `terminal_tool`.
-- Modify `agent_tools/hermes_terminal_toolkit/terminal_tool.py`: use profile-derived default backend and wrap approved commands in network leases.
-- Modify `agent_tools/hermes_terminal_toolkit/environments/docker.py`: support default no-network and temporary network attach/detach.
-- Modify `agent_tools/hermes_terminal_toolkit/process_registry.py`: release background network leases when sandbox-backed processes finish.
+- Modify `agent_tools/terminal_toolkit/terminal.py`: pass `allow_network_once` into `terminal_tool`.
+- Modify `agent_tools/terminal_toolkit/terminal_tool.py`: use profile-derived default backend and wrap approved commands in network leases.
+- Modify `agent_tools/terminal_toolkit/environments/docker.py`: support default no-network and temporary network attach/detach.
+- Modify `agent_tools/terminal_toolkit/process_registry.py`: release background network leases when sandbox-backed processes finish.
 - Add tests under `tests/` for profiles, command policy, file policy, approval registry, middleware, wrappers, Docker network behavior, and integration defaults.
 
 ---
@@ -665,7 +665,7 @@ import re
 import shlex
 
 from agent_core.permissions.models import PolicyDecision
-from agent_tools.hermes_terminal_toolkit.approval import check_all_command_guards
+from agent_tools.terminal_toolkit.approval import check_all_command_guards
 
 
 _READ_ONLY_COMMANDS = {
@@ -1276,16 +1276,16 @@ git commit -m "feat: evaluate tool calls with unified policy"
 ### Task 5: Profile-Aware Terminal Defaults
 
 **Files:**
-- Modify: `agent_tools/hermes_terminal_toolkit/terminal_tool.py`
-- Modify: `tests/test_hermes_active_env.py`
+- Modify: `agent_tools/terminal_toolkit/terminal_tool.py`
+- Modify: `tests/test_active_env.py`
 
 - [ ] **Step 1: Add failing terminal env config tests**
 
-Append to `tests/test_hermes_active_env.py`:
+Append to `tests/test_active_env.py`:
 
 ```python
 def test_get_env_config_uses_profile_default_for_hosted(monkeypatch):
-    from agent_tools.hermes_terminal_toolkit import terminal_tool
+    from agent_tools.terminal_toolkit import terminal_tool
 
     monkeypatch.delenv("TERMINAL_ENV", raising=False)
     monkeypatch.setenv("AGENT_RUNTIME_PROFILE", "hosted")
@@ -1297,7 +1297,7 @@ def test_get_env_config_uses_profile_default_for_hosted(monkeypatch):
 
 
 def test_get_env_config_respects_explicit_terminal_env(monkeypatch):
-    from agent_tools.hermes_terminal_toolkit import terminal_tool
+    from agent_tools.terminal_toolkit import terminal_tool
 
     monkeypatch.setenv("AGENT_RUNTIME_PROFILE", "prod")
     monkeypatch.setenv("TERMINAL_ENV", "local")
@@ -1308,7 +1308,7 @@ def test_get_env_config_respects_explicit_terminal_env(monkeypatch):
 
 
 def test_get_env_config_dev_keeps_network_default(monkeypatch):
-    from agent_tools.hermes_terminal_toolkit import terminal_tool
+    from agent_tools.terminal_toolkit import terminal_tool
 
     monkeypatch.delenv("TERMINAL_ENV", raising=False)
     monkeypatch.setenv("AGENT_RUNTIME_PROFILE", "dev")
@@ -1324,14 +1324,14 @@ def test_get_env_config_dev_keeps_network_default(monkeypatch):
 Run:
 
 ```bash
-PYTHONPATH=. pytest tests/test_hermes_active_env.py::test_get_env_config_uses_profile_default_for_hosted tests/test_hermes_active_env.py::test_get_env_config_respects_explicit_terminal_env tests/test_hermes_active_env.py::test_get_env_config_dev_keeps_network_default -q
+PYTHONPATH=. pytest tests/test_active_env.py::test_get_env_config_uses_profile_default_for_hosted tests/test_active_env.py::test_get_env_config_respects_explicit_terminal_env tests/test_active_env.py::test_get_env_config_dev_keeps_network_default -q
 ```
 
 Expected: FAIL because `_get_env_config()` still defaults to `local` and has no `container_network`.
 
 - [ ] **Step 3: Update terminal env config**
 
-In `agent_tools/hermes_terminal_toolkit/terminal_tool.py`, import profile helpers:
+In `agent_tools/terminal_toolkit/terminal_tool.py`, import profile helpers:
 
 ```python
 from agent_core.permissions.profiles import (
@@ -1382,7 +1382,7 @@ Pass `network=network` into `DockerEnvironment(...)`.
 Run:
 
 ```bash
-PYTHONPATH=. pytest tests/test_hermes_active_env.py::test_get_env_config_uses_profile_default_for_hosted tests/test_hermes_active_env.py::test_get_env_config_respects_explicit_terminal_env tests/test_hermes_active_env.py::test_get_env_config_dev_keeps_network_default tests/test_hermes_active_env.py::test_get_or_create_active_env_builds_docker_config -q
+PYTHONPATH=. pytest tests/test_active_env.py::test_get_env_config_uses_profile_default_for_hosted tests/test_active_env.py::test_get_env_config_respects_explicit_terminal_env tests/test_active_env.py::test_get_env_config_dev_keeps_network_default tests/test_active_env.py::test_get_or_create_active_env_builds_docker_config -q
 ```
 
 Expected: PASS.
@@ -1390,7 +1390,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add agent_tools/hermes_terminal_toolkit/terminal_tool.py tests/test_hermes_active_env.py
+git add agent_tools/terminal_toolkit/terminal_tool.py tests/test_active_env.py
 git commit -m "feat: derive terminal backend from runtime profile"
 ```
 
@@ -1563,7 +1563,7 @@ import uuid
 from agent_core.permissions import tool_policy
 from agent_core.permissions.approvals import ApprovalRecord, make_args_digest, record_approval
 from agent_core.permissions.audit import audit_policy_event
-from agent_core.session_context import hermes_task_id_from_runtime
+from agent_core.session_context import runtime_task_id_from_runtime
 from agent_tools.shared.tool_output import tool_error
 ```
 
@@ -1579,7 +1579,7 @@ Add helper methods:
 
 ```python
     def _policy_decision_for_tool_call(self, tool_call: ToolCall, runtime: Runtime[Any]):
-        task_id = hermes_task_id_from_runtime(runtime)
+        task_id = runtime_task_id_from_runtime(runtime)
         return tool_policy.evaluate_tool_call(
             tool_name=tool_call["name"],
             args=tool_call.get("args") or {},
@@ -1610,7 +1610,7 @@ In `after_model`, replace the loop that appends every interrupt config with poli
             if tool_call["name"] in self.policy_tools:
                 decision = self._policy_decision_for_tool_call(tool_call, runtime)
                 policy_decisions[idx] = decision
-                task_id = hermes_task_id_from_runtime(runtime)
+                task_id = runtime_task_id_from_runtime(runtime)
                 audit_policy_event(
                     profile="runtime",
                     tool_name=tool_call["name"],
@@ -1664,7 +1664,7 @@ After `_process_decision(...)`, when an approval occurred for a policy-reviewed 
                     and revised_tool_call is not None
                 ):
                     policy_decision = policy_decisions[idx]
-                    task_id = hermes_task_id_from_runtime(runtime)
+                    task_id = runtime_task_id_from_runtime(runtime)
                     record_approval(
                         ApprovalRecord(
                             approval_id=f"approval_{uuid.uuid4().hex}",
@@ -1804,10 +1804,10 @@ def test_workspace_escape_with_approval_passes_approved_roots(monkeypatch, tmp_p
         make_args_digest,
         record_approval,
     )
-    from agent_core.session_context import hermes_task_id_from_thread_id
+    from agent_core.session_context import runtime_task_id_from_thread_id
 
     target = tmp_path / "x.txt"
-    task_id = hermes_task_id_from_thread_id("file-policy-thread")
+    task_id = runtime_task_id_from_thread_id("file-policy-thread")
     calls = []
 
     monkeypatch.setattr(
@@ -2091,7 +2091,7 @@ Expected: PASS.
 Run:
 
 ```bash
-PYTHONPATH=. pytest tests/test_file_tools_runtime_task_id.py tests/test_file_tools_hermes_env.py tests/test_backend_path_policy.py -q
+PYTHONPATH=. pytest tests/test_file_tools_runtime_task_id.py tests/test_file_tools_active_env.py tests/test_backend_path_policy.py -q
 ```
 
 Expected: PASS.
@@ -2109,7 +2109,7 @@ git commit -m "feat: enforce policy for file writes"
 
 **Files:**
 - Modify: `agent_tools/public/terminal.py`
-- Modify: `agent_tools/hermes_terminal_toolkit/terminal.py`
+- Modify: `agent_tools/terminal_toolkit/terminal.py`
 - Test: `tests/test_permissions_terminal_wrappers.py`
 
 - [ ] **Step 1: Write failing terminal wrapper tests**
@@ -2167,9 +2167,9 @@ def test_reviewed_command_without_approval_is_denied(monkeypatch):
 def test_reviewed_network_command_with_approval_passes_network_once(monkeypatch):
     import agent_tools.public.terminal as terminal_tools
     from agent_core.permissions.approvals import ApprovalRecord, make_args_digest, record_approval
-    from agent_core.session_context import hermes_task_id_from_thread_id
+    from agent_core.session_context import runtime_task_id_from_thread_id
 
-    task_id = hermes_task_id_from_thread_id("terminal-policy-thread")
+    task_id = runtime_task_id_from_thread_id("terminal-policy-thread")
     calls = []
     record_approval(
         ApprovalRecord(
@@ -2234,9 +2234,9 @@ PYTHONPATH=. pytest tests/test_permissions_terminal_wrappers.py -q
 
 Expected: FAIL because `_terminal_impl()` does not enforce policy or pass `allow_network_once`.
 
-- [ ] **Step 3: Add `allow_network_once` to Hermes wrapper**
+- [ ] **Step 3: Add `allow_network_once` to reference implementation wrapper**
 
-In `agent_tools/hermes_terminal_toolkit/terminal.py`, update `run_terminal` signature:
+In `agent_tools/terminal_toolkit/terminal.py`, update `run_terminal` signature:
 
 ```python
     allow_network_once: bool = False,
@@ -2344,7 +2344,7 @@ Expected: PASS.
 - [ ] **Step 7: Commit**
 
 ```bash
-git add agent_tools/public/terminal.py agent_tools/hermes_terminal_toolkit/terminal.py tests/test_permissions_terminal_wrappers.py
+git add agent_tools/public/terminal.py agent_tools/terminal_toolkit/terminal.py tests/test_permissions_terminal_wrappers.py
 git commit -m "feat: enforce policy for terminal commands"
 ```
 
@@ -2418,9 +2418,9 @@ def test_process_submit_without_approval_is_denied(monkeypatch):
 def test_process_submit_with_approval_runs(monkeypatch):
     import agent_tools.public.terminal as terminal_tools
     from agent_core.permissions.approvals import ApprovalRecord, make_args_digest, record_approval
-    from agent_core.session_context import hermes_task_id_from_thread_id
+    from agent_core.session_context import runtime_task_id_from_thread_id
 
-    task_id = hermes_task_id_from_thread_id("process-policy-thread")
+    task_id = runtime_task_id_from_thread_id("process-policy-thread")
     monkeypatch.setattr(terminal_tools, "_session_belongs_to_task", lambda session_id, task_id: True)
     calls = []
     monkeypatch.setattr(
@@ -2548,9 +2548,9 @@ git commit -m "feat: enforce policy for process stdin"
 ### Task 10: Docker Temporary Network Leases
 
 **Files:**
-- Modify: `agent_tools/hermes_terminal_toolkit/environments/docker.py`
-- Modify: `agent_tools/hermes_terminal_toolkit/terminal_tool.py`
-- Modify: `agent_tools/hermes_terminal_toolkit/process_registry.py`
+- Modify: `agent_tools/terminal_toolkit/environments/docker.py`
+- Modify: `agent_tools/terminal_toolkit/terminal_tool.py`
+- Modify: `agent_tools/terminal_toolkit/process_registry.py`
 - Test: `tests/test_permissions_docker_network.py`
 
 - [ ] **Step 1: Write failing Docker network tests**
@@ -2582,7 +2582,7 @@ class FakeDockerEnv:
 
 
 def test_terminal_tool_wraps_foreground_command_in_network_context(monkeypatch):
-    from agent_tools.hermes_terminal_toolkit import terminal_tool
+    from agent_tools.terminal_toolkit import terminal_tool
 
     env = FakeDockerEnv()
     monkeypatch.setattr(
@@ -2610,7 +2610,7 @@ def test_terminal_tool_wraps_foreground_command_in_network_context(monkeypatch):
 
 
 def test_terminal_tool_cleans_vm_when_network_disconnect_fails(monkeypatch):
-    from agent_tools.hermes_terminal_toolkit import terminal_tool
+    from agent_tools.terminal_toolkit import terminal_tool
 
     class BrokenEnv(FakeDockerEnv):
         @contextlib.contextmanager
@@ -2648,7 +2648,7 @@ def test_terminal_tool_cleans_vm_when_network_disconnect_fails(monkeypatch):
 
 
 def test_process_registry_releases_background_network_lease(monkeypatch):
-    from agent_tools.hermes_terminal_toolkit.process_registry import ProcessRegistry
+    from agent_tools.terminal_toolkit.process_registry import ProcessRegistry
 
     released = []
     registry = ProcessRegistry()
@@ -2678,7 +2678,7 @@ Expected: FAIL because `allow_network_once`, `temporary_network`, and `network_r
 
 - [ ] **Step 3: Implement Docker temporary network context**
 
-In `agent_tools/hermes_terminal_toolkit/environments/docker.py`, add imports:
+In `agent_tools/terminal_toolkit/environments/docker.py`, add imports:
 
 ```python
 from contextlib import contextmanager
@@ -2688,7 +2688,7 @@ In `DockerEnvironment.__init__`, store network state:
 
 ```python
         self._network_enabled = bool(network)
-        self._egress_network = os.getenv("HERMES_DOCKER_NETWORK", "bridge")
+        self._egress_network = os.getenv("AGENT_DOCKER_NETWORK", "bridge")
 ```
 
 Add methods:
@@ -2732,7 +2732,7 @@ Add methods:
 
 - [ ] **Step 4: Add `allow_network_once` to terminal_tool**
 
-In `agent_tools/hermes_terminal_toolkit/terminal_tool.py`, update `terminal_tool` signature:
+In `agent_tools/terminal_toolkit/terminal_tool.py`, update `terminal_tool` signature:
 
 ```python
     allow_network_once: bool = False,
@@ -2797,7 +2797,7 @@ Pass `network_release=lambda: release_network(None, None, None)` to `process_reg
 
 - [ ] **Step 5: Implement process registry lease release**
 
-In `agent_tools/hermes_terminal_toolkit/process_registry.py`, add field to `ProcessSession`:
+In `agent_tools/terminal_toolkit/process_registry.py`, add field to `ProcessSession`:
 
 ```python
     network_release: Any = field(default=None, repr=False)
@@ -2843,7 +2843,7 @@ Expected: PASS.
 Run:
 
 ```bash
-PYTHONPATH=. pytest tests/test_hermes_active_env.py tests/test_terminal_tools.py tests/test_terminal_lifecycle.py -q
+PYTHONPATH=. pytest tests/test_active_env.py tests/test_terminal_tools.py tests/test_terminal_lifecycle.py -q
 ```
 
 Expected: PASS.
@@ -2851,7 +2851,7 @@ Expected: PASS.
 - [ ] **Step 8: Commit**
 
 ```bash
-git add agent_tools/hermes_terminal_toolkit/environments/docker.py agent_tools/hermes_terminal_toolkit/terminal_tool.py agent_tools/hermes_terminal_toolkit/process_registry.py tests/test_permissions_docker_network.py
+git add agent_tools/terminal_toolkit/environments/docker.py agent_tools/terminal_toolkit/terminal_tool.py agent_tools/terminal_toolkit/process_registry.py tests/test_permissions_docker_network.py
 git commit -m "feat: add one-shot docker network leases"
 ```
 
@@ -2912,9 +2912,9 @@ PYTHONPATH=. pytest \
   tests/test_backend_path_policy.py \
   tests/test_file_operations_backend_stat.py \
   tests/test_file_state_backend_mtime.py \
-  tests/test_file_tools_hermes_env.py \
+  tests/test_file_tools_active_env.py \
   tests/test_file_tools_runtime_task_id.py \
-  tests/test_hermes_active_env.py \
+  tests/test_active_env.py \
   tests/test_terminal_lifecycle.py \
   tests/test_terminal_notifications.py \
   tests/test_terminal_process_policy.py \
@@ -2958,4 +2958,4 @@ git commit -m "docs: describe layered permission runtime"
 - Type consistency:
   - `PolicyDecision` is the shared decision type across command, file, tool, middleware, and wrappers.
   - Approval registry keys use `task_id` and `tool_call_id`; wrappers read `runtime.tool_call_id`.
-  - One-shot network grants use `allow_network_once` from middleware approval through public terminal wrapper into Hermes terminal execution.
+  - One-shot network grants use `allow_network_once` from middleware approval through public terminal wrapper into terminal execution.

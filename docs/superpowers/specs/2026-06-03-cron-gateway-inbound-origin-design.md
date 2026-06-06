@@ -9,7 +9,7 @@ The selected architecture keeps `cron service` and `gateway service` independent
 - `cron service` remains responsible for scheduling, running jobs, delivery events, retries, dead letters, and service heartbeat.
 - `gateway service` becomes responsible for HTTP callbacks, inbound platform adapters, gateway sessions, platform event dispatch, and origin routing.
 
-This design builds on the existing cron reliability model instead of copying Hermes' gateway-owned cron tick model.
+This design builds on the existing cron reliability model instead of copying the reference implementation's gateway-owned cron tick model.
 
 ## Context
 
@@ -22,7 +22,7 @@ The project already has a mature cron runtime:
 - `gateway/` already contains lightweight outbound contracts, a registry, and a Feishu outbound adapter.
 - Feishu outbound cron delivery already proves the gateway adapter can be used by cron without embedding Feishu OpenAPI details in cron.
 
-Hermes provides useful reference behavior:
+Reference implementation provides useful reference behavior:
 
 - Platform messages are normalized before dispatch.
 - Sessions carry origin identity such as platform, chat ID, and thread ID.

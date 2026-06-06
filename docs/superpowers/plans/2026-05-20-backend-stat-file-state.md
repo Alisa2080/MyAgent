@@ -1,12 +1,12 @@
-# Hermes Backend Stat File State Implementation Plan
+# Reference Implementation Backend Stat File State Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Make read deduplication and cross-agent stale detection use backend file metadata for Docker, Singularity, and SSH, while explicitly degrading when backend stat is unavailable instead of silently using host `os.path.getmtime()`.
 
-**Architecture:** Add a backend `stat_mtime()` primitive to `ShellFileOperations`, keep `file_state` as a backend-agnostic registry that accepts caller-provided mtime samples, and centralize mtime sampling in `file_tools.py`. Local paths keep host `os.path.getmtime()`, non-local paths use the active Hermes backend shell, and unknown mtime is represented explicitly as `None` so sibling-writer and partial-read warnings still work.
+**Architecture:** Add a backend `stat_mtime()` primitive to `ShellFileOperations`, keep `file_state` as a backend-agnostic registry that accepts caller-provided mtime samples, and centralize mtime sampling in `file_tools.py`. Local paths keep host `os.path.getmtime()`, non-local paths use the active runtime backend shell, and unknown mtime is represented explicitly as `None` so sibling-writer and partial-read warnings still work.
 
-**Tech Stack:** Python 3.11, pytest, existing Hermes terminal env abstraction, `ShellFileOperations`, POSIX shell `stat`.
+**Tech Stack:** Python 3.11, pytest, existing terminal env abstraction, `ShellFileOperations`, POSIX shell `stat`.
 
 ---
 
@@ -37,8 +37,8 @@ Files to modify:
 - `tests/test_file_state_backend_mtime.py`
   - New tests for explicit unknown mtime semantics.
 
-- `tests/test_file_tools_hermes_env.py`
-  - Extend existing Hermes/file-tools tests for backend stat sampling and update monkeypatched `file_state` call signatures where needed.
+- `tests/test_file_tools_active_env.py`
+  - Extend existing reference implementation/file-tools tests for backend stat sampling and update monkeypatched `file_state` call signatures where needed.
 
 - `agent_tools/file_toolkit/README.md`
   - Document the local/backend/unknown-mtime behavior.
@@ -474,7 +474,7 @@ Expected:
 Run:
 
 ```bash
-PYTHONPATH=. /home/miku/miniforge3/envs/langchain/bin/python -m pytest tests/test_file_tools_hermes_env.py -q
+PYTHONPATH=. /home/miku/miniforge3/envs/langchain/bin/python -m pytest tests/test_file_tools_active_env.py -q
 ```
 
 Expected: some tests may fail because monkeypatched `check_stale` or `note_write` lambdas accept only two positional args. Those failures are expected before Task 3 updates call sites and tests.
@@ -494,21 +494,21 @@ git commit -m "feat: allow unknown backend mtime in file state"
 
 **Files:**
 - Modify: `agent_tools/file_toolkit/file_tools.py`
-- Modify: `tests/test_file_tools_hermes_env.py`
+- Modify: `tests/test_file_tools_active_env.py`
 
 - [ ] **Step 1: Write failing tests for backend stat usage in file tools**
 
-Append these tests to `tests/test_file_tools_hermes_env.py`:
+Append these tests to `tests/test_file_tools_active_env.py`:
 
 ```python
 def test_read_file_tool_uses_backend_mtime_for_non_local_dedup(monkeypatch):
     from agent_tools.file_toolkit.result_models import ReadResult
-    from agent_tools.hermes_terminal_toolkit import terminal_tool
+    from agent_tools.terminal_toolkit import terminal_tool
 
     class DockerEnv:
         cwd = "/workspace"
-        _hermes_env_type = "docker"
-        _hermes_configured_cwd = "/workspace"
+        _backend_env_type = "docker"
+        _backend_configured_cwd = "/workspace"
 
     class FakeFileOps:
         def __init__(self):
@@ -552,12 +552,12 @@ def test_read_file_tool_uses_backend_mtime_for_non_local_dedup(monkeypatch):
 
 def test_read_file_tool_records_unknown_backend_mtime_explicitly(monkeypatch):
     from agent_tools.file_toolkit.result_models import ReadResult
-    from agent_tools.hermes_terminal_toolkit import terminal_tool
+    from agent_tools.terminal_toolkit import terminal_tool
 
     class SSHEnv:
         cwd = "/home/remote/project"
-        _hermes_env_type = "ssh"
-        _hermes_configured_cwd = "/home/remote/project"
+        _backend_env_type = "ssh"
+        _backend_configured_cwd = "/home/remote/project"
 
     class FakeFileOps:
         def stat_mtime(self, path):
@@ -595,12 +595,12 @@ def test_read_file_tool_records_unknown_backend_mtime_explicitly(monkeypatch):
 
 def test_write_file_tool_passes_backend_mtime_to_stale_and_note_write(monkeypatch):
     from agent_tools.file_toolkit.result_models import WriteResult
-    from agent_tools.hermes_terminal_toolkit import terminal_tool
+    from agent_tools.terminal_toolkit import terminal_tool
 
     class DockerEnv:
         cwd = "/workspace"
-        _hermes_env_type = "docker"
-        _hermes_configured_cwd = "/workspace"
+        _backend_env_type = "docker"
+        _backend_configured_cwd = "/workspace"
 
     class FakeFileOps:
         def __init__(self):
@@ -663,7 +663,7 @@ def test_write_file_tool_passes_backend_mtime_to_stale_and_note_write(monkeypatc
 Run:
 
 ```bash
-PYTHONPATH=. /home/miku/miniforge3/envs/langchain/bin/python -m pytest tests/test_file_tools_hermes_env.py::test_read_file_tool_uses_backend_mtime_for_non_local_dedup tests/test_file_tools_hermes_env.py::test_read_file_tool_records_unknown_backend_mtime_explicitly tests/test_file_tools_hermes_env.py::test_write_file_tool_passes_backend_mtime_to_stale_and_note_write -q
+PYTHONPATH=. /home/miku/miniforge3/envs/langchain/bin/python -m pytest tests/test_file_tools_active_env.py::test_read_file_tool_uses_backend_mtime_for_non_local_dedup tests/test_file_tools_active_env.py::test_read_file_tool_records_unknown_backend_mtime_explicitly tests/test_file_tools_active_env.py::test_write_file_tool_passes_backend_mtime_to_stale_and_note_write -q
 ```
 
 Expected: FAIL because `file_tools.py` still calls host `os.path.getmtime()` and does not pass mtime keywords to `file_state`.
@@ -694,7 +694,7 @@ def _sample_mtime_for_task(resolved_path: str, task_id: str = "default") -> floa
     """Sample mtime from the correct filesystem for this task.
 
     Local environments use host os.path.getmtime. Docker, Singularity, and SSH
-    use the active Hermes backend shell. A None result is an explicit
+    use the active runtime backend shell. A None result is an explicit
     degradation: dedup and external-drift checks are skipped, but file_state
     still records reads/writes for sibling-writer coordination.
     """
@@ -928,7 +928,7 @@ with:
 
 - [ ] **Step 11: Update existing monkeypatched file-state tests**
 
-In `tests/test_file_tools_hermes_env.py`, update any monkeypatch lambdas for `check_stale` and `note_write` so they accept keyword-only mtime values:
+In `tests/test_file_tools_active_env.py`, update any monkeypatch lambdas for `check_stale` and `note_write` so they accept keyword-only mtime values:
 
 ```python
 lambda task_id, path, *, current_mtime=None: stale_checked.append((task_id, path)) or None
@@ -947,7 +947,7 @@ Keep existing assertions unchanged unless the test is explicitly checking mtime 
 Run:
 
 ```bash
-PYTHONPATH=. /home/miku/miniforge3/envs/langchain/bin/python -m pytest tests/test_file_tools_hermes_env.py::test_read_file_tool_uses_backend_mtime_for_non_local_dedup tests/test_file_tools_hermes_env.py::test_read_file_tool_records_unknown_backend_mtime_explicitly tests/test_file_tools_hermes_env.py::test_write_file_tool_passes_backend_mtime_to_stale_and_note_write -q
+PYTHONPATH=. /home/miku/miniforge3/envs/langchain/bin/python -m pytest tests/test_file_tools_active_env.py::test_read_file_tool_uses_backend_mtime_for_non_local_dedup tests/test_file_tools_active_env.py::test_read_file_tool_records_unknown_backend_mtime_explicitly tests/test_file_tools_active_env.py::test_write_file_tool_passes_backend_mtime_to_stale_and_note_write -q
 ```
 
 Expected:
@@ -956,12 +956,12 @@ Expected:
 3 passed
 ```
 
-- [ ] **Step 13: Run all file-tools Hermes tests**
+- [ ] **Step 13: Run all file-tools reference implementation tests**
 
 Run:
 
 ```bash
-PYTHONPATH=. /home/miku/miniforge3/envs/langchain/bin/python -m pytest tests/test_file_tools_hermes_env.py -q
+PYTHONPATH=. /home/miku/miniforge3/envs/langchain/bin/python -m pytest tests/test_file_tools_active_env.py -q
 ```
 
 Expected: all tests in the file pass.
@@ -971,7 +971,7 @@ Expected: all tests in the file pass.
 Run:
 
 ```bash
-git add agent_tools/file_toolkit/file_tools.py tests/test_file_tools_hermes_env.py
+git add agent_tools/file_toolkit/file_tools.py tests/test_file_tools_active_env.py
 git commit -m "fix: sample file mtime through active backend"
 ```
 
@@ -1034,7 +1034,7 @@ git commit -m "docs: describe backend mtime degradation"
 Run:
 
 ```bash
-PYTHONPATH=. /home/miku/miniforge3/envs/langchain/bin/python -m pytest tests/test_file_operations_backend_stat.py tests/test_file_state_backend_mtime.py tests/test_file_tools_hermes_env.py tests/test_backend_path_policy.py tests/test_file_tools_runtime_task_id.py -q
+PYTHONPATH=. /home/miku/miniforge3/envs/langchain/bin/python -m pytest tests/test_file_operations_backend_stat.py tests/test_file_state_backend_mtime.py tests/test_file_tools_active_env.py tests/test_backend_path_policy.py tests/test_file_tools_runtime_task_id.py -q
 ```
 
 Expected:

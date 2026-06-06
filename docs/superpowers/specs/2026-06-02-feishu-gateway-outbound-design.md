@@ -2,7 +2,7 @@
 
 ## Goal
 
-Build the first Hermes-like gateway foundation by adding a lightweight outbound gateway core and a Feishu application bot adapter that cron delivery can use to send text messages to Feishu chats.
+Build the firstreference implementation-like gateway foundation by adding a lightweight outbound gateway core and a Feishu application bot adapter that cron delivery can use to send text messages to Feishu chats.
 
 This milestone intentionally focuses on outbound delivery and cron integration. It does not implement inbound Feishu event callbacks, agent conversations from Feishu, personal WeChat, Enterprise WeChat application messages, cards, rich text, files, or a standalone gateway service manager.
 
@@ -16,7 +16,7 @@ The project already has a reliable cron runtime and delivery state machine:
 - Delivery targets can store resolved addresses so runtime delivery remains stable when environment variables change.
 - `wecom` group robot delivery now proves the adapter/retry/doctor/E2E pattern.
 
-Hermes has a richer gateway model: platform adapters, connected platform metadata, session origin identity, live adapter sends, and standalone gateway services. This project should not copy that whole stack in one step. The first step is a small outbound gateway core that can support Feishu now and later support inbound messages, personal WeChat bridges, and Enterprise WeChat application messages.
+Reference implementation has a richer gateway model: platform adapters, connected platform metadata, session origin identity, live adapter sends, and standalone gateway services. This project should not copy that whole stack in one step. The first step is a small outbound gateway core that can support Feishu now and later support inbound messages, personal WeChat bridges, and Enterprise WeChat application messages.
 
 ## Scope
 

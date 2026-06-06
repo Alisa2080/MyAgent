@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Port the Hermes cron system into this LangChain project with explicit lifecycle startup, optional `cronjob` tool exposure, conservative unattended execution, local persistence, and thread-scoped notifications.
+**Goal:** Port the cron reference system into this LangChain project with explicit lifecycle startup, optional `cronjob` tool exposure, conservative unattended execution, local persistence, and thread-scoped notifications.
 
-**Architecture:** Replace Hermes Gateway/AIAgent/platform-adapter dependencies with focused project-native modules. Storage and scheduling live under `cron/`; lifecycle integration lives in `agent_core/`; the LangChain tool surface lives in `agent_tools/public/`.
+**Architecture:** Replace Gateway Reference/AIAgent/platform-adapter dependencies with focused project-native modules. Storage and scheduling live under `cron/`; lifecycle integration lives in `agent_core/`; the LangChain tool surface lives in `agent_tools/public/`.
 
 **Tech Stack:** Python, LangChain `create_agent`, LangChain `@tool`, Pydantic schemas, `croniter`, JSON file persistence, `pytest`, monkeypatch-based tests.
 
@@ -30,7 +30,7 @@
   - `tests/test_cron_scheduler.py`
   - `tests/test_cron_lifecycle.py`
 
-Do not implement CLI, REST API, platform delivery adapters, Hermes `AIAgent`, or provider routing.
+Do not implement CLI, REST API, platform delivery adapters, reference implementation `AIAgent`, or provider routing.
 
 ---
 
@@ -48,24 +48,24 @@ Add `tests/test_cron_paths.py`:
 from pathlib import Path
 
 
-def test_get_cron_home_prefers_hermes_home(monkeypatch, tmp_path):
+def test_get_cron_home_prefers_toolkit_home(monkeypatch, tmp_path):
     import cron.paths as paths
 
-    hermes_home = tmp_path / "hermes-home"
-    monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+    toolkit_home = tmp_path / "toolkit-home"
+    monkeypatch.setenv("TOOLKIT_HOME", str(toolkit_home))
 
-    assert paths.get_cron_home() == hermes_home
-    assert paths.get_cron_dir() == hermes_home / "cron"
-    assert paths.get_jobs_file() == hermes_home / "cron" / "jobs.json"
-    assert paths.get_output_dir() == hermes_home / "cron" / "output"
-    assert paths.get_scripts_dir() == hermes_home / "scripts"
+    assert paths.get_cron_home() == toolkit_home
+    assert paths.get_cron_dir() == toolkit_home / "cron"
+    assert paths.get_jobs_file() == toolkit_home / "cron" / "jobs.json"
+    assert paths.get_output_dir() == toolkit_home / "cron" / "output"
+    assert paths.get_scripts_dir() == toolkit_home / "scripts"
 
 
-def test_get_cron_home_uses_toolkit_parent_when_no_hermes_home(monkeypatch, tmp_path):
+def test_get_cron_home_uses_toolkit_parent_when_no_toolkit_home(monkeypatch, tmp_path):
     import cron.paths as paths
 
     toolkit_home = tmp_path / "toolkit"
-    monkeypatch.delenv("HERMES_HOME", raising=False)
+    monkeypatch.delenv("TOOLKIT_HOME", raising=False)
     monkeypatch.setattr(paths, "get_toolkit_home", lambda: toolkit_home)
 
     assert paths.get_cron_home() == toolkit_home
@@ -74,7 +74,7 @@ def test_get_cron_home_uses_toolkit_parent_when_no_hermes_home(monkeypatch, tmp_
 def test_ensure_cron_dirs_creates_secure_dirs(monkeypatch, tmp_path):
     import cron.paths as paths
 
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("TOOLKIT_HOME", str(tmp_path))
 
     paths.ensure_cron_dirs()
 
@@ -86,7 +86,7 @@ def test_ensure_cron_dirs_creates_secure_dirs(monkeypatch, tmp_path):
 def test_atomic_write_json_sets_owner_only_permissions(monkeypatch, tmp_path):
     import cron.paths as paths
 
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("TOOLKIT_HOME", str(tmp_path))
     target = paths.get_jobs_file()
 
     paths.atomic_write_json(target, {"jobs": []})
@@ -116,13 +116,13 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from agent_tools.hermes_terminal_toolkit.paths import get_toolkit_home
+from agent_tools.terminal_toolkit.paths import get_toolkit_home
 
 
 def get_cron_home() -> Path:
-    hermes_home = os.getenv("HERMES_HOME")
-    if hermes_home:
-        return Path(os.path.expanduser(hermes_home)).resolve()
+    toolkit_home = os.getenv("TOOLKIT_HOME")
+    if toolkit_home:
+        return Path(os.path.expanduser(toolkit_home)).resolve()
     return get_toolkit_home().resolve()
 
 
@@ -233,7 +233,7 @@ def test_parse_duration_schedule_creates_oneshot(monkeypatch, tmp_path):
     import cron.jobs as jobs
 
     now = datetime(2026, 5, 22, 9, 0, tzinfo=timezone.utc)
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("TOOLKIT_HOME", str(tmp_path))
     monkeypatch.setattr(jobs, "now", lambda: now)
 
     parsed = jobs.parse_schedule("30m")
@@ -245,7 +245,7 @@ def test_parse_duration_schedule_creates_oneshot(monkeypatch, tmp_path):
 def test_create_job_defaults_origin_delivery(monkeypatch, tmp_path):
     import cron.jobs as jobs
 
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("TOOLKIT_HOME", str(tmp_path))
     monkeypatch.setattr(jobs, "now", lambda: datetime(2026, 5, 22, 9, 0, tzinfo=timezone.utc))
 
     job = jobs.create_job(
@@ -262,7 +262,7 @@ def test_create_job_defaults_origin_delivery(monkeypatch, tmp_path):
 def test_workdir_must_be_absolute(monkeypatch, tmp_path):
     import cron.jobs as jobs
 
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("TOOLKIT_HOME", str(tmp_path))
 
     with pytest.raises(ValueError, match="absolute path"):
         jobs.create_job(prompt="x", schedule="30m", workdir="relative/path")
@@ -272,7 +272,7 @@ def test_get_due_jobs_fast_forwards_stale_interval(monkeypatch, tmp_path):
     import cron.jobs as jobs
 
     base = datetime(2026, 5, 22, 9, 0, tzinfo=timezone.utc)
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("TOOLKIT_HOME", str(tmp_path))
     monkeypatch.setattr(jobs, "now", lambda: base)
     job = jobs.create_job(prompt="x", schedule="every 10m", deliver="local")
     jobs.update_job(job["id"], {"next_run_at": (base - timedelta(hours=3)).isoformat()})
@@ -288,7 +288,7 @@ def test_advance_next_run_before_mark_run(monkeypatch, tmp_path):
     import cron.jobs as jobs
 
     base = datetime(2026, 5, 22, 9, 0, tzinfo=timezone.utc)
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("TOOLKIT_HOME", str(tmp_path))
     monkeypatch.setattr(jobs, "now", lambda: base)
     job = jobs.create_job(prompt="x", schedule="every 30m", deliver="local")
     jobs.update_job(job["id"], {"next_run_at": base.isoformat()})
@@ -306,7 +306,7 @@ def test_advance_next_run_before_mark_run(monkeypatch, tmp_path):
 
 Run: `pytest tests/test_cron_jobs.py -v`
 
-Expected: FAIL from Hermes-only imports in the existing copied `cron/jobs.py`.
+Expected: FAIL from reference-only imports in the existing copied `cron/jobs.py`.
 
 - [ ] **Step 3: Implement `cron/jobs.py`**
 
@@ -1127,7 +1127,7 @@ from pathlib import Path
 def test_resolve_script_path_rejects_escape(monkeypatch, tmp_path):
     import cron.runner as runner
 
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("TOOLKIT_HOME", str(tmp_path))
 
     assert runner.validate_script_path("../escape.py").startswith("Script path escapes")
     assert runner.validate_script_path("/tmp/script.py").startswith("Script path must be relative")
@@ -1136,7 +1136,7 @@ def test_resolve_script_path_rejects_escape(monkeypatch, tmp_path):
 def test_wake_gate_false_skips_agent(monkeypatch, tmp_path):
     import cron.runner as runner
 
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("TOOLKIT_HOME", str(tmp_path))
     scripts = tmp_path / "scripts"
     scripts.mkdir()
     script = scripts / "check.py"
@@ -1256,7 +1256,7 @@ def _resolve_script_path(script: str) -> Path:
 
 def _script_timeout() -> int:
     try:
-        return max(1, int(os.getenv("HERMES_CRON_SCRIPT_TIMEOUT", "120")))
+        return max(1, int(os.getenv("AGENT_CRON_SCRIPT_TIMEOUT", "120")))
     except ValueError:
         return 120
 
@@ -1350,7 +1350,7 @@ def _build_cron_agent(job: dict[str, Any]):
 
 def _cron_timeout() -> int | None:
     try:
-        value = int(os.getenv("HERMES_CRON_TIMEOUT", "600"))
+        value = int(os.getenv("AGENT_CRON_TIMEOUT", "600"))
     except ValueError:
         value = 600
     return value if value > 0 else None
@@ -1444,7 +1444,7 @@ def test_tick_advances_before_running(monkeypatch, tmp_path):
     calls = []
     job = {"id": "job-1", "name": "daily", "workdir": None, "deliver": "local"}
 
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("TOOLKIT_HOME", str(tmp_path))
     monkeypatch.setattr(scheduler, "get_due_jobs", lambda now_dt=None: [job])
     monkeypatch.setattr(scheduler, "advance_next_run", lambda job_id, run_at: calls.append(("advance", job_id)) or job)
     monkeypatch.setattr(scheduler, "run_job", lambda advanced: calls.append(("run", advanced["id"])) or scheduler.JobRunResult(True, "doc", "final", None))
@@ -1463,7 +1463,7 @@ def test_tick_queues_origin_notification(monkeypatch, tmp_path):
     job = {"id": "job-1", "name": "daily", "workdir": None, "deliver": "origin", "origin": {"thread_id": "thread-1"}}
     queued = []
 
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("TOOLKIT_HOME", str(tmp_path))
     monkeypatch.setattr(scheduler, "get_due_jobs", lambda now_dt=None: [job])
     monkeypatch.setattr(scheduler, "advance_next_run", lambda job_id, run_at: job)
     monkeypatch.setattr(scheduler, "run_job", lambda advanced: scheduler.JobRunResult(True, "doc", "final", None))
@@ -1486,7 +1486,7 @@ def test_tick_runs_workdir_jobs_sequentially(monkeypatch, tmp_path):
         {"id": "b", "name": "b", "workdir": "/tmp/b", "deliver": "local"},
     ]
 
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("TOOLKIT_HOME", str(tmp_path))
     monkeypatch.setattr(scheduler, "get_due_jobs", lambda now_dt=None: jobs)
     monkeypatch.setattr(scheduler, "advance_next_run", lambda job_id, run_at: next(job for job in jobs if job["id"] == job_id))
     monkeypatch.setattr(scheduler, "run_job", lambda job: order.append(job["id"]) or scheduler.JobRunResult(True, "doc", "final", None))
@@ -1502,7 +1502,7 @@ def test_tick_runs_workdir_jobs_sequentially(monkeypatch, tmp_path):
 
 Run: `pytest tests/test_cron_scheduler.py -v`
 
-Expected: FAIL from Hermes-only imports in copied `cron/scheduler.py`.
+Expected: FAIL from reference-only imports in copied `cron/scheduler.py`.
 
 - [ ] **Step 3: Implement scheduler dataclasses and lock**
 
@@ -1574,7 +1574,7 @@ Continue `cron/scheduler.py`:
 
 ```python
 def _max_parallel() -> int | None:
-    raw = os.getenv("HERMES_CRON_MAX_PARALLEL")
+    raw = os.getenv("AGENT_CRON_MAX_PARALLEL")
     if not raw:
         return None
     try:
@@ -1863,7 +1863,7 @@ from agent_core.builders import build_agent
 agent = build_agent(include_cron_tools=True)
 ```
 
-Cron output is saved under the configured Hermes home. `deliver="origin"`
+Cron output is saved under the configured toolkit home. `deliver="origin"`
 queues thread-scoped notifications that embedding applications can drain with
 `cron.notifications.drain_cron_notifications_for_thread_id(thread_id)`.
 ```
@@ -1941,12 +1941,12 @@ Run: `pytest -v`
 
 Expected: PASS.
 
-- [ ] **Step 2: Search for forbidden Hermes-only imports**
+- [ ] **Step 2: Search for forbidden reference-only imports**
 
 Run:
 
 ```bash
-rg -n "hermes_constants|hermes_cli|gateway\\.|tools\\.registry|run_agent|AIAgent|send_message_tool" cron agent_core agent_tools tests
+rg -n "cron_constants|cron_cli|gateway\\.|tools\\.registry|run_agent|AIAgent|send_message_tool" cron agent_core agent_tools tests
 ```
 
 Expected: no matches in new cron integration code. Existing terminal-toolkit references are acceptable only outside the new cron modules.

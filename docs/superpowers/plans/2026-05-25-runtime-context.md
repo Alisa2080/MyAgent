@@ -4,9 +4,9 @@
 
 **Goal:** Add a `RuntimeContext` identity abstraction and migrate the duplicated thread/task/tool-call extraction in public tool wrappers without changing behavior.
 
-**Architecture:** `agent_core.session_context` remains the single identity module. A frozen `RuntimeContext` dataclass centralizes extraction from LangChain/ToolRuntime-like objects while preserving existing public helper functions. Tool wrappers consume the context object but keep policy, approval, Hermes, cron, and result formatting logic unchanged.
+**Architecture:** `agent_core.session_context` remains the single identity module. A frozen `RuntimeContext` dataclass centralizes extraction from LangChain/ToolRuntime-like objects while preserving existing public helper functions. Tool wrappers consume the context object but keep policy, approval, reference implementation, cron, and result formatting logic unchanged.
 
-**Tech Stack:** Python 3.11, dataclasses, pytest, LangChain `ToolRuntime`, LangGraph ToolNode tests, existing Hermes terminal/file tool wrappers.
+**Tech Stack:** Python 3.11, dataclasses, pytest, LangChain `ToolRuntime`, LangGraph ToolNode tests, existing terminal/file tool wrappers.
 
 ---
 
@@ -51,7 +51,7 @@ Replace the current import block:
 ```python
 from types import SimpleNamespace
 
-from agent_core.session_context import hermes_task_id_from_runtime, hermes_task_id_from_thread_id
+from agent_core.session_context import runtime_task_id_from_runtime, runtime_task_id_from_thread_id
 ```
 
 with:
@@ -61,8 +61,8 @@ from types import SimpleNamespace
 
 from agent_core.session_context import (
     RuntimeContext,
-    hermes_task_id_from_runtime,
-    hermes_task_id_from_thread_id,
+    runtime_task_id_from_runtime,
+    runtime_task_id_from_thread_id,
 )
 ```
 
@@ -81,7 +81,7 @@ def test_runtime_context_prefers_execution_info_thread_id():
     ctx = RuntimeContext.from_runtime(runtime)
 
     assert ctx.thread_id == "thread-from-runtime"
-    assert ctx.task_id == hermes_task_id_from_thread_id("thread-from-runtime")
+    assert ctx.task_id == runtime_task_id_from_thread_id("thread-from-runtime")
     assert ctx.tool_call_id == "call-123"
     assert ctx.thread_source == "execution_info"
     assert ctx.has_thread is True
@@ -98,7 +98,7 @@ def test_runtime_context_falls_back_to_config_thread_id():
     ctx = RuntimeContext.from_runtime(runtime)
 
     assert ctx.thread_id == "thread-from-config"
-    assert ctx.task_id == hermes_task_id_from_thread_id("thread-from-config")
+    assert ctx.task_id == runtime_task_id_from_thread_id("thread-from-config")
     assert ctx.tool_call_id == "call-456"
     assert ctx.thread_source == "config"
     assert ctx.has_thread is True
@@ -152,7 +152,7 @@ def test_runtime_context_from_thread_id():
     ctx = RuntimeContext.from_thread_id("manual-thread")
 
     assert ctx.thread_id == "manual-thread"
-    assert ctx.task_id == hermes_task_id_from_thread_id("manual-thread")
+    assert ctx.task_id == runtime_task_id_from_thread_id("manual-thread")
     assert ctx.tool_call_id is None
     assert ctx.thread_source == "fallback"
     assert ctx.has_thread is True
@@ -230,7 +230,7 @@ class RuntimeContext:
         if thread_id:
             return cls(
                 thread_id=thread_id,
-                task_id=hermes_task_id_from_thread_id(thread_id),
+                task_id=runtime_task_id_from_thread_id(thread_id),
                 tool_call_id=_tool_call_id_from_runtime(runtime),
                 thread_source="execution_info",
             )
@@ -239,7 +239,7 @@ class RuntimeContext:
         if thread_id:
             return cls(
                 thread_id=thread_id,
-                task_id=hermes_task_id_from_thread_id(thread_id),
+                task_id=runtime_task_id_from_thread_id(thread_id),
                 tool_call_id=_tool_call_id_from_runtime(runtime),
                 thread_source="config",
             )
@@ -256,7 +256,7 @@ class RuntimeContext:
         normalized = str(thread_id) if thread_id else None
         return cls(
             thread_id=normalized,
-            task_id=hermes_task_id_from_thread_id(normalized),
+            task_id=runtime_task_id_from_thread_id(normalized),
             thread_source="fallback",
         )
 
@@ -269,25 +269,25 @@ class RuntimeContext:
         return self.task_id == _FALLBACK_TASK_ID
 ```
 
-- [ ] **Step 3: Update `hermes_task_id_from_runtime` to delegate**
+- [ ] **Step 3: Update `runtime_task_id_from_runtime` to delegate**
 
 Replace:
 
 ```python
-def hermes_task_id_from_runtime(runtime: Any | None) -> str:
+def runtime_task_id_from_runtime(runtime: Any | None) -> str:
     """Extract LangGraph thread identity from ToolRuntime-like objects."""
     thread_id = _thread_id_from_execution_info(runtime)
     if thread_id:
-        return hermes_task_id_from_thread_id(thread_id)
+        return runtime_task_id_from_thread_id(thread_id)
 
     thread_id = _thread_id_from_config(runtime)
-    return hermes_task_id_from_thread_id(thread_id)
+    return runtime_task_id_from_thread_id(thread_id)
 ```
 
 with:
 
 ```python
-def hermes_task_id_from_runtime(runtime: Any | None) -> str:
+def runtime_task_id_from_runtime(runtime: Any | None) -> str:
     """Extract LangGraph thread identity from ToolRuntime-like objects."""
     return RuntimeContext.from_runtime(runtime).task_id
 ```
@@ -336,7 +336,7 @@ git commit -m "feat: add runtime context identity abstraction"
 Replace:
 
 ```python
-from agent_core.session_context import hermes_task_id_from_runtime
+from agent_core.session_context import runtime_task_id_from_runtime
 ```
 
 with:
@@ -360,7 +360,7 @@ def _tool_call_id_from_runtime(runtime: ToolRuntime | None) -> str | None:
 Replace:
 
 ```python
-    task_id = hermes_task_id_from_runtime(runtime)
+    task_id = runtime_task_id_from_runtime(runtime)
     tool_call_id = _tool_call_id_from_runtime(runtime)
 ```
 
@@ -377,7 +377,7 @@ with:
 Replace:
 
 ```python
-    task_id = hermes_task_id_from_runtime(runtime)
+    task_id = runtime_task_id_from_runtime(runtime)
     tool_call_id = _tool_call_id_from_runtime(runtime)
 ```
 
@@ -422,7 +422,7 @@ git commit -m "refactor: use runtime context in terminal tools"
 Replace:
 
 ```python
-from agent_core.session_context import hermes_task_id_from_runtime
+from agent_core.session_context import runtime_task_id_from_runtime
 ```
 
 with:
@@ -437,7 +437,7 @@ Replace:
 
 ```python
 def _task_id_from_runtime(runtime: ToolRuntime | None) -> str:
-    return hermes_task_id_from_runtime(runtime)
+    return runtime_task_id_from_runtime(runtime)
 ```
 
 with:
@@ -563,7 +563,7 @@ git commit -m "refactor: use runtime context in cron tool"
 Run:
 
 ```bash
-rg -n "getattr\\(runtime, \\\"tool_call_id\\\"|def _runtime_thread_id|hermes_task_id_from_runtime\\(runtime\\)" agent_core agent_tools
+rg -n "getattr\\(runtime, \\\"tool_call_id\\\"|def _runtime_thread_id|runtime_task_id_from_runtime\\(runtime\\)" agent_core agent_tools
 ```
 
 Expected remaining matches:

@@ -8,18 +8,18 @@ This is the next phase after delivery architecture and scheduler service work. T
 
 ## Reference Direction
 
-The Hermes cron reference is useful as a baseline for behavior, not as an implementation model to copy.
+The cron reference reference is useful as a baseline for behavior, not as an implementation model to copy.
 
-Hermes uses a gateway-driven tick, `jobs.json`, a file lock, early `advance_next_run()`, and `mark_job_run()` after execution. That gives simple operational behavior and user-friendly status fields, but it can lose an execution if the process advances `next_run_at` and then crashes before the job finishes.
+Reference implementation uses a gateway-driven tick, `jobs.json`, a file lock, early `advance_next_run()`, and `mark_job_run()` after execution. That gives simple operational behavior and user-friendly status fields, but it can lose an execution if the process advances `next_run_at` and then crashes before the job finishes.
 
-The current project has already moved beyond that model by using SQLite, run records, claim leases, and a standalone cron service. The design should preserve the Hermes strengths that still apply:
+The current project has already moved beyond that model by using SQLite, run records, claim leases, and a standalone cron service. The design should preserve the reference implementation strengths that still apply:
 
 - due-job behavior is easy to reason about,
 - failed runs do not permanently wedge recurring jobs,
 - job status remains understandable from CLI/status output,
 - delivery errors are surfaced on the job and tied to saved output.
 
-It should not preserve Hermes' early `next_run_at` advancement or JSON-file state mutation pattern.
+It should not preserve the reference implementation's early `next_run_at` advancement or JSON-file state mutation pattern.
 
 ## Scope
 

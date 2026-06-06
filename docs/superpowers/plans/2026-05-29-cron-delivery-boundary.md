@@ -547,7 +547,7 @@ Expected: all tests pass.
 git status --short
 ```
 
-Expected: only unrelated pre-existing files are dirty, such as `.codegraph/daemon.pid`, `hermes_agent_cron/`, or previously untracked plan files. No implementation files from this plan should be left unstaged unless intentionally uncommitted.
+Expected: only unrelated pre-existing files are dirty, such as `.codegraph/daemon.pid`, `cron_reference/`, or previously untracked plan files. No implementation files from this plan should be left unstaged unless intentionally uncommitted.
 
 - [ ] Summarize:
   - `enqueue_result()` now uses `DeliveryRegistry.validate_targets()`.

@@ -1,10 +1,10 @@
-# Hermes Web Tools Migration Implementation Plan
+# Web Tools Migration Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Replace the current TinyFish `web_search` / `web_fetch` tools with Hermes-compatible `web_search` / `web_extract` tools for the LangChain agent.
+**Goal:** Replace the current TinyFish `web_search` / `web_fetch` tools with provider-compatible `web_search` / `web_extract` tools for the LangChain agent.
 
-**Architecture:** Keep the public LangChain tool boundary in `agent_tools.public.web`, but split reusable implementation into focused helper modules under `agent_tools/web_hermes/`. Provider SDKs are optional and lazily imported. The public tools return current-project `ToolMessage` objects and use local safety, normalization, and content-processing helpers before surfacing results to the agent.
+**Architecture:** Keep the public LangChain tool boundary in `agent_tools.public.web`, but split reusable implementation into focused helper modules under `agent_tools/web_toolkit/`. Provider SDKs are optional and lazily imported. The public tools return current-project `ToolMessage` objects and use local safety, normalization, and content-processing helpers before surfacing results to the agent.
 
 **Tech Stack:** Python, LangChain `@tool`, Pydantic schemas, `ToolMessage`, `httpx`, optional provider SDKs (`firecrawl`, `parallel`, `exa_py`/`exa`, Tavily via HTTP), pytest.
 
@@ -12,13 +12,13 @@
 
 ## File Structure
 
-- Create: `agent_tools/web_hermes/__init__.py`
-  - Marks the internal Hermes-style web helper package. This avoids colliding with the existing `agent_tools/web.py` public compatibility shim.
-- Create: `agent_tools/web_hermes/safety.py`
+- Create: `agent_tools/web_toolkit/__init__.py`
+  - Marks the internal project-native web helper package. This avoids colliding with the existing `agent_tools/web.py` public compatibility shim.
+- Create: `agent_tools/web_toolkit/safety.py`
   - SSRF checks, embedded-secret URL checks, and redacted safety errors.
-- Create: `agent_tools/web_hermes/content.py`
+- Create: `agent_tools/web_toolkit/content.py`
   - Base64 image cleanup, text truncation, and optional auxiliary summarization.
-- Create: `agent_tools/web_hermes/backends.py`
+- Create: `agent_tools/web_toolkit/backends.py`
   - Backend selection, lazy adapter construction, provider adapters, response normalization.
 - Modify: `agent_tools/public/web.py`
   - Replace TinyFish implementation with LangChain wrappers for `web_search` and `web_extract`.
@@ -39,7 +39,7 @@
 
 ## Implementation Notes
 
-- Do not use the pasted Hermes `tools.registry` registration.
+- Do not use the pasted reference implementation `tools.registry` registration.
 - Do not import provider SDKs at module import time.
 - Do not keep `web_fetch` as a public tool or `BASE_TOOLS` entry.
 - Keep `agent_tools/web.py` as the existing compatibility shim to `agent_tools.public.web`; after this migration it should expose `web_search` and `web_extract` through the shim because the module object points at public web.
@@ -220,7 +220,7 @@ Expected: FAIL because `web_extract` does not exist, `web_fetch` is still export
 
 ```bash
 git add tests/test_public_toolmessage_results.py tests/test_agent_tools_public_imports.py tests/test_web_tools_migration.py
-git commit -m "test: define Hermes web tool public surface"
+git commit -m "test: define reference implementation web tool public surface"
 ```
 
 ---
@@ -228,9 +228,9 @@ git commit -m "test: define Hermes web tool public surface"
 ### Task 2: Implement URL Safety and Content Cleanup Helpers
 
 **Files:**
-- Create: `agent_tools/web_hermes/__init__.py`
-- Create: `agent_tools/web_hermes/safety.py`
-- Create: `agent_tools/web_hermes/content.py`
+- Create: `agent_tools/web_toolkit/__init__.py`
+- Create: `agent_tools/web_toolkit/safety.py`
+- Create: `agent_tools/web_toolkit/content.py`
 - Modify: `tests/test_web_tools_migration.py`
 
 - [ ] **Step 1: Add failing safety and cleanup tests**
@@ -239,7 +239,7 @@ Append to `tests/test_web_tools_migration.py`:
 
 ```python
 def test_is_safe_url_blocks_private_and_local_targets():
-    from agent_tools.web_hermes.safety import is_safe_url
+    from agent_tools.web_toolkit.safety import is_safe_url
 
     unsafe_urls = [
         "http://127.0.0.1:8000",
@@ -258,7 +258,7 @@ def test_is_safe_url_blocks_private_and_local_targets():
 
 
 def test_is_safe_url_allows_public_https_hostname(monkeypatch):
-    from agent_tools.web_hermes import safety
+    from agent_tools.web_toolkit import safety
 
     monkeypatch.setattr(safety.socket, "getaddrinfo", lambda *args, **kwargs: [])
 
@@ -269,7 +269,7 @@ def test_is_safe_url_allows_public_https_hostname(monkeypatch):
 
 
 def test_contains_embedded_secret_detects_raw_and_encoded_values():
-    from agent_tools.web_hermes.safety import contains_embedded_secret
+    from agent_tools.web_toolkit.safety import contains_embedded_secret
 
     assert contains_embedded_secret("https://example.com/?api_key=abc")
     assert contains_embedded_secret("https://example.com/?q=sk-abc123")
@@ -278,7 +278,7 @@ def test_contains_embedded_secret_detects_raw_and_encoded_values():
 
 
 def test_clean_base64_images_replaces_data_uri_payloads():
-    from agent_tools.web_hermes.content import clean_base64_images
+    from agent_tools.web_toolkit.content import clean_base64_images
 
     text = "before data:image/png;base64," + ("A" * 200) + " after"
 
@@ -299,11 +299,11 @@ pytest tests/test_web_tools_migration.py::test_is_safe_url_blocks_private_and_lo
   tests/test_web_tools_migration.py::test_clean_base64_images_replaces_data_uri_payloads -v
 ```
 
-Expected: FAIL because `agent_tools.web_hermes.safety` and `agent_tools.web_hermes.content` do not exist.
+Expected: FAIL because `agent_tools.web_toolkit.safety` and `agent_tools.web_toolkit.content` do not exist.
 
 - [ ] **Step 3: Create helper package**
 
-Create `agent_tools/web_hermes/__init__.py`:
+Create `agent_tools/web_toolkit/__init__.py`:
 
 ```python
 """Internal helpers for LangChain web tools."""
@@ -311,7 +311,7 @@ Create `agent_tools/web_hermes/__init__.py`:
 
 - [ ] **Step 4: Implement URL safety**
 
-Create `agent_tools/web_hermes/safety.py`:
+Create `agent_tools/web_toolkit/safety.py`:
 
 ```python
 from __future__ import annotations
@@ -407,7 +407,7 @@ def is_safe_url(url: str) -> tuple[bool, str | None]:
 
 - [ ] **Step 5: Implement content cleanup**
 
-Create `agent_tools/web_hermes/content.py`:
+Create `agent_tools/web_toolkit/content.py`:
 
 ```python
 from __future__ import annotations
@@ -504,7 +504,7 @@ Expected: PASS.
 - [ ] **Step 7: Commit helpers**
 
 ```bash
-git add agent_tools/web_hermes/__init__.py agent_tools/web_hermes/safety.py agent_tools/web_hermes/content.py tests/test_web_tools_migration.py
+git add agent_tools/web_toolkit/__init__.py agent_tools/web_toolkit/safety.py agent_tools/web_toolkit/content.py tests/test_web_tools_migration.py
 git commit -m "feat: add web safety and content helpers"
 ```
 
@@ -513,7 +513,7 @@ git commit -m "feat: add web safety and content helpers"
 ### Task 3: Implement Backend Selection and Provider Adapters
 
 **Files:**
-- Create: `agent_tools/web_hermes/backends.py`
+- Create: `agent_tools/web_toolkit/backends.py`
 - Modify: `tests/test_web_tools_migration.py`
 
 - [ ] **Step 1: Add failing backend routing and normalization tests**
@@ -522,7 +522,7 @@ Append to `tests/test_web_tools_migration.py`:
 
 ```python
 def test_explicit_backend_selection_honors_agent_web_backend(monkeypatch):
-    from agent_tools.web_hermes import backends
+    from agent_tools.web_toolkit import backends
 
     monkeypatch.setenv("AGENT_WEB_BACKEND", "parallel")
     monkeypatch.setenv("PARALLEL_API_KEY", "parallel-key")
@@ -534,7 +534,7 @@ def test_explicit_backend_selection_honors_agent_web_backend(monkeypatch):
 
 
 def test_backend_auto_selection_priority(monkeypatch):
-    from agent_tools.web_hermes import backends
+    from agent_tools.web_toolkit import backends
 
     monkeypatch.delenv("AGENT_WEB_BACKEND", raising=False)
     monkeypatch.delenv("WEB_BACKEND", raising=False)
@@ -556,7 +556,7 @@ def test_backend_auto_selection_priority(monkeypatch):
 
 
 def test_missing_backend_configuration_raises_structured_error(monkeypatch):
-    from agent_tools.web_hermes import backends
+    from agent_tools.web_toolkit import backends
 
     for key in (
         "AGENT_WEB_BACKEND",
@@ -579,7 +579,7 @@ def test_missing_backend_configuration_raises_structured_error(monkeypatch):
 
 
 def test_missing_optional_sdk_fails_only_selected_backend(monkeypatch):
-    from agent_tools.web_hermes import backends
+    from agent_tools.web_toolkit import backends
 
     monkeypatch.setenv("AGENT_WEB_BACKEND", "firecrawl")
     monkeypatch.setenv("FIRECRAWL_API_KEY", "firecrawl-key")
@@ -595,7 +595,7 @@ def test_missing_optional_sdk_fails_only_selected_backend(monkeypatch):
 
 
 def test_normalize_search_result_shape():
-    from agent_tools.web_hermes.backends import normalize_search_results
+    from agent_tools.web_toolkit.backends import normalize_search_results
 
     results = normalize_search_results(
         "exa",
@@ -633,11 +633,11 @@ pytest tests/test_web_tools_migration.py::test_explicit_backend_selection_honors
   tests/test_web_tools_migration.py::test_normalize_search_result_shape -v
 ```
 
-Expected: FAIL because `agent_tools.web_hermes.backends` does not exist.
+Expected: FAIL because `agent_tools.web_toolkit.backends` does not exist.
 
 - [ ] **Step 3: Implement backend adapter module**
 
-Create `agent_tools/web_hermes/backends.py`:
+Create `agent_tools/web_toolkit/backends.py`:
 
 ```python
 from __future__ import annotations
@@ -943,7 +943,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit backend layer**
 
 ```bash
-git add agent_tools/web_hermes/backends.py tests/test_web_tools_migration.py
+git add agent_tools/web_toolkit/backends.py tests/test_web_tools_migration.py
 git commit -m "feat: add web backend routing adapters"
 ```
 
@@ -1110,8 +1110,8 @@ from pydantic import BaseModel, Field
 
 from agent_tools.file_toolkit.redact import redact_sensitive_text
 from agent_tools.shared.tool_result import tool_failure, tool_success
-from agent_tools.web_hermes.backends import BackendConfigurationError, get_backend
-from agent_tools.web_hermes.content import (
+from agent_tools.web_toolkit.backends import BackendConfigurationError, get_backend
+from agent_tools.web_toolkit.content import (
     DEFAULT_MAX_CHARS_PER_URL,
     DEFAULT_MIN_LENGTH_FOR_SUMMARIZATION,
     bound_content,
@@ -1119,7 +1119,7 @@ from agent_tools.web_hermes.content import (
     should_summarize,
     summarize_with_auxiliary,
 )
-from agent_tools.web_hermes.safety import is_safe_url
+from agent_tools.web_toolkit.safety import is_safe_url
 
 
 dotenv.load_dotenv()
@@ -1338,7 +1338,7 @@ Expected: PASS.
 
 ```bash
 git add agent_tools/public/web.py tests/test_public_toolmessage_results.py tests/test_web_tools_migration.py
-git commit -m "feat: expose Hermes-style web tools"
+git commit -m "feat: expose project-native web tools"
 ```
 
 ---
@@ -1688,7 +1688,7 @@ Run:
 pytest
 ```
 
-Expected: PASS. If unrelated pre-existing failures appear, record the failing test names and confirm they do not involve `agent_tools.public.web`, `agent_tools.web_hermes`, `agent_tools.web`, `agent_core.delegation`, or `agent_core.tool_limits`.
+Expected: PASS. If unrelated pre-existing failures appear, record the failing test names and confirm they do not involve `agent_tools.public.web`, `agent_tools.web_toolkit`, `agent_tools.web`, `agent_core.delegation`, or `agent_core.tool_limits`.
 
 - [ ] **Step 4: Check imports without provider SDK credentials**
 
@@ -1722,18 +1722,18 @@ Run:
 
 ```bash
 git diff --stat
-git diff -- agent_tools/public/web.py agent_tools/web_hermes/backends.py agent_tools/web_hermes/safety.py agent_tools/web_hermes/content.py agent_core/delegation.py agent_core/tool_limits.py agent_tools/public/__init__.py agent_tools/README.md tests/test_web_tools_migration.py tests/test_public_toolmessage_results.py tests/test_agent_tools_public_imports.py
+git diff -- agent_tools/public/web.py agent_tools/web_toolkit/backends.py agent_tools/web_toolkit/safety.py agent_tools/web_toolkit/content.py agent_core/delegation.py agent_core/tool_limits.py agent_tools/public/__init__.py agent_tools/README.md tests/test_web_tools_migration.py tests/test_public_toolmessage_results.py tests/test_agent_tools_public_imports.py
 ```
 
-Expected: Diff only contains Hermes web migration work and no unrelated worktree cleanup.
+Expected: Diff only contains reference implementation web migration work and no unrelated worktree cleanup.
 
 - [ ] **Step 6: Final commit if verification fixes were needed**
 
 Only if Step 1-5 required additional edits:
 
 ```bash
-git add agent_tools/public/web.py agent_tools/web_hermes/backends.py agent_tools/web_hermes/safety.py agent_tools/web_hermes/content.py agent_core/delegation.py agent_core/tool_limits.py agent_tools/public/__init__.py agent_tools/README.md tests/test_web_tools_migration.py tests/test_public_toolmessage_results.py tests/test_agent_tools_public_imports.py
-git commit -m "fix: complete Hermes web migration verification"
+git add agent_tools/public/web.py agent_tools/web_toolkit/backends.py agent_tools/web_toolkit/safety.py agent_tools/web_toolkit/content.py agent_core/delegation.py agent_core/tool_limits.py agent_tools/public/__init__.py agent_tools/README.md tests/test_web_tools_migration.py tests/test_public_toolmessage_results.py tests/test_agent_tools_public_imports.py
+git commit -m "fix: complete reference implementation web migration verification"
 ```
 
 ---
@@ -1755,7 +1755,7 @@ git commit -m "fix: complete Hermes web migration verification"
 
 ## Execution Handoff
 
-Plan complete and saved to `docs/superpowers/plans/2026-06-06-hermes-web-tools-migration.md`. Two execution options:
+Plan complete and saved to `docs/superpowers/plans/2026-06-06-web-tools-migration.md`. Two execution options:
 
 **1. Subagent-Driven (recommended)** - Dispatch a fresh subagent per task, review between tasks, fast iteration.
 

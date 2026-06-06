@@ -40,7 +40,7 @@ Remaining ambiguity:
 - Runtime origin identity still starts from LangGraph thread id and does not
   reliably distinguish CLI sessions, gateway chats, or web sessions.
 
-Hermes is a semantic reference for platform/chat/thread origin modeling and
+Reference implementation is a semantic reference for platform/chat/thread origin modeling and
 target resolution. Its monolithic delivery router should not be copied because
 this project already has a better durable event and adapter registry model.
 

@@ -1,12 +1,12 @@
-# Hermes Backend-Aware Path Safety Implementation Plan
+# Reference Implementation Backend-Aware Path Safety Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Make public file-tool path validation and low-level safe-root enforcement understand Docker `/workspace`, Singularity active/configured cwd, and SSH active/configured cwd without host-path expansion leaks.
 
-**Architecture:** Add one small backend path policy module that derives backend type, live cwd, configured cwd, and allowed roots from the Hermes active environment plus `_get_env_config()`. Public file tools use that module for read/write/search/patch path admission; `ShellFileOperations` uses the same policy shape for safe-root exceptions while keeping local writes constrained to `AGENT_WRITE_SAFE_ROOT`.
+**Architecture:** Add one small backend path policy module that derives backend type, live cwd, configured cwd, and allowed roots from the reference implementation active environment plus `_get_env_config()`. Public file tools use that module for read/write/search/patch path admission; `ShellFileOperations` uses the same policy shape for safe-root exceptions while keeping local writes constrained to `AGENT_WRITE_SAFE_ROOT`.
 
-**Tech Stack:** Python 3.11, pytest, LangChain tool wrappers, Hermes terminal toolkit environments.
+**Tech Stack:** Python 3.11, pytest, LangChain tool wrappers, terminal toolkit environments.
 
 ---
 
@@ -17,9 +17,9 @@
   - Avoids host `~` expansion for Docker/Singularity/SSH paths.
   - Exposes helpers for public tool validation and safe-root extra roots.
 
-- Modify `agent_tools/hermes_terminal_toolkit/terminal_tool.py`
-  - Tags created environments with `_hermes_env_type`, `_hermes_configured_cwd`, and `_hermes_host_cwd`.
-  - This makes fake class-name inference unnecessary for real Hermes envs.
+- Modify `agent_tools/terminal_toolkit/terminal_tool.py`
+  - Tags created environments with `_backend_env_type`, `_backend_configured_cwd`, and `_backend_host_cwd`.
+  - This makes fake class-name inference unnecessary for real terminal envs.
 
 - Modify `agent_tools/public/files.py`
   - Replaces local `_allowed_workspace_roots_for_task()` internals with backend-aware helper calls.
@@ -40,25 +40,25 @@
 
 - Add/modify tests:
   - `tests/test_backend_path_policy.py`
-  - `tests/test_hermes_active_env.py`
+  - `tests/test_active_env.py`
   - `tests/test_file_tools_runtime_task_id.py`
-  - `tests/test_file_tools_hermes_env.py`
+  - `tests/test_file_tools_active_env.py`
 
 ---
 
-### Task 1: Tag Hermes Environments With Backend Metadata
+### Task 1: Tag reference implementation Environments With Backend Metadata
 
 **Files:**
-- Modify: `agent_tools/hermes_terminal_toolkit/terminal_tool.py`
-- Test: `tests/test_hermes_active_env.py`
+- Modify: `agent_tools/terminal_toolkit/terminal_tool.py`
+- Test: `tests/test_active_env.py`
 
 - [ ] **Step 1: Write failing tests for environment metadata**
 
-Append these tests to `tests/test_hermes_active_env.py`:
+Append these tests to `tests/test_active_env.py`:
 
 ```python
 def test_create_environment_tags_local_env_metadata(monkeypatch):
-    from agent_tools.hermes_terminal_toolkit import terminal_tool
+    from agent_tools.terminal_toolkit import terminal_tool
 
     class FakeLocalEnv(FakeEnv):
         def __init__(self, cwd, timeout):
@@ -78,13 +78,13 @@ def test_create_environment_tags_local_env_metadata(monkeypatch):
         timeout=33,
     )
 
-    assert env._hermes_env_type == "local"
-    assert env._hermes_configured_cwd == "/repo"
-    assert env._hermes_host_cwd is None
+    assert env._backend_env_type == "local"
+    assert env._backend_configured_cwd == "/repo"
+    assert env._backend_host_cwd is None
 
 
 def test_create_environment_tags_docker_env_metadata(monkeypatch):
-    from agent_tools.hermes_terminal_toolkit import terminal_tool
+    from agent_tools.terminal_toolkit import terminal_tool
 
     class FakeDockerEnv(FakeEnv):
         def __init__(self, **kwargs):
@@ -107,9 +107,9 @@ def test_create_environment_tags_docker_env_metadata(monkeypatch):
         host_cwd="/home/miku/projects/langchain",
     )
 
-    assert env._hermes_env_type == "docker"
-    assert env._hermes_configured_cwd == "/workspace"
-    assert env._hermes_host_cwd == "/home/miku/projects/langchain"
+    assert env._backend_env_type == "docker"
+    assert env._backend_configured_cwd == "/workspace"
+    assert env._backend_host_cwd == "/home/miku/projects/langchain"
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
@@ -118,23 +118,23 @@ Run:
 
 ```bash
 PYTHONPATH=. /home/miku/miniforge3/envs/langchain/bin/python -m pytest \
-  tests/test_hermes_active_env.py::test_create_environment_tags_local_env_metadata \
-  tests/test_hermes_active_env.py::test_create_environment_tags_docker_env_metadata -q
+  tests/test_active_env.py::test_create_environment_tags_local_env_metadata \
+  tests/test_active_env.py::test_create_environment_tags_docker_env_metadata -q
 ```
 
-Expected: FAIL with `AttributeError` for `_hermes_env_type`.
+Expected: FAIL with `AttributeError` for `_backend_env_type`.
 
 - [ ] **Step 3: Implement environment tagging**
 
-In `agent_tools/hermes_terminal_toolkit/terminal_tool.py`, add this helper above `_create_environment()`:
+In `agent_tools/terminal_toolkit/terminal_tool.py`, add this helper above `_create_environment()`:
 
 ```python
 def _tag_environment(env, *, env_type: str, configured_cwd: str, host_cwd: str | None = None):
-    """Attach Hermes backend metadata used by file-tool path policy."""
+    """Attach runtime backend metadata used by file-tool path policy."""
     try:
-        setattr(env, "_hermes_env_type", env_type)
-        setattr(env, "_hermes_configured_cwd", configured_cwd)
-        setattr(env, "_hermes_host_cwd", host_cwd)
+        setattr(env, "_backend_env_type", env_type)
+        setattr(env, "_backend_configured_cwd", configured_cwd)
+        setattr(env, "_backend_host_cwd", host_cwd)
     except Exception:
         logger.debug("Failed to tag environment metadata", exc_info=True)
     return env
@@ -218,8 +218,8 @@ Run:
 
 ```bash
 PYTHONPATH=. /home/miku/miniforge3/envs/langchain/bin/python -m pytest \
-  tests/test_hermes_active_env.py::test_create_environment_tags_local_env_metadata \
-  tests/test_hermes_active_env.py::test_create_environment_tags_docker_env_metadata -q
+  tests/test_active_env.py::test_create_environment_tags_local_env_metadata \
+  tests/test_active_env.py::test_create_environment_tags_docker_env_metadata -q
 ```
 
 Expected: `2 passed`.
@@ -227,8 +227,8 @@ Expected: `2 passed`.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add agent_tools/hermes_terminal_toolkit/terminal_tool.py tests/test_hermes_active_env.py
-git commit -m "feat: tag Hermes environments with backend metadata"
+git add agent_tools/terminal_toolkit/terminal_tool.py tests/test_active_env.py
+git commit -m "feat: tag terminal environments with backend metadata"
 ```
 
 ---
@@ -250,14 +250,14 @@ from pathlib import Path
 class FakeEnv:
     def __init__(self, cwd, env_type):
         self.cwd = cwd
-        self._hermes_env_type = env_type
-        self._hermes_configured_cwd = cwd
-        self._hermes_host_cwd = None
+        self._backend_env_type = env_type
+        self._backend_configured_cwd = cwd
+        self._backend_host_cwd = None
 
 
 def test_policy_uses_active_ssh_cwd_without_host_expanding_tilde(monkeypatch):
     from agent_tools.file_toolkit import backend_paths
-    from agent_tools.hermes_terminal_toolkit import terminal_tool
+    from agent_tools.terminal_toolkit import terminal_tool
 
     active = FakeEnv("/home/remote/project", "ssh")
     monkeypatch.setattr(terminal_tool, "get_active_env", lambda task_id: active)
@@ -278,7 +278,7 @@ def test_policy_uses_active_ssh_cwd_without_host_expanding_tilde(monkeypatch):
 
 def test_policy_allows_docker_workspace_even_when_cwd_is_root(monkeypatch):
     from agent_tools.file_toolkit import backend_paths
-    from agent_tools.hermes_terminal_toolkit import terminal_tool
+    from agent_tools.terminal_toolkit import terminal_tool
 
     active = FakeEnv("/root", "docker")
     monkeypatch.setattr(terminal_tool, "get_active_env", lambda task_id: active)
@@ -297,7 +297,7 @@ def test_policy_allows_docker_workspace_even_when_cwd_is_root(monkeypatch):
 
 def test_policy_uses_singularity_active_cwd_without_global_workspace_root(monkeypatch):
     from agent_tools.file_toolkit import backend_paths
-    from agent_tools.hermes_terminal_toolkit import terminal_tool
+    from agent_tools.terminal_toolkit import terminal_tool
 
     active = FakeEnv("/analysis/project", "singularity")
     monkeypatch.setattr(terminal_tool, "get_active_env", lambda task_id: active)
@@ -330,7 +330,7 @@ Expected: FAIL with `ImportError` for `agent_tools.file_toolkit.backend_paths`.
 Create `agent_tools/file_toolkit/backend_paths.py`:
 
 ```python
-"""Backend-aware path policy helpers for Hermes file tools."""
+"""Backend-aware path policy helpers for reference file tools."""
 
 from __future__ import annotations
 
@@ -353,7 +353,7 @@ class BackendPathContext:
 
 
 def _terminal_tool():
-    from agent_tools.hermes_terminal_toolkit import terminal_tool
+    from agent_tools.terminal_toolkit import terminal_tool
 
     return terminal_tool
 
@@ -378,19 +378,19 @@ def _normal_env_type(value: object) -> str:
 
 def _env_type_from(active_env, config: dict) -> str:
     return _normal_env_type(
-        getattr(active_env, "_hermes_env_type", None)
+        getattr(active_env, "_backend_env_type", None)
         or getattr(active_env, "env_type", None)
         or config.get("env_type")
     )
 
 
 def _configured_cwd_from(active_env, config: dict) -> str | None:
-    value = getattr(active_env, "_hermes_configured_cwd", None) or config.get("cwd")
+    value = getattr(active_env, "_backend_configured_cwd", None) or config.get("cwd")
     return str(value) if value else None
 
 
 def _host_cwd_from(active_env, config: dict) -> str | None:
-    value = getattr(active_env, "_hermes_host_cwd", None) or config.get("host_cwd")
+    value = getattr(active_env, "_backend_host_cwd", None) or config.get("host_cwd")
     return str(value) if value else None
 
 
@@ -464,12 +464,12 @@ def allowed_workspace_roots_for_task(task_id: str = "default") -> list[str]:
 
 def safe_write_roots_for_env(env, fallback_cwd: str | None = None) -> list[str]:
     env_type = _normal_env_type(
-        getattr(env, "_hermes_env_type", None)
+        getattr(env, "_backend_env_type", None)
         or getattr(env, "env_type", None)
         or type(env).__name__
     )
     cwd = str(getattr(env, "cwd", None) or fallback_cwd or "")
-    configured_cwd = str(getattr(env, "_hermes_configured_cwd", "") or "")
+    configured_cwd = str(getattr(env, "_backend_configured_cwd", "") or "")
 
     roots: list[str] = []
     seen: set[str] = set()
@@ -538,7 +538,7 @@ Expected: `3 passed`.
 
 ```bash
 git add agent_tools/file_toolkit/backend_paths.py tests/test_backend_path_policy.py
-git commit -m "feat: add Hermes backend path policy"
+git commit -m "feat: add runtime backend path policy"
 ```
 
 ---
@@ -556,18 +556,18 @@ Append these tests to `tests/test_file_tools_runtime_task_id.py`:
 ```python
 def test_write_file_allows_active_ssh_cwd_path_and_forwards_original_path(monkeypatch):
     import agent_tools.public.files as public_files
-    from agent_core.session_context import hermes_task_id_from_thread_id
+    from agent_core.session_context import runtime_task_id_from_thread_id
     from agent_tools.file_toolkit import file_tools
-    from agent_tools.hermes_terminal_toolkit import terminal_tool
+    from agent_tools.terminal_toolkit import terminal_tool
 
     class ActiveSSHEnv:
         cwd = "/home/remote/project"
-        _hermes_env_type = "ssh"
-        _hermes_configured_cwd = "~"
+        _backend_env_type = "ssh"
+        _backend_configured_cwd = "~"
 
     calls = []
     runtime = SimpleNamespace(execution_info=SimpleNamespace(thread_id="ssh-write"))
-    expected_task_id = hermes_task_id_from_thread_id("ssh-write")
+    expected_task_id = runtime_task_id_from_thread_id("ssh-write")
 
     monkeypatch.setattr(file_tools, "get_active_env", lambda task_id: ActiveSSHEnv())
     monkeypatch.setattr(terminal_tool, "get_active_env", lambda task_id: ActiveSSHEnv())
@@ -592,12 +592,12 @@ def test_write_file_allows_active_ssh_cwd_path_and_forwards_original_path(monkey
 def test_write_file_rejects_ssh_absolute_path_outside_active_cwd(monkeypatch):
     import agent_tools.public.files as public_files
     from agent_tools.file_toolkit import file_tools
-    from agent_tools.hermes_terminal_toolkit import terminal_tool
+    from agent_tools.terminal_toolkit import terminal_tool
 
     class ActiveSSHEnv:
         cwd = "/home/remote/project"
-        _hermes_env_type = "ssh"
-        _hermes_configured_cwd = "~"
+        _backend_env_type = "ssh"
+        _backend_configured_cwd = "~"
 
     calls = []
 
@@ -625,12 +625,12 @@ def test_write_file_rejects_ssh_absolute_path_outside_active_cwd(monkeypatch):
 def test_read_file_allows_singularity_active_cwd_path(monkeypatch):
     import agent_tools.public.files as public_files
     from agent_tools.file_toolkit import file_tools
-    from agent_tools.hermes_terminal_toolkit import terminal_tool
+    from agent_tools.terminal_toolkit import terminal_tool
 
     class ActiveSingularityEnv:
         cwd = "/analysis/project"
-        _hermes_env_type = "singularity"
-        _hermes_configured_cwd = "/root"
+        _backend_env_type = "singularity"
+        _backend_configured_cwd = "/root"
 
     calls = []
 
@@ -765,20 +765,20 @@ git commit -m "fix: validate public file paths against backend roots"
 
 **Files:**
 - Modify: `agent_tools/file_toolkit/file_tools.py`
-- Test: `tests/test_file_tools_hermes_env.py`
+- Test: `tests/test_file_tools_active_env.py`
 
 - [ ] **Step 1: Write failing tests for resolver behavior**
 
-Append this test to `tests/test_file_tools_hermes_env.py`:
+Append this test to `tests/test_file_tools_active_env.py`:
 
 ```python
 def test_resolve_path_for_task_uses_backend_policy_for_ssh_active_cwd(monkeypatch):
-    from agent_tools.hermes_terminal_toolkit import terminal_tool
+    from agent_tools.terminal_toolkit import terminal_tool
 
     class ActiveSSHEnv:
         cwd = "/home/remote/project"
-        _hermes_env_type = "ssh"
-        _hermes_configured_cwd = "~"
+        _backend_env_type = "ssh"
+        _backend_configured_cwd = "~"
 
     monkeypatch.setattr(file_tools, "get_active_env", lambda task_id: ActiveSSHEnv())
     monkeypatch.setattr(terminal_tool, "get_active_env", lambda task_id: ActiveSSHEnv())
@@ -797,7 +797,7 @@ Run:
 
 ```bash
 PYTHONPATH=. /home/miku/miniforge3/envs/langchain/bin/python -m pytest \
-  tests/test_file_tools_hermes_env.py::test_resolve_path_for_task_uses_backend_policy_for_ssh_active_cwd -q
+  tests/test_file_tools_active_env.py::test_resolve_path_for_task_uses_backend_policy_for_ssh_active_cwd -q
 ```
 
 Expected: FAIL before the resolver delegates to `backend_paths.resolve_path_for_policy()`.
@@ -826,9 +826,9 @@ Run:
 
 ```bash
 PYTHONPATH=. /home/miku/miniforge3/envs/langchain/bin/python -m pytest \
-  tests/test_file_tools_hermes_env.py::test_resolve_path_for_task_uses_backend_policy_for_ssh_active_cwd \
-  tests/test_file_tools_hermes_env.py::test_resolve_path_uses_active_hermes_env_cwd_without_cached_wrapper \
-  tests/test_file_tools_hermes_env.py::test_write_file_tool_smokes_real_local_hermes_env -q
+  tests/test_file_tools_active_env.py::test_resolve_path_for_task_uses_backend_policy_for_ssh_active_cwd \
+  tests/test_file_tools_active_env.py::test_resolve_path_uses_active_runtime_env_cwd_without_cached_wrapper \
+  tests/test_file_tools_active_env.py::test_write_file_tool_smokes_real_local_runtime_env -q
 ```
 
 Expected: all selected tests PASS.
@@ -836,7 +836,7 @@ Expected: all selected tests PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add agent_tools/file_toolkit/file_tools.py tests/test_file_tools_hermes_env.py
+git add agent_tools/file_toolkit/file_tools.py tests/test_file_tools_active_env.py
 git commit -m "fix: resolve file-tool paths with backend policy"
 ```
 
@@ -847,11 +847,11 @@ git commit -m "fix: resolve file-tool paths with backend policy"
 **Files:**
 - Modify: `agent_tools/file_toolkit/file_safety.py`
 - Modify: `agent_tools/file_toolkit/file_operations.py`
-- Test: `tests/test_file_tools_hermes_env.py`
+- Test: `tests/test_file_tools_active_env.py`
 
 - [ ] **Step 1: Write failing safe-root tests**
 
-Append these tests to `tests/test_file_tools_hermes_env.py`:
+Append these tests to `tests/test_file_tools_active_env.py`:
 
 ```python
 def test_shell_file_operations_allows_docker_workspace_absolute_write(
@@ -863,8 +863,8 @@ def test_shell_file_operations_allows_docker_workspace_absolute_write(
 
     class DockerEnv:
         cwd = "/root"
-        _hermes_env_type = "docker"
-        _hermes_configured_cwd = "/root"
+        _backend_env_type = "docker"
+        _backend_configured_cwd = "/root"
 
         def __init__(self):
             self.commands = []
@@ -894,8 +894,8 @@ def test_shell_file_operations_allows_singularity_effective_cwd_writes(
 
     class SingularityEnv:
         cwd = "/analysis/project"
-        _hermes_env_type = "singularity"
-        _hermes_configured_cwd = "/analysis/project"
+        _backend_env_type = "singularity"
+        _backend_configured_cwd = "/analysis/project"
 
         def __init__(self):
             self.commands = []
@@ -928,8 +928,8 @@ def test_shell_file_operations_keeps_workspace_root_denied_for_singularity(
 
     class SingularityEnv:
         cwd = "/analysis/project"
-        _hermes_env_type = "singularity"
-        _hermes_configured_cwd = "/analysis/project"
+        _backend_env_type = "singularity"
+        _backend_configured_cwd = "/analysis/project"
 
         def __init__(self):
             self.commands = []
@@ -953,9 +953,9 @@ Run:
 
 ```bash
 PYTHONPATH=. /home/miku/miniforge3/envs/langchain/bin/python -m pytest \
-  tests/test_file_tools_hermes_env.py::test_shell_file_operations_allows_docker_workspace_absolute_write \
-  tests/test_file_tools_hermes_env.py::test_shell_file_operations_allows_singularity_effective_cwd_writes \
-  tests/test_file_tools_hermes_env.py::test_shell_file_operations_keeps_workspace_root_denied_for_singularity -q
+  tests/test_file_tools_active_env.py::test_shell_file_operations_allows_docker_workspace_absolute_write \
+  tests/test_file_tools_active_env.py::test_shell_file_operations_allows_singularity_effective_cwd_writes \
+  tests/test_file_tools_active_env.py::test_shell_file_operations_keeps_workspace_root_denied_for_singularity -q
 ```
 
 Expected before implementation: the Singularity `/workspace` denial test FAILS because current code treats Singularity like Docker for `/workspace`.
@@ -1045,11 +1045,11 @@ Run:
 
 ```bash
 PYTHONPATH=. /home/miku/miniforge3/envs/langchain/bin/python -m pytest \
-  tests/test_file_tools_hermes_env.py::test_shell_file_operations_allows_docker_workspace_absolute_write \
-  tests/test_file_tools_hermes_env.py::test_shell_file_operations_allows_singularity_effective_cwd_writes \
-  tests/test_file_tools_hermes_env.py::test_shell_file_operations_keeps_workspace_root_denied_for_singularity \
-  tests/test_file_tools_hermes_env.py::test_shell_file_operations_allows_effective_ssh_cwd_writes \
-  tests/test_file_tools_hermes_env.py::test_shell_file_operations_keeps_workspace_root_denied_for_ssh -q
+  tests/test_file_tools_active_env.py::test_shell_file_operations_allows_docker_workspace_absolute_write \
+  tests/test_file_tools_active_env.py::test_shell_file_operations_allows_singularity_effective_cwd_writes \
+  tests/test_file_tools_active_env.py::test_shell_file_operations_keeps_workspace_root_denied_for_singularity \
+  tests/test_file_tools_active_env.py::test_shell_file_operations_allows_effective_ssh_cwd_writes \
+  tests/test_file_tools_active_env.py::test_shell_file_operations_keeps_workspace_root_denied_for_ssh -q
 ```
 
 Expected: all selected tests PASS.
@@ -1057,7 +1057,7 @@ Expected: all selected tests PASS.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add agent_tools/file_toolkit/file_safety.py agent_tools/file_toolkit/file_operations.py tests/test_file_tools_hermes_env.py
+git add agent_tools/file_toolkit/file_safety.py agent_tools/file_toolkit/file_operations.py tests/test_file_tools_active_env.py
 git commit -m "fix: apply backend-aware safe write roots"
 ```
 
@@ -1071,7 +1071,7 @@ git commit -m "fix: apply backend-aware safe write roots"
 
 - [ ] **Step 1: Update README behavior notes**
 
-In `agent_tools/file_toolkit/README.md`, add this paragraph under the Hermes env-backed file operation section:
+In `agent_tools/file_toolkit/README.md`, add this paragraph under the terminal env-backed file operation section:
 
 ```markdown
 Backend-aware path policy:
@@ -1091,8 +1091,8 @@ Run:
 PYTHONPATH=. /home/miku/miniforge3/envs/langchain/bin/python -m pytest \
   tests/test_backend_path_policy.py \
   tests/test_file_tools_runtime_task_id.py \
-  tests/test_file_tools_hermes_env.py \
-  tests/test_hermes_active_env.py -q
+  tests/test_file_tools_active_env.py \
+  tests/test_active_env.py -q
 ```
 
 Expected: all selected tests PASS.
@@ -1154,7 +1154,7 @@ Type consistency:
 
 ## Execution Handoff
 
-Plan complete and saved to `docs/superpowers/plans/2026-05-20-hermes-backend-aware-path-safety.md`. Two execution options:
+Plan complete and saved to `docs/superpowers/plans/2026-05-20-archived_reference-backend-aware-path-safety.md`. Two execution options:
 
 1. **Subagent-Driven (recommended)** - dispatch a fresh subagent per task, review between tasks, fast iteration
 2. **Inline Execution** - execute tasks in this session using executing-plans, batch execution with checkpoints

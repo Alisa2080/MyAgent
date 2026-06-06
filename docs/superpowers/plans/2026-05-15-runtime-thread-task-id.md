@@ -1,12 +1,12 @@
-# Hermes Thread Task ID Implementation Plan
+# Reference Implementation Thread Task ID Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Use LangGraph execution `thread_id` as the stable session source for Hermes `task_id`, so terminal state and future background processes are isolated per conversation.
+**Goal:** Use LangGraph execution `thread_id` as the stable session source forreference implementation `task_id`, so terminal state and future background processes are isolated per conversation.
 
-**Architecture:** Tools receive hidden LangChain `ToolRuntime` when available, derive a sanitized Hermes task id from `runtime.execution_info.thread_id`, and fall back to `"default"` in local tests or older runtimes. The model never sees or controls `task_id`; shell execution and future `terminal/process` wrappers use the same helper.
+**Architecture:** Tools receive hidden LangChain `ToolRuntime` when available, derive a sanitized runtime task id from `runtime.execution_info.thread_id`, and fall back to `"default"` in local tests or older runtimes. The model never sees or controls `task_id`; shell execution and future `terminal/process` wrappers use the same helper.
 
-**Tech Stack:** Python, LangChain `@tool`, LangChain `ToolRuntime`, LangGraph execution info, Hermes terminal toolkit, pytest-compatible unit tests.
+**Tech Stack:** Python, LangChain `@tool`, LangChain `ToolRuntime`, LangGraph execution info, terminal toolkit, pytest-compatible unit tests.
 
 ---
 
@@ -20,12 +20,12 @@
 
 ## File Structure
 
-- Create `agent_core/session_context.py`: derive stable, safe Hermes task ids from LangChain `ToolRuntime`, raw thread ids, or fallback values.
+- Create `agent_core/session_context.py`: derive stable, safe runtime task ids from LangChain `ToolRuntime`, raw thread ids, or fallback values.
 - Modify `agent_tools/shell.py`: add hidden optional runtime parameter to `execute_command`, call the session helper, and pass the derived task id to `run_foreground_command`.
-- Modify `agent_tools/hermes_shell_adapter.py`: keep the explicit `task_id` parameter and validate it defensively before calling Hermes.
+- Modify `agent_tools/terminal_shell_adapter.py`: keep the explicit `task_id` parameter and validate it defensively before calling reference implementation.
 - Create `tests/test_session_context.py`: unit-test task id derivation, sanitization, deterministic hashing, and fallback behavior without requiring LangChain.
-- Create `tests/test_shell_task_id.py`: unit-test that `execute_command` forwards the derived task id to the Hermes adapter using stubs for LangChain/Pydantic.
-- Optionally modify future `terminal/process` wrappers in a later plan; do not expose Hermes `task_id` to the model in this task.
+- Create `tests/test_shell_task_id.py`: unit-test that `execute_command` forwards the derived task id to the reference implementation adapter using stubs for LangChain/Pydantic.
+- Optionally modify future `terminal/process` wrappers in a later plan; do not exposereference implementation `task_id` to the model in this task.
 
 ---
 
@@ -42,20 +42,20 @@ Create `tests/test_session_context.py`:
 ```python
 from types import SimpleNamespace
 
-from agent_core.session_context import hermes_task_id_from_runtime, hermes_task_id_from_thread_id
+from agent_core.session_context import runtime_task_id_from_runtime, runtime_task_id_from_thread_id
 
 
-def test_hermes_task_id_is_deterministic_and_prefixed():
-    first = hermes_task_id_from_thread_id("thread-123")
-    second = hermes_task_id_from_thread_id("thread-123")
+def test_runtime_task_id_is_deterministic_and_prefixed():
+    first = runtime_task_id_from_thread_id("thread-123")
+    second = runtime_task_id_from_thread_id("thread-123")
 
     assert first == second
     assert first.startswith("lg_")
     assert len(first) == 27
 
 
-def test_hermes_task_id_does_not_embed_raw_thread_id():
-    task_id = hermes_task_id_from_thread_id("user@example.com/session/abc")
+def test_runtime_task_id_does_not_embed_raw_thread_id():
+    task_id = runtime_task_id_from_thread_id("user@example.com/session/abc")
 
     assert "user@example.com" not in task_id
     assert "/" not in task_id
@@ -63,9 +63,9 @@ def test_hermes_task_id_does_not_embed_raw_thread_id():
 
 
 def test_missing_thread_id_falls_back_to_default():
-    assert hermes_task_id_from_thread_id(None) == "default"
-    assert hermes_task_id_from_thread_id("") == "default"
-    assert hermes_task_id_from_runtime(None) == "default"
+    assert runtime_task_id_from_thread_id(None) == "default"
+    assert runtime_task_id_from_thread_id("") == "default"
+    assert runtime_task_id_from_runtime(None) == "default"
 
 
 def test_runtime_execution_info_thread_id_is_used():
@@ -74,7 +74,7 @@ def test_runtime_execution_info_thread_id_is_used():
         config={"configurable": {"thread_id": "thread-from-config"}},
     )
 
-    assert hermes_task_id_from_runtime(runtime) == hermes_task_id_from_thread_id("thread-from-runtime")
+    assert runtime_task_id_from_runtime(runtime) == runtime_task_id_from_thread_id("thread-from-runtime")
 
 
 def test_runtime_config_thread_id_is_fallback_when_execution_info_missing():
@@ -83,7 +83,7 @@ def test_runtime_config_thread_id_is_fallback_when_execution_info_missing():
         config={"configurable": {"thread_id": "thread-from-config"}},
     )
 
-    assert hermes_task_id_from_runtime(runtime) == hermes_task_id_from_thread_id("thread-from-config")
+    assert runtime_task_id_from_runtime(runtime) == runtime_task_id_from_thread_id("thread-from-config")
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
@@ -108,22 +108,22 @@ _TASK_ID_HASH_CHARS = 24
 _FALLBACK_TASK_ID = "default"
 
 
-def hermes_task_id_from_thread_id(thread_id: str | None) -> str:
-    """Return a path-safe Hermes task id derived from a LangGraph thread id."""
+def runtime_task_id_from_thread_id(thread_id: str | None) -> str:
+    """Return a path-safe runtime task id derived from a LangGraph thread id."""
     if not thread_id:
         return _FALLBACK_TASK_ID
     digest = sha256(str(thread_id).encode("utf-8")).hexdigest()[:_TASK_ID_HASH_CHARS]
     return f"{_TASK_ID_PREFIX}{digest}"
 
 
-def hermes_task_id_from_runtime(runtime: Any | None) -> str:
+def runtime_task_id_from_runtime(runtime: Any | None) -> str:
     """Extract LangGraph thread identity from ToolRuntime-like objects."""
     thread_id = _thread_id_from_execution_info(runtime)
     if thread_id:
-        return hermes_task_id_from_thread_id(thread_id)
+        return runtime_task_id_from_thread_id(thread_id)
 
     thread_id = _thread_id_from_config(runtime)
-    return hermes_task_id_from_thread_id(thread_id)
+    return runtime_task_id_from_thread_id(thread_id)
 
 
 def _thread_id_from_execution_info(runtime: Any | None) -> str | None:
@@ -155,7 +155,7 @@ Expected: PASS for all tests in `tests/test_session_context.py`.
 
 ```bash
 git add agent_core/session_context.py tests/test_session_context.py
-git commit -m "feat: derive hermes task ids from langgraph threads"
+git commit -m "feat: derive runtime task ids from langgraph threads"
 ```
 
 ---
@@ -176,7 +176,7 @@ import sys
 import types
 from types import SimpleNamespace
 
-from agent_core.session_context import hermes_task_id_from_thread_id
+from agent_core.session_context import runtime_task_id_from_thread_id
 
 
 def _install_langchain_and_pydantic_stubs(monkeypatch):
@@ -243,7 +243,7 @@ def test_execute_command_forwards_runtime_thread_as_task_id(monkeypatch):
     result = shell.execute_command("python -c \"print('ok')\"", runtime=runtime)
 
     assert '"status": "ok"' in result
-    assert calls[0]["task_id"] == hermes_task_id_from_thread_id("thread-abc")
+    assert calls[0]["task_id"] == runtime_task_id_from_thread_id("thread-abc")
 
 
 def test_execute_command_falls_back_to_default_without_runtime(monkeypatch):
@@ -280,10 +280,10 @@ from typing import Any
 from langchain.tools import ToolRuntime, tool
 from pydantic import BaseModel, Field
 
-from agent_core.session_context import hermes_task_id_from_runtime
+from agent_core.session_context import runtime_task_id_from_runtime
 from agent_core.workspace import WORKDIR
 from agent_tools.common import truncate
-from agent_tools.hermes_shell_adapter import run_foreground_command
+from agent_tools.terminal_shell_adapter import run_foreground_command
 from agent_tools.tool_output import tool_error, tool_ok
 ```
 
@@ -304,7 +304,7 @@ def execute_command(command: str, runtime: ToolRuntime | None = None) -> str:
         command,
         workdir=str(WORKDIR),
         timeout=120,
-        task_id=hermes_task_id_from_runtime(runtime),
+        task_id=runtime_task_id_from_runtime(runtime),
     )
     if not isinstance(payload, dict):
         return tool_error("execute_command", "Terminal backend returned an invalid response.", code="invalid_response")
@@ -327,23 +327,23 @@ git commit -m "feat: bind execute_command to langgraph thread task id"
 
 ---
 
-### Task 3: Harden Hermes Adapter Task ID Handling
+### Task 3: Harden reference implementation Adapter Task ID Handling
 
 **Files:**
-- Modify: `agent_tools/hermes_shell_adapter.py`
-- Test: `tests/test_hermes_shell_adapter_task_id.py`
+- Modify: `agent_tools/terminal_shell_adapter.py`
+- Test: `tests/test_shell_adapter_task_id.py`
 
 - [ ] **Step 1: Write the failing tests**
 
-Create `tests/test_hermes_shell_adapter_task_id.py`:
+Create `tests/test_shell_adapter_task_id.py`:
 
 ```python
 import json
 
-from agent_tools import hermes_shell_adapter
+from agent_tools import terminal_shell_adapter
 
 
-def test_adapter_forwards_task_id_to_hermes(monkeypatch, tmp_path):
+def test_adapter_forwards_task_id_to_terminal_adapter(monkeypatch, tmp_path):
     calls = []
 
     def fake_run_terminal(**kwargs):
@@ -351,9 +351,9 @@ def test_adapter_forwards_task_id_to_hermes(monkeypatch, tmp_path):
         return json.dumps({"output": "ok", "exit_code": 0, "error": None})
 
     monkeypatch.setenv("TERMINAL_ENV", "local")
-    monkeypatch.setattr(hermes_shell_adapter, "run_terminal", fake_run_terminal)
+    monkeypatch.setattr(terminal_shell_adapter, "run_terminal", fake_run_terminal)
 
-    result = hermes_shell_adapter.run_foreground_command(
+    result = terminal_shell_adapter.run_foreground_command(
         "python -c \"print('ok')\"",
         workdir=str(tmp_path),
         task_id="lg_abc123",
@@ -371,9 +371,9 @@ def test_adapter_replaces_empty_task_id_with_default(monkeypatch, tmp_path):
         return json.dumps({"output": "ok", "exit_code": 0, "error": None})
 
     monkeypatch.setenv("TERMINAL_ENV", "local")
-    monkeypatch.setattr(hermes_shell_adapter, "run_terminal", fake_run_terminal)
+    monkeypatch.setattr(terminal_shell_adapter, "run_terminal", fake_run_terminal)
 
-    result = hermes_shell_adapter.run_foreground_command(
+    result = terminal_shell_adapter.run_foreground_command(
         "python -c \"print('ok')\"",
         workdir=str(tmp_path),
         task_id="",
@@ -385,20 +385,20 @@ def test_adapter_replaces_empty_task_id_with_default(monkeypatch, tmp_path):
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `python -m pytest tests/test_hermes_shell_adapter_task_id.py -v`
+Run: `python -m pytest tests/test_shell_adapter_task_id.py -v`
 
 Expected: The empty task id test FAILS because the adapter forwards `""` unchanged.
 
 - [ ] **Step 3: Add task id normalization to adapter**
 
-Modify `agent_tools/hermes_shell_adapter.py`:
+Modify `agent_tools/terminal_shell_adapter.py`:
 
 ```python
 import json
 import os
 from pathlib import Path
 
-from agent_tools.hermes_terminal_toolkit.terminal import run_terminal
+from agent_tools.terminal_toolkit.terminal import run_terminal
 
 
 def _normalize_task_id(task_id: str | None) -> str:
@@ -418,7 +418,7 @@ def run_foreground_command(
             "output": "",
             "exit_code": -1,
             "error": (
-                "execute_command currently supports only the local Hermes backend. "
+                "execute_command currently supports only the local runtime backend. "
                 f"Found TERMINAL_ENV={env_type!r}."
             ),
             "status": "error",
@@ -439,20 +439,20 @@ Keep the JSON parsing logic unchanged.
 
 - [ ] **Step 4: Run adapter tests**
 
-Run: `python -m pytest tests/test_hermes_shell_adapter_task_id.py -v`
+Run: `python -m pytest tests/test_shell_adapter_task_id.py -v`
 
 Expected: PASS for both tests.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add agent_tools/hermes_shell_adapter.py tests/test_hermes_shell_adapter_task_id.py
-git commit -m "fix: normalize hermes adapter task ids"
+git add agent_tools/terminal_shell_adapter.py tests/test_shell_adapter_task_id.py
+git commit -m "fix: normalize archived_reference adapter task ids"
 ```
 
 ---
 
-### Task 4: Add Integration Smoke Tests for Real Hermes Local Execution
+### Task 4: Add Integration Smoke Tests for Real reference implementation Local Execution
 
 **Files:**
 - Create: `tests/test_execute_command_runtime_smoke.py`
@@ -466,7 +466,7 @@ import json
 import sys
 from types import SimpleNamespace
 
-from agent_core.session_context import hermes_task_id_from_thread_id
+from agent_core.session_context import runtime_task_id_from_thread_id
 from agent_tools.shell import execute_command
 
 
@@ -489,10 +489,10 @@ def test_execute_command_uses_runtime_thread_with_real_adapter():
     assert payload["status"] == "ok"
     assert payload["data"]["exit_code"] == 0
     assert "shell-smoke-ok" in payload["data"]["output"]
-    assert hermes_task_id_from_thread_id("smoke-thread-1").startswith("lg_")
+    assert runtime_task_id_from_thread_id("smoke-thread-1").startswith("lg_")
 
 
-def test_execute_command_still_blocks_dangerous_commands_before_hermes():
+def test_execute_command_still_blocks_dangerous_commands_before_adapter():
     raw = execute_command("sudo ls")
     payload = _decode_tool_result(raw)
 
@@ -525,13 +525,13 @@ git commit -m "test: cover execute_command thread task id smoke path"
 Append this section to `README.md`:
 
 ```markdown
-## Hermes Terminal Session Contract
+## Terminal Session Contract
 
-The shell tool uses Hermes terminal toolkit under the hood. Runtime session isolation is derived from the LangGraph execution thread:
+The shell tool uses terminal toolkit under the hood. Runtime session isolation is derived from the LangGraph execution thread:
 
-- When LangChain provides `ToolRuntime.execution_info.thread_id`, the shell tool hashes that thread id into a path-safe Hermes `task_id`.
-- The raw thread id is not exposed to the model and is not written into Hermes paths or checkpoints.
-- If no runtime thread id is available, tools fall back to the Hermes `default` task id. This fallback is intended for local tests and direct function calls only.
+- When LangChain provides `ToolRuntime.execution_info.thread_id`, the shell tool hashes that thread id into a path-safereference implementation `task_id`.
+- The raw thread id is not exposed to the model and is not written into reference implementation paths or checkpoints.
+- If no runtime thread id is available, tools fall back to thereference implementation `default` task id. This fallback is intended for local tests and direct function calls only.
 - Production callers should provide a stable LangGraph `thread_id` for each conversation/run thread.
 
 Future `terminal` and `process` tools must use the same helper in `agent_core.session_context` and must not expose `task_id` as a model-controlled argument.
@@ -541,7 +541,7 @@ Future `terminal` and `process` tools must use the same helper in `agent_core.se
 
 ```bash
 git add README.md
-git commit -m "docs: document hermes session task id contract"
+git commit -m "docs: document archived_reference session task id contract"
 ```
 
 ---
@@ -556,7 +556,7 @@ git commit -m "docs: document hermes session task id contract"
 Run:
 
 ```bash
-python -m py_compile agent_core/session_context.py agent_tools/shell.py agent_tools/hermes_shell_adapter.py
+python -m py_compile agent_core/session_context.py agent_tools/shell.py agent_tools/terminal_shell_adapter.py
 ```
 
 Expected: command exits with code 0 and prints no syntax errors.
@@ -566,7 +566,7 @@ Expected: command exits with code 0 and prints no syntax errors.
 Run:
 
 ```bash
-python -m pytest tests/test_session_context.py tests/test_shell_task_id.py tests/test_hermes_shell_adapter_task_id.py -v
+python -m pytest tests/test_session_context.py tests/test_shell_task_id.py tests/test_shell_adapter_task_id.py -v
 ```
 
 Expected: PASS. If `pytest` is unavailable, run `python -m pytest --version` and record the missing dependency.
@@ -586,7 +586,7 @@ Expected: PASS when LangChain/Pydantic are installed in the environment. If impo
 Run:
 
 ```bash
-git diff -- agent_core/session_context.py agent_tools/shell.py agent_tools/hermes_shell_adapter.py README.md tests
+git diff -- agent_core/session_context.py agent_tools/shell.py agent_tools/terminal_shell_adapter.py README.md tests
 ```
 
 Expected: Diff only contains the session task id helper, shell adapter wiring, tests, and README contract.
@@ -596,8 +596,8 @@ Expected: Diff only contains the session task id helper, shell adapter wiring, t
 If Task 6 required any small fixes:
 
 ```bash
-git add agent_core/session_context.py agent_tools/shell.py agent_tools/hermes_shell_adapter.py README.md tests
-git commit -m "test: verify hermes thread task id integration"
+git add agent_core/session_context.py agent_tools/shell.py agent_tools/terminal_shell_adapter.py README.md tests
+git commit -m "test: verify archived_reference thread task id integration"
 ```
 
 If no files changed, do not create an empty commit.
@@ -606,6 +606,6 @@ If no files changed, do not create an empty commit.
 
 ## Self-Review
 
-- Spec coverage: The plan maps LangGraph `thread_id` to Hermes `task_id`, hides it from the model, preserves fallback behavior, and prepares the same helper for future `terminal/process` wrappers.
+- Spec coverage: The plan maps LangGraph `thread_id` to reference implementation `task_id`, hides it from the model, preserves fallback behavior, and prepares the same helper for future `terminal/process` wrappers.
 - Placeholder scan: No task contains unresolved placeholders, unspecified validation, or references to undefined functions.
-- Type consistency: `hermes_task_id_from_thread_id(thread_id: str | None) -> str`, `hermes_task_id_from_runtime(runtime: Any | None) -> str`, and `execute_command(command: str, runtime: ToolRuntime | None = None) -> str` are used consistently across tasks.
+- Type consistency: `runtime_task_id_from_thread_id(thread_id: str | None) -> str`, `runtime_task_id_from_runtime(runtime: Any | None) -> str`, and `execute_command(command: str, runtime: ToolRuntime | None = None) -> str` are used consistently across tasks.

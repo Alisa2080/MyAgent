@@ -4,7 +4,7 @@ Date: 2026-06-04
 
 ## Summary
 
-Keep the Feishu WebSocket gateway and cron scheduler as separate services, but make the dependency visible at runtime. Starting `gateway feishu-ws` should continue even when cron is not running, while printing a clear warning that scheduled jobs will not execute automatically. `agent_cli doctor` should report the combined gateway/cron/Feishu delivery health needed for the Hermes-style experience where interactive replies and scheduled reports both reach the same Feishu chat. Feishu WebSocket event handling should log enough metadata to distinguish "Feishu did not push an event" from "the local gateway received and ignored an event".
+Keep the Feishu WebSocket gateway and cron scheduler as separate services, but make the dependency visible at runtime. Starting `gateway feishu-ws` should continue even when cron is not running, while printing a clear warning that scheduled jobs will not execute automatically. `agent_cli doctor` should report the combined gateway/cron/Feishu delivery health needed for the project-style experience where interactive replies and scheduled reports both reach the same Feishu chat. Feishu WebSocket event handling should log enough metadata to distinguish "Feishu did not push an event" from "the local gateway received and ignored an event".
 
 ## Goals
 
@@ -17,7 +17,7 @@ Keep the Feishu WebSocket gateway and cron scheduler as separate services, but m
 ## Non-Goals
 
 - Do not auto-start or install cron service from `gateway feishu-ws`.
-- Do not embed a Hermes-style cron ticker inside the gateway process.
+- Do not embed a project-style cron ticker inside the gateway process.
 - Do not change cron job creation semantics or delivery target parsing.
 - Do not change Feishu message send/reply behavior in this scope.
 - Do not add a separate `gateway doctor` command unless unified doctor cannot cleanly express the checks.
@@ -122,4 +122,4 @@ Add focused tests:
 - Running only `gateway feishu-ws` makes the missing cron runtime explicit without blocking real-time chat.
 - `agent_cli doctor` can identify whether the Feishu gateway, cron scheduler, Feishu sending, gateway inbox, and cron delivery queue are healthy.
 - When a Feishu message gets no response, logs show whether no SDK callback arrived, a callback arrived and was ignored, or a callback was enqueued.
-- No Hermes-style in-process cron ticker is introduced.
+- No project-style in-process cron ticker is introduced.

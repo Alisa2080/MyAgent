@@ -13,7 +13,7 @@ Implement a standard agent permission model for this project:
 - Hard-deny sensitive paths and destructive commands that should not be approved.
 
 The first implementation targets the existing LangChain public tool wrappers,
-Hermes terminal toolkit, file toolkit, and human-in-the-loop middleware.
+terminal toolkit, file toolkit, and human-in-the-loop middleware.
 
 ## Current Baseline
 
@@ -24,11 +24,11 @@ The project already has several safety mechanisms:
 - `agent_tools/public/files.py` enforces workspace-aware read/write admission.
 - `agent_tools/file_toolkit/backend_paths.py` understands local, Docker,
   Singularity, and SSH backend path roots.
-- `agent_tools/hermes_terminal_toolkit/approval.py` blocks hardline dangerous
+- `agent_tools/terminal_toolkit/approval.py` blocks hardline dangerous
   commands and flags dangerous command patterns.
 - `agent_core/builders.py` configures human-in-the-loop review for terminal,
   process, write, patch, memory, and skill changes.
-- `agent_tools/hermes_terminal_toolkit` supports `local`, `docker`,
+- `agent_tools/terminal_toolkit` supports `local`, `docker`,
   `singularity`, and `ssh` execution backends.
 
 The missing piece is a unified policy engine that decides when a tool call is

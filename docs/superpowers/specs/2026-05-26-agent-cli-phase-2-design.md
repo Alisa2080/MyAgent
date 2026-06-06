@@ -4,7 +4,7 @@ Date: 2026-05-26
 
 ## Goal
 
-Improve the project-native `agent_cli` without porting Hermes's full CLI stack.
+Improve the project-native `agent_cli` without porting reference implementation's full CLI stack.
 Phase 2 focuses on three user-visible capabilities:
 
 - richer human approval handling for LangGraph interrupts
@@ -19,7 +19,7 @@ metadata table remains a lightweight session index.
 
 - No full-screen TUI, approval panel, spinner, skin engine, banner system, or
   inline diff renderer.
-- No Hermes sudo flow, gateway routing, plugin command framework, model picker,
+- No toolkit sudo flow, gateway routing, plugin command framework, model picker,
   or background-task queue.
 - No session-wide or time-window approvals.
 - No tool-schema-aware form editor for approval edits.
@@ -73,7 +73,7 @@ Existing modules continue to own their current boundaries:
 - `commands.py` remains the single source for built-in commands.
 - `input.py` consumes both built-in and dynamic skill commands for completion.
 
-Hermes reference files under `agent_cli/_hermes_reference` stay reference-only.
+archived reference files under `agent_cli/_archived_reference` stay reference-only.
 Phase 2 borrows patterns, not source-level structure.
 
 ## Approval UX
@@ -157,7 +157,7 @@ remain responsible for final validation and execution-time policy enforcement.
 The approval UI must fit the existing
 `agent_core.human_loop.FlexibleHumanInTheLoopMiddleware` contract.
 
-The CLI should not implement Hermes sudo semantics. It only collects the human
+The CLI should not implement toolkit sudo semantics. It only collects the human
 decisions and resumes the LangGraph thread with `Command(resume=...)`.
 
 The middleware remains responsible for:
@@ -170,7 +170,7 @@ The middleware remains responsible for:
 
 ## Profile, Dotenv, and Config
 
-Add a lightweight version of Hermes's startup-time environment isolation.
+Add a lightweight version of reference implementation's startup-time environment isolation.
 
 ### CLI Home Resolution
 
@@ -210,7 +210,7 @@ Empty names, path separators, and traversal such as `..` are invalid.
 `agent_cli/main.py` should pre-parse `--profile` before normal command parsing
 and before modules that depend on CLI home are asked for paths.
 
-This is lighter than Hermes because the project already imports several
+This is lighter than reference implementation because the project already imports several
 `agent_cli` modules at module import time. The Phase 2 requirement is that
 database paths, history paths, log paths, config loading, and dotenv loading use
 the profile-adjusted home during `main()`.
@@ -262,7 +262,7 @@ crashing.
 Keep `/skills` and `/skill <name>`, and add dynamic slash commands for local
 skills.
 
-Do not copy Hermes `skill_commands.py`. The project already has skill metadata
+Do not copyreference implementation `skill_commands.py`. The project already has skill metadata
 and loading helpers in `agent_tools.public.skills`.
 
 ### Discovery

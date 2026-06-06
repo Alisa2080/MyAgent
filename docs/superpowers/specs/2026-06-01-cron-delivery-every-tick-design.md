@@ -11,7 +11,7 @@ thread to drain through `cron.notifications.drain_cron_notifications_for_thread_
 The current gap is scheduling. Delivery dispatch is mainly triggered when a job
 finishes and `_process_claimed()` calls `process_due()`. If no cron job is due,
 pending or failed delivery events may not advance, and stale `delivering` events
-may not be recovered promptly. Hermes dispatches inline while processing a due
+may not be recovered promptly. reference implementation dispatches inline while processing a due
 job; this project has a stronger SQLite delivery queue, so the next step should
 make the queue progress independent of job execution.
 

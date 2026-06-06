@@ -3,8 +3,8 @@
 ## Goal
 
 Build a minimal, project-native CLI for the current LangGraph/LangChain agent.
-The CLI should borrow Hermes CLI's useful structure, especially command
-registration and session-oriented execution, without porting Hermes's full
+The CLI should borrow CLI reference's useful structure, especially command
+registration and session-oriented execution, without porting reference implementation's full
 gateway, plugin, provider, TUI, and tool ecosystem.
 
 The first version must be runnable with:
@@ -18,10 +18,10 @@ python -m agent_cli.main
 
 The MVP does not include:
 
-- Hermes prompt_toolkit application TUI.
+- reference implementation prompt_toolkit application TUI.
 - Skins, banners, spinner animations, or inline diff rendering.
 - Messaging gateways such as Slack, Telegram, Discord, or WhatsApp.
-- Hermes plugins, toolset management, backup, doctor, setup wizard, or auth
+- reference implementation plugins, toolset management, backup, doctor, setup wizard, or auth
   wizard.
 - Voice, browser, MCP management UI, or provider-specific model picker flows.
 - Full-text session search.
@@ -29,13 +29,13 @@ The MVP does not include:
 
 ## Approach
 
-Use a clean MVP implementation beside the copied Hermes code. The current
-Hermes-derived files in `agent_cli/` are treated as reference material, not as
-the runtime path. Move them under `agent_cli/_hermes_reference/` or otherwise
+Use a clean MVP implementation beside the copied reference implementation code. The current
+reference implementation-derived files in `agent_cli/` are treated as reference material, not as
+the runtime path. Move them under `agent_cli/_archived_reference/` or otherwise
 exclude them from the MVP import path, then create small project-native modules.
 
-This is preferable to incrementally patching the copied Hermes files because
-they contain hundreds of references to Hermes-only modules and would pull in
+This is preferable to incrementally patching the copied reference files because
+they contain hundreds of references to reference-only modules and would pull in
 large unrelated subsystems.
 
 ## File Layout
@@ -52,7 +52,7 @@ agent_cli/
   interrupts.py
   rendering.py
   paths.py
-  _hermes_reference/
+  _archived_reference/
     banner.py
     cli.py
     config.py
@@ -153,7 +153,7 @@ truncated.
 
 ## Agent Integration
 
-The CLI must use the current project runtime instead of Hermes `AIAgent`.
+The CLI must use the current project runtime instead of reference implementation `AIAgent`.
 
 Update `agent_core.builders.build_agent` to accept an optional checkpointer:
 
@@ -231,7 +231,7 @@ The resume call uses the same `configurable.thread_id`.
 ## Skills Commands
 
 `/skills` and `/skill <name>` use existing project skill tooling in
-`agent_tools.public.skills`, not Hermes `tools.skills_tool`.
+`agent_tools.public.skills`, notreference implementation `tools.skills_tool`.
 
 The MVP can call the underlying metadata helpers if they remain internal, or
 add a small public helper that returns skill metadata without requiring a
@@ -288,7 +288,7 @@ Manual verification:
 
 ## Task Breakdown
 
-1. Move existing Hermes-derived files into `agent_cli/_hermes_reference/`.
+1. Move existing reference implementation-derived files into `agent_cli/_archived_reference/`.
 2. Add `agent_cli/__init__.py` and `agent_cli/__main__.py`.
 3. Implement `paths.py`.
 4. Implement `checkpoints.py` with LangGraph SQLite checkpointer creation.

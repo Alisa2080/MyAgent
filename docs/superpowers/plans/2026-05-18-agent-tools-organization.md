@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Reorganize `agent_tools/` into clear public tool, shared support, internal toolkit, and vendored Hermes areas without breaking existing LangChain tool registration or tests.
+**Goal:** Reorganize `agent_tools/` into clear public tool, shared support, internal toolkit, and vendored reference implementation areas without breaking existing LangChain tool registration or tests.
 
-**Architecture:** Use a compatibility-first migration. Keep high-risk internal packages (`file_toolkit/` and `hermes_terminal_toolkit/`) in place initially, add package-level documentation and stable public import facades, then migrate first-party top-level modules into clearer subpackages with re-export shims. Generated caches and accidental copy files are cleaned only after tests prove they are unused.
+**Architecture:** Use a compatibility-first migration. Keep high-risk internal packages (`file_toolkit/` and `terminal_toolkit/`) in place initially, add package-level documentation and stable public import facades, then migrate first-party top-level modules into clearer subpackages with re-export shims. Generated caches and accidental copy files are cleaned only after tests prove they are unused.
 
 **Tech Stack:** Python 3.11, LangChain tool decorators, pytest via `/home/miku/miniforge3/envs/langchain/bin/python`, Git-aware file moves with `git mv`.
 
@@ -17,14 +17,14 @@
 - Public LangChain tools: `file_tools.py`, `terminal_tools.py`, `web.py`, `memory_tools.py`, `skills.py`, `skill_manage.py`.
 - Shared first-party helpers: `common.py`, `file_policy.py`, `tool_output.py`, package `__init__.py`, compatibility `general.py`.
 - Internal file implementation package: `file_toolkit/`, with large implementation files such as `file_operations.py` and `file_tools.py`.
-- Vendored/imported Hermes terminal toolkit: `hermes_terminal_toolkit/`, including environments, process registry, terminal primitives, and toolkit-specific LangChain adapters.
+- Vendored/imported terminal toolkit: `terminal_toolkit/`, including environments, process registry, terminal primitives, and toolkit-specific LangChain adapters.
 
 Noise and risk discovered during inventory:
 
-- `agent_tools/__pycache__/`, `agent_tools/file_toolkit/__pycache__/`, and `agent_tools/hermes_terminal_toolkit/__pycache__/` are generated artifacts and should not be part of source organization.
-- `agent_tools/hermes_terminal_toolkit/process_registry copy.py` is an untracked duplicate copy file and should be removed only after confirming no imports reference it.
+- `agent_tools/__pycache__/`, `agent_tools/file_toolkit/__pycache__/`, and `agent_tools/terminal_toolkit/__pycache__/` are generated artifacts and should not be part of source organization.
+- `agent_tools/terminal_toolkit/process_registry copy.py` is an untracked duplicate copy file and should be removed only after confirming no imports reference it.
 - `agent_tools/general.py` is already a compatibility export layer and can become the migration compatibility boundary.
-- `agent_tools/file_toolkit/` and `agent_tools/hermes_terminal_toolkit/` use many absolute imports under their current package names; moving them in the same pass would create unnecessary risk.
+- `agent_tools/file_toolkit/` and `agent_tools/terminal_toolkit/` use many absolute imports under their current package names; moving them in the same pass would create unnecessary risk.
 - Current worktree is dirty from terminal/process work. Do not begin this reorganization until that work is committed or isolated in a new worktree.
 
 ## Target Layout
@@ -50,7 +50,7 @@ agent_tools/
   file_toolkit/
     README.md
     ...
-  hermes_terminal_toolkit/
+  terminal_toolkit/
     README.md
     ...
   file_tools.py          # compatibility shim
@@ -71,7 +71,7 @@ Boundary rules after migration:
 - New code imports shared helpers from `agent_tools.shared.*`.
 - Compatibility shims preserve existing imports such as `from agent_tools.file_tools import read_file`.
 - `file_toolkit/` stays internal and is imported only by `agent_tools.public.files` or tests for low-level file behavior.
-- `hermes_terminal_toolkit/` is treated as vendored toolkit code. Project-native LangChain wrappers live in `agent_tools.public.terminal`, not inside Hermes toolkit.
+- `terminal_toolkit/` is treated as vendored toolkit code. Project-native LangChain wrappers live in `agent_tools.public.terminal`, not inside reference implementation toolkit.
 - Generated caches and duplicate files are not source files.
 
 ---
@@ -175,7 +175,7 @@ First-party helpers live under `agent_tools.shared`:
 ## Internal Toolkits
 
 - `file_toolkit/` is the internal implementation for workspace file operations. It is not a LangChain tool registration boundary.
-- `hermes_terminal_toolkit/` is the imported Hermes terminal toolkit. Project-native LangChain wrappers live in `agent_tools.public.terminal`.
+- `terminal_toolkit/` is the imported terminal toolkit. Project-native LangChain wrappers live in `agent_tools.public.terminal`.
 
 ## Compatibility Imports
 
@@ -191,7 +191,7 @@ In `README.md`, replace the `agent_tools/` runtime layout bullets with:
   - `public/`: preferred import location for LangChain tools exposed to agents.
   - `shared/`: first-party helper modules used by tool wrappers.
   - `file_toolkit/`: internal workspace file operation implementation.
-  - `hermes_terminal_toolkit/`: imported Hermes terminal toolkit implementation.
+  - `terminal_toolkit/`: imported terminal toolkit implementation.
   - Top-level modules such as `file_tools.py` and `terminal_tools.py` are compatibility shims during migration.
 ```
 
@@ -341,7 +341,7 @@ __all__ = [
 Create `agent_tools/public/terminal.py`:
 
 ```python
-"""LangChain-facing Hermes terminal and process tools."""
+"""LangChain-facing terminal and process tools."""
 
 from agent_tools.terminal_tools import process, terminal
 
@@ -937,9 +937,9 @@ git commit -m "refactor: move shared agent tool helpers"
 - Delete if present and untracked/ignored:
   - `agent_tools/__pycache__/`
   - `agent_tools/file_toolkit/__pycache__/`
-  - `agent_tools/hermes_terminal_toolkit/__pycache__/`
-  - `agent_tools/hermes_terminal_toolkit/environments/__pycache__/`
-  - `agent_tools/hermes_terminal_toolkit/process_registry copy.py`
+  - `agent_tools/terminal_toolkit/__pycache__/`
+  - `agent_tools/terminal_toolkit/environments/__pycache__/`
+  - `agent_tools/terminal_toolkit/process_registry copy.py`
 - Modify: `.gitignore` if these patterns are not already ignored.
 
 - [ ] **Step 1: Verify duplicate copy is not imported**
@@ -958,7 +958,7 @@ Run:
 
 ```bash
 git check-ignore -v agent_tools/__pycache__/__init__.cpython-311.pyc
-git check-ignore -v "agent_tools/hermes_terminal_toolkit/process_registry copy.py"
+git check-ignore -v "agent_tools/terminal_toolkit/process_registry copy.py"
 ```
 
 Expected: `__pycache__` is ignored. The copy file may not be ignored.
@@ -975,7 +975,7 @@ If `process_registry copy.py` is not ignored, add to `.gitignore`:
 If this pattern is too broad for project policy, use:
 
 ```gitignore
-agent_tools/hermes_terminal_toolkit/process_registry copy.py
+agent_tools/terminal_toolkit/process_registry copy.py
 ```
 
 - [ ] **Step 4: Remove generated caches and duplicate copy**
@@ -984,7 +984,7 @@ Run:
 
 ```bash
 find agent_tools -type d -name __pycache__ -prune -exec rm -rf {} +
-rm -f "agent_tools/hermes_terminal_toolkit/process_registry copy.py"
+rm -f "agent_tools/terminal_toolkit/process_registry copy.py"
 ```
 
 Expected: generated caches and duplicate copy file are gone from the working tree.
@@ -1173,7 +1173,7 @@ git commit -m "docs: document organized agent tools imports"
 ## Execution Notes
 
 - Do not move `agent_tools/file_toolkit/` in this plan. It is large, internally cohesive, and already acts as an implementation package.
-- Do not move `agent_tools/hermes_terminal_toolkit/` in this plan. Treat it as vendored/imported toolkit code; moving it would require a separate import-path migration and review.
+- Do not move `agent_tools/terminal_toolkit/` in this plan. Treat it as vendored/imported toolkit code; moving it would require a separate import-path migration and review.
 - Keep compatibility shims until all internal and external callers have migrated. Removing them should be a separate deprecation plan.
 - Avoid renaming LangChain tool objects. Tool names such as `terminal`, `process`, `read_file`, and `web_search` must remain unchanged.
 - Do not change tool schemas or runtime behavior. This plan is organizational only.
@@ -1181,7 +1181,7 @@ git commit -m "docs: document organized agent tools imports"
 
 ## Self-Review
 
-- Spec coverage: The plan covers every current `agent_tools/` category: public tools, shared helpers, `file_toolkit`, Hermes toolkit, generated caches, duplicate copy file, compatibility exports, runtime imports, tests, and documentation.
+- Spec coverage: The plan covers every current `agent_tools/` category: public tools, shared helpers, `file_toolkit`, reference implementation toolkit, generated caches, duplicate copy file, compatibility exports, runtime imports, tests, and documentation.
 - Placeholder scan: No `TBD`, vague implementation instructions, or missing test commands remain.
 - Type consistency: The public facade names match existing tool names and the compatibility shims preserve existing import paths.
 

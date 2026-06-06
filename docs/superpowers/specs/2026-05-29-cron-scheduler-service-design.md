@@ -14,7 +14,7 @@ The current scheduler can run due jobs through `cron.scheduler.tick()`. It alrea
 
 Automatic execution is still tied to `agent_core.cron_lifecycle.start_cron_scheduler()`, which starts a daemon thread from the REPL. That thread has no durable process identity, heartbeat, last tick timestamp, last service error, leader state, or exit reason.
 
-Hermes keeps cron automatic execution attached to the gateway and uses a file lock to prevent overlapping ticks. This project should not copy the gateway dependency. Instead, it should take the useful parts of Hermes' simple tick loop and explicit management commands, but expose cron as its own foreground service.
+Reference implementation keeps cron automatic execution attached to the gateway and uses a file lock to prevent overlapping ticks. This project should not copy the gateway dependency. Instead, it should take the useful parts of reference implementation's simple tick loop and explicit management commands, but expose cron as its own foreground service.
 
 ## User-Facing Behavior
 

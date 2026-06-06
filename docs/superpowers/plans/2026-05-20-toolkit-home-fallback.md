@@ -1,12 +1,12 @@
-# Hermes Toolkit Home Fallback Implementation Plan
+# Reference Implementation Toolkit Home Fallback Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Make `get_toolkit_home()` try every configured and default toolkit-home candidate in priority order, returning the first directory that can be created.
 
-**Architecture:** Keep all path-selection logic in `agent_tools/hermes_terminal_toolkit/paths.py`. Add regression tests that simulate mkdir failures without relying on host permissions, then simplify `get_toolkit_home()` so it builds one ordered candidate list and iterates through all candidates.
+**Architecture:** Keep all path-selection logic in `agent_tools/terminal_toolkit/paths.py`. Add regression tests that simulate mkdir failures without relying on host permissions, then simplify `get_toolkit_home()` so it builds one ordered candidate list and iterates through all candidates.
 
-**Tech Stack:** Python 3.11, pytest, `pathlib.Path`, existing Hermes terminal toolkit path helpers.
+**Tech Stack:** Python 3.11, pytest, `pathlib.Path`, existing terminal toolkit path helpers.
 
 ---
 
@@ -16,21 +16,21 @@ This plan only fixes the P2 fallback semantics for toolkit home resolution. It d
 
 Files to modify:
 
-- `agent_tools/hermes_terminal_toolkit/paths.py`
+- `agent_tools/terminal_toolkit/paths.py`
   - Add a small private candidate-builder helper.
   - Change `get_toolkit_home()` so env-provided candidates do not short-circuit fallback.
 
-- `tests/test_hermes_paths.py`
+- `tests/test_toolkit_paths.py`
   - New test file covering priority order, fallback behavior, all-candidates failure, and `get_subprocess_home()` integration.
 
 Behavior to implement:
 
 1. Candidate order is always:
-   - `HERMES_TERMINAL_TOOLKIT_HOME`
-   - `$HERMES_HOME/terminal-toolkit`
-   - `~/.hermes-terminal-toolkit`
-   - `./.hermes-terminal-toolkit`
-   - `/tmp/.hermes-terminal-toolkit`
+   - `TERMINAL_TOOLKIT_HOME`
+   - `$TOOLKIT_HOME/terminal-toolkit`
+   - `~/.terminal-toolkit`
+   - `./.terminal-toolkit`
+   - `/tmp/.terminal-toolkit`
 2. Empty environment variables are ignored.
 3. `get_toolkit_home()` returns the first candidate whose `mkdir(parents=True, exist_ok=True)` succeeds.
 4. If all candidates fail, it raises `OSError("Unable to create a writable toolkit home directory")`.
@@ -41,37 +41,37 @@ Behavior to implement:
 ### Task 1: Add Regression Tests For Toolkit Home Candidate Fallback
 
 **Files:**
-- Create: `tests/test_hermes_paths.py`
+- Create: `tests/test_toolkit_paths.py`
 
 - [ ] **Step 1: Create the regression test file**
 
-Create `tests/test_hermes_paths.py` with this complete content:
+Create `tests/test_toolkit_paths.py` with this complete content:
 
 ```python
 from pathlib import Path
 
 import pytest
 
-from agent_tools.hermes_terminal_toolkit import paths
+from agent_tools.terminal_toolkit import paths
 
 
 def test_get_toolkit_home_tries_all_candidates_in_priority_order(monkeypatch, tmp_path):
     custom_home = tmp_path / "custom-home"
-    hermes_home = tmp_path / "hermes-home"
+    toolkit_home = tmp_path / "toolkit-home"
     fake_home = tmp_path / "home"
     fake_cwd = tmp_path / "cwd"
 
-    monkeypatch.setenv("HERMES_TERMINAL_TOOLKIT_HOME", str(custom_home))
-    monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+    monkeypatch.setenv("TERMINAL_TOOLKIT_HOME", str(custom_home))
+    monkeypatch.setenv("TOOLKIT_HOME", str(toolkit_home))
     monkeypatch.setattr(paths.Path, "home", lambda: fake_home)
     monkeypatch.setattr(paths.Path, "cwd", lambda: fake_cwd)
 
     expected = [
         custom_home,
-        hermes_home / "terminal-toolkit",
-        fake_home / ".hermes-terminal-toolkit",
-        fake_cwd / ".hermes-terminal-toolkit",
-        Path("/tmp") / ".hermes-terminal-toolkit",
+        toolkit_home / "terminal-toolkit",
+        fake_home / ".terminal-toolkit",
+        fake_cwd / ".terminal-toolkit",
+        Path("/tmp") / ".terminal-toolkit",
     ]
     calls = []
 
@@ -91,11 +91,11 @@ def test_get_toolkit_home_tries_all_candidates_in_priority_order(monkeypatch, tm
 def test_get_toolkit_home_starts_with_home_when_env_candidates_unset(monkeypatch, tmp_path):
     fake_home = tmp_path / "home"
     fake_cwd = tmp_path / "cwd"
-    expected_home_candidate = fake_home / ".hermes-terminal-toolkit"
+    expected_home_candidate = fake_home / ".terminal-toolkit"
     calls = []
 
-    monkeypatch.delenv("HERMES_TERMINAL_TOOLKIT_HOME", raising=False)
-    monkeypatch.delenv("HERMES_HOME", raising=False)
+    monkeypatch.delenv("TERMINAL_TOOLKIT_HOME", raising=False)
+    monkeypatch.delenv("TOOLKIT_HOME", raising=False)
     monkeypatch.setattr(paths.Path, "home", lambda: fake_home)
     monkeypatch.setattr(paths.Path, "cwd", lambda: fake_cwd)
 
@@ -115,15 +115,15 @@ def test_get_toolkit_home_raises_after_all_candidates_fail(monkeypatch, tmp_path
     fake_cwd = tmp_path / "cwd"
     calls = []
 
-    monkeypatch.delenv("HERMES_TERMINAL_TOOLKIT_HOME", raising=False)
-    monkeypatch.delenv("HERMES_HOME", raising=False)
+    monkeypatch.delenv("TERMINAL_TOOLKIT_HOME", raising=False)
+    monkeypatch.delenv("TOOLKIT_HOME", raising=False)
     monkeypatch.setattr(paths.Path, "home", lambda: fake_home)
     monkeypatch.setattr(paths.Path, "cwd", lambda: fake_cwd)
 
     expected = [
-        fake_home / ".hermes-terminal-toolkit",
-        fake_cwd / ".hermes-terminal-toolkit",
-        Path("/tmp") / ".hermes-terminal-toolkit",
+        fake_home / ".terminal-toolkit",
+        fake_cwd / ".terminal-toolkit",
+        Path("/tmp") / ".terminal-toolkit",
     ]
 
     def fake_mkdir(self, parents=False, exist_ok=False):
@@ -142,17 +142,17 @@ def test_get_toolkit_home_raises_after_all_candidates_fail(monkeypatch, tmp_path
 
 def test_get_subprocess_home_uses_fallback_toolkit_home(monkeypatch, tmp_path):
     custom_file = tmp_path / "custom-home-is-a-file"
-    hermes_home = tmp_path / "hermes-home"
+    toolkit_home = tmp_path / "toolkit-home"
     custom_file.write_text("not a directory")
 
-    monkeypatch.setenv("HERMES_TERMINAL_TOOLKIT_HOME", str(custom_file))
-    monkeypatch.setenv("HERMES_HOME", str(hermes_home))
-    monkeypatch.setenv("HERMES_TERMINAL_TOOLKIT_ISOLATE_HOME", "1")
-    monkeypatch.delenv("HERMES_TERMINAL_TOOLKIT_SUBPROCESS_HOME", raising=False)
+    monkeypatch.setenv("TERMINAL_TOOLKIT_HOME", str(custom_file))
+    monkeypatch.setenv("TOOLKIT_HOME", str(toolkit_home))
+    monkeypatch.setenv("TERMINAL_TOOLKIT_ISOLATE_HOME", "1")
+    monkeypatch.delenv("TERMINAL_TOOLKIT_SUBPROCESS_HOME", raising=False)
 
     subprocess_home = paths.get_subprocess_home()
 
-    assert subprocess_home == str(hermes_home / "terminal-toolkit" / "home")
+    assert subprocess_home == str(toolkit_home / "terminal-toolkit" / "home")
     assert Path(subprocess_home).is_dir()
 ```
 
@@ -161,17 +161,17 @@ def test_get_subprocess_home_uses_fallback_toolkit_home(monkeypatch, tmp_path):
 Run:
 
 ```bash
-PYTHONPATH=. /home/miku/miniforge3/envs/langchain/bin/python -m pytest tests/test_hermes_paths.py -q
+PYTHONPATH=. /home/miku/miniforge3/envs/langchain/bin/python -m pytest tests/test_toolkit_paths.py -q
 ```
 
 Expected result before implementation:
 
 ```text
-FAILED tests/test_hermes_paths.py::test_get_toolkit_home_tries_all_candidates_in_priority_order
-FAILED tests/test_hermes_paths.py::test_get_subprocess_home_uses_fallback_toolkit_home
+FAILED tests/test_toolkit_paths.py::test_get_toolkit_home_tries_all_candidates_in_priority_order
+FAILED tests/test_toolkit_paths.py::test_get_subprocess_home_uses_fallback_toolkit_home
 ```
 
-The first failure should show that only `HERMES_TERMINAL_TOOLKIT_HOME` is attempted. The subprocess-home test should fail because the file at `HERMES_TERMINAL_TOOLKIT_HOME` blocks fallback to `$HERMES_HOME/terminal-toolkit`.
+The first failure should show that only `TERMINAL_TOOLKIT_HOME` is attempted. The subprocess-home test should fail because the file at `TERMINAL_TOOLKIT_HOME` blocks fallback to `$TOOLKIT_HOME/terminal-toolkit`.
 
 - [ ] **Step 3: Commit only if the implementation task is completed in the same working batch**
 
@@ -182,31 +182,31 @@ Do not commit the failing tests by themselves. Leave them in the working tree fo
 ### Task 2: Implement Ordered Candidate Fallback
 
 **Files:**
-- Modify: `agent_tools/hermes_terminal_toolkit/paths.py`
-- Test: `tests/test_hermes_paths.py`
+- Modify: `agent_tools/terminal_toolkit/paths.py`
+- Test: `tests/test_toolkit_paths.py`
 
 - [ ] **Step 1: Add the private candidate builder**
 
-In `agent_tools/hermes_terminal_toolkit/paths.py`, add this helper above `get_toolkit_home()`:
+In `agent_tools/terminal_toolkit/paths.py`, add this helper above `get_toolkit_home()`:
 
 ```python
 def _toolkit_home_candidates() -> list[Path]:
     """Return toolkit-home candidates in priority order."""
     candidates: list[Path] = []
 
-    custom = os.getenv("HERMES_TERMINAL_TOOLKIT_HOME")
+    custom = os.getenv("TERMINAL_TOOLKIT_HOME")
     if custom:
         candidates.append(Path(os.path.expanduser(custom)))
 
-    hermes_home = os.getenv("HERMES_HOME")
-    if hermes_home:
-        candidates.append(Path(os.path.expanduser(hermes_home)) / "terminal-toolkit")
+    toolkit_home = os.getenv("TOOLKIT_HOME")
+    if toolkit_home:
+        candidates.append(Path(os.path.expanduser(toolkit_home)) / "terminal-toolkit")
 
     candidates.extend(
         [
-            Path.home() / ".hermes-terminal-toolkit",
-            Path.cwd() / ".hermes-terminal-toolkit",
-            Path("/tmp") / ".hermes-terminal-toolkit",
+            Path.home() / ".terminal-toolkit",
+            Path.cwd() / ".terminal-toolkit",
+            Path("/tmp") / ".terminal-toolkit",
         ]
     )
     return candidates
@@ -214,7 +214,7 @@ def _toolkit_home_candidates() -> list[Path]:
 
 - [ ] **Step 2: Replace `get_toolkit_home()` branching with one loop over all candidates**
 
-Replace the current `get_toolkit_home()` body in `agent_tools/hermes_terminal_toolkit/paths.py` with:
+Replace the current `get_toolkit_home()` body in `agent_tools/terminal_toolkit/paths.py` with:
 
 ```python
 def get_toolkit_home() -> Path:
@@ -235,7 +235,7 @@ This preserves the existing mkdir behavior and error message, but it no longer d
 Run:
 
 ```bash
-PYTHONPATH=. /home/miku/miniforge3/envs/langchain/bin/python -m pytest tests/test_hermes_paths.py -q
+PYTHONPATH=. /home/miku/miniforge3/envs/langchain/bin/python -m pytest tests/test_toolkit_paths.py -q
 ```
 
 Expected:
@@ -244,22 +244,22 @@ Expected:
 4 passed
 ```
 
-- [ ] **Step 4: Run import-sensitive Hermes tests**
+- [ ] **Step 4: Run import-sensitive reference implementation tests**
 
 Run:
 
 ```bash
-PYTHONPATH=. /home/miku/miniforge3/envs/langchain/bin/python -m pytest tests/test_hermes_active_env.py tests/test_terminal_lifecycle.py -q
+PYTHONPATH=. /home/miku/miniforge3/envs/langchain/bin/python -m pytest tests/test_active_env.py tests/test_terminal_lifecycle.py -q
 ```
 
-Expected: all tests in both files pass. These tests exercise modules that import Hermes terminal toolkit code and help catch import-time side effects.
+Expected: all tests in both files pass. These tests exercise modules that import terminal toolkit code and help catch import-time side effects.
 
 - [ ] **Step 5: Commit Task 2**
 
 Run:
 
 ```bash
-git add agent_tools/hermes_terminal_toolkit/paths.py tests/test_hermes_paths.py
+git add agent_tools/terminal_toolkit/paths.py tests/test_toolkit_paths.py
 git commit -m "fix: fall back across toolkit home candidates"
 ```
 
@@ -268,15 +268,15 @@ git commit -m "fix: fall back across toolkit home candidates"
 ### Task 3: Final Verification And Review
 
 **Files:**
-- Validate: `agent_tools/hermes_terminal_toolkit/paths.py`
-- Validate: `tests/test_hermes_paths.py`
+- Validate: `agent_tools/terminal_toolkit/paths.py`
+- Validate: `tests/test_toolkit_paths.py`
 
 - [ ] **Step 1: Run focused regression tests**
 
 Run:
 
 ```bash
-PYTHONPATH=. /home/miku/miniforge3/envs/langchain/bin/python -m pytest tests/test_hermes_paths.py tests/test_hermes_active_env.py tests/test_terminal_lifecycle.py -q
+PYTHONPATH=. /home/miku/miniforge3/envs/langchain/bin/python -m pytest tests/test_toolkit_paths.py tests/test_active_env.py tests/test_terminal_lifecycle.py -q
 ```
 
 Expected:
@@ -317,30 +317,30 @@ Run:
 
 ```bash
 git diff --stat HEAD~1..HEAD
-git diff HEAD~1..HEAD -- agent_tools/hermes_terminal_toolkit/paths.py tests/test_hermes_paths.py
+git diff HEAD~1..HEAD -- agent_tools/terminal_toolkit/paths.py tests/test_toolkit_paths.py
 ```
 
 Expected:
 
 - `paths.py` has one private helper and a simplified `get_toolkit_home()` loop.
-- `tests/test_hermes_paths.py` covers fallback from `HERMES_TERMINAL_TOOLKIT_HOME`, fallback from `$HERMES_HOME`, all-default failure, and `get_subprocess_home()` integration.
+- `tests/test_toolkit_paths.py` covers fallback from `TERMINAL_TOOLKIT_HOME`, fallback from `$TOOLKIT_HOME`, all-default failure, and `get_subprocess_home()` integration.
 - No unrelated files are changed.
 
 - [ ] **Step 5: Request code review**
 
 Use `superpowers:requesting-code-review` and ask the reviewer to focus on:
 
-- Whether `HERMES_TERMINAL_TOOLKIT_HOME` and `HERMES_HOME` failure cases now continue to lower-priority candidates.
+- Whether `TERMINAL_TOOLKIT_HOME` and `TOOLKIT_HOME` failure cases now continue to lower-priority candidates.
 - Whether empty env vars are ignored.
 - Whether tests rely on host permissions or real `/tmp` writability.
-- Whether `get_subprocess_home()` still respects `HERMES_TERMINAL_TOOLKIT_SUBPROCESS_HOME` taking precedence over isolation mode.
+- Whether `get_subprocess_home()` still respects `TERMINAL_TOOLKIT_SUBPROCESS_HOME` taking precedence over isolation mode.
 
 - [ ] **Step 6: Fix review findings**
 
 If review finds Critical or Important issues, use `superpowers:receiving-code-review` before editing. Re-run:
 
 ```bash
-PYTHONPATH=. /home/miku/miniforge3/envs/langchain/bin/python -m pytest tests/test_hermes_paths.py tests/test_hermes_active_env.py tests/test_terminal_lifecycle.py -q
+PYTHONPATH=. /home/miku/miniforge3/envs/langchain/bin/python -m pytest tests/test_toolkit_paths.py tests/test_active_env.py tests/test_terminal_lifecycle.py -q
 ```
 
 Then re-run the full suite before declaring the branch complete.
@@ -351,8 +351,8 @@ Then re-run the full suite before declaring the branch complete.
 
 Spec coverage:
 
-- `HERMES_TERMINAL_TOOLKIT_HOME` fallback: covered by `test_get_toolkit_home_tries_all_candidates_in_priority_order()` and `test_get_subprocess_home_uses_fallback_toolkit_home()`.
-- `$HERMES_HOME/terminal-toolkit` fallback: covered by the same tests and by implementation in `_toolkit_home_candidates()`.
+- `TERMINAL_TOOLKIT_HOME` fallback: covered by `test_get_toolkit_home_tries_all_candidates_in_priority_order()` and `test_get_subprocess_home_uses_fallback_toolkit_home()`.
+- `$TOOLKIT_HOME/terminal-toolkit` fallback: covered by the same tests and by implementation in `_toolkit_home_candidates()`.
 - Default candidates `~`, cwd, `/tmp`: covered by candidate-order tests and all-candidates-fail test.
 - "First candidate that can mkdir": covered by fake `Path.mkdir()` success/failure sequencing.
 - Existing subprocess-home behavior: covered by `test_get_subprocess_home_uses_fallback_toolkit_home()`.

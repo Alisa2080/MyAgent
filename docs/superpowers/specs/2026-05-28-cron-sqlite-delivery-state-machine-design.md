@@ -20,7 +20,7 @@ The current implementation has made progress but still has structural limits:
 - `cron/scheduler.py` calls `advance_next_run()` before running the job, which can lose a scheduled execution if the process crashes after advancing and before completing the run.
 - `origin` means `origin.thread_id`, which works for a single CLI thread but does not describe gateway chat, web session, or future platform delivery.
 
-The `hermes_agent_cron/` reference implementation provides useful patterns:
+The `cron_reference/` reference implementation provides useful patterns:
 
 - Target parsing for `origin`, `local`, platform names, and `platform:chat_id[:thread_id]`.
 - Origin capture with platform, chat, and thread metadata.

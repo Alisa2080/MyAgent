@@ -1,34 +1,34 @@
-# Hermes Terminal And Process Tools Implementation Plan
+# Terminal And Process Tools Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add first-class `terminal` and `process` LangChain tools backed by `agent_tools/hermes_terminal_toolkit`, with LangGraph `ToolRuntime`-derived `task_id`, Hermes guards, human approval, background process management, explicit session cleanup, and restart recovery.
+**Goal:** Add first-class `terminal` and `process` LangChain tools backed by `agent_tools/terminal_toolkit`, with LangGraph `ToolRuntime`-derived `task_id`, reference implementation guards, human approval, background process management, explicit session cleanup, and restart recovery.
 
-**Architecture:** Keep `execute_command` as a safe compatibility entry point. Add project-native wrappers in `agent_tools/terminal_tools.py` instead of using Hermes `build_langchain_tools()`, because this project needs per-call `ToolRuntime` task id injection and process ownership checks. Normal agent turns preserve background processes; explicit user-session shutdown calls a lifecycle helper that kills processes for the session task id and cleans the Hermes environment.
+**Architecture:** Keep `execute_command` as a safe compatibility entry point. Add project-native wrappers in `agent_tools/terminal_tools.py` instead of usingreference implementation `build_langchain_tools()`, because this project needs per-call `ToolRuntime` task id injection and process ownership checks. Normal agent turns preserve background processes; explicit user-session shutdown calls a lifecycle helper that kills processes for the session task id and cleans the terminal environment.
 
-**Tech Stack:** Python 3.11, LangChain/LangGraph `ToolRuntime`, Pydantic v2, Hermes terminal toolkit vendored under `agent_tools/hermes_terminal_toolkit`, pytest.
+**Tech Stack:** Python 3.11, LangChain/LangGraph `ToolRuntime`, Pydantic v2, terminal toolkit vendored under `agent_tools/terminal_toolkit`, pytest.
 
 ---
 
 ## File Structure
 
-- Create `agent_tools/terminal_tools.py`: LangChain `terminal` and `process` tools, input schemas without model-controlled `task_id`, runtime-derived task id, Hermes guard usage, JSON response normalization, process session ownership checks.
-- Create `agent_core/terminal_lifecycle.py`: startup recovery and explicit session shutdown helpers around Hermes `process_registry` and `terminal_tool.cleanup_vm`.
+- Create `agent_tools/terminal_tools.py`: LangChain `terminal` and `process` tools, input schemas without model-controlled `task_id`, runtime-derived task id, reference implementation guard usage, JSON response normalization, process session ownership checks.
+- Create `agent_core/terminal_lifecycle.py`: startup recovery and explicit session shutdown helpers aroundreference implementation `process_registry` and `terminal_tool.cleanup_vm`.
 - Modify `agent_core/delegation.py`: add `terminal` and `process` to parent-agent tools only; keep subagent read-only.
 - Modify `agent_core/builders.py`: add human approval interception for `terminal` and process-mutating `process` calls.
 - Modify `README.md`: document terminal/process contract, task id ownership, cleanup policy, and recovery policy.
-- Test `tests/test_terminal_tools.py`: tool schemas, task id injection, Hermes guard passthrough, background session ownership, process denial on cross-task sessions.
+- Test `tests/test_terminal_tools.py`: tool schemas, task id injection, reference implementation guard passthrough, background session ownership, process denial on cross-task sessions.
 - Test `tests/test_terminal_lifecycle.py`: checkpoint recovery helper and explicit session cleanup helper.
 
 ## Policy Decisions
 
 - `terminal` and `process` do not expose `task_id` to the model.
-- `terminal` calls Hermes with `force=False`, so Hermes built-in command guards run.
+- `terminal` calls reference implementation with `force=False`, so reference implementation built-in command guards run.
 - Human approval remains mandatory at LangChain middleware level for `terminal` and `process`.
 - `execute_command` remains available for backward compatibility during this migration.
 - Normal agent turn/session continuation preserves background processes.
-- Explicit user-session shutdown calls `cleanup_terminal_session_for_runtime(runtime)` or `cleanup_terminal_session_for_thread_id(thread_id)`, which kills all process-registry entries for the derived task id and cleans the active Hermes environment.
-- Restart recovery is enabled by calling `recover_terminal_processes()` during agent construction. Hermes can recover host PID sessions as detached sessions; sandbox PID sessions are skipped by existing Hermes behavior.
+- Explicit user-session shutdown calls `cleanup_terminal_session_for_runtime(runtime)` or `cleanup_terminal_session_for_thread_id(thread_id)`, which kills all process-registry entries for the derived task id and cleans the active terminal environment.
+- Restart recovery is enabled by calling `recover_terminal_processes()` during agent construction. reference implementation can recover host PID sessions as detached sessions; sandbox PID sessions are skipped by existing reference implementation behavior.
 - Subagents remain read-only and do not receive `terminal` or `process`.
 
 ## Task 1: Add Project-Native Terminal Tool Wrapper
@@ -57,7 +57,7 @@ def test_terminal_schema_does_not_expose_task_id():
 
 def test_terminal_injects_runtime_thread_as_task_id(monkeypatch):
     import agent_tools.terminal_tools as terminal_tools
-    from agent_core.session_context import hermes_task_id_from_thread_id
+    from agent_core.session_context import runtime_task_id_from_thread_id
 
     calls = []
 
@@ -86,11 +86,11 @@ def test_terminal_injects_runtime_thread_as_task_id(monkeypatch):
 
     assert payload["ok"] is True
     assert payload["data"]["output"] == "ok\n"
-    assert calls[0]["task_id"] == hermes_task_id_from_thread_id("terminal-thread-1")
+    assert calls[0]["task_id"] == runtime_task_id_from_thread_id("terminal-thread-1")
     assert calls[0]["force"] is False
 
 
-def test_terminal_preserves_hermes_guard_block_response(monkeypatch):
+def test_terminal_preserves_toolkit_guard_block_response(monkeypatch):
     import agent_tools.terminal_tools as terminal_tools
 
     def fake_run_terminal(**kwargs):
@@ -149,15 +149,15 @@ from typing import Literal
 from langchain.tools import ToolRuntime, tool
 from pydantic import BaseModel, Field
 
-from agent_core.session_context import hermes_task_id_from_runtime
+from agent_core.session_context import runtime_task_id_from_runtime
 from agent_core.workspace import WORKDIR
-from agent_tools.hermes_terminal_toolkit.terminal import run_process, run_terminal
-from agent_tools.hermes_terminal_toolkit.process_registry import process_registry
+from agent_tools.terminal_toolkit.terminal import run_process, run_terminal
+from agent_tools.terminal_toolkit.process_registry import process_registry
 from agent_tools.tool_output import tool_error, tool_ok
 
 
 class TerminalInput(BaseModel):
-    command: str = Field(description="Shell command to execute through Hermes terminal.")
+    command: str = Field(description="Shell command to execute through terminal.")
     background: bool = Field(default=False, description="Run as a tracked background process.")
     timeout: int | None = Field(default=None, ge=1, description="Timeout in seconds.")
     workdir: str | None = Field(default=None, description="Optional per-command working directory.")
@@ -180,13 +180,13 @@ class ProcessInput(BaseModel):
     limit: int = Field(default=200, ge=1, description="Maximum log lines to return.")
 
 
-def _decode_hermes_payload(raw: str) -> dict:
+def _decode_terminal_payload(raw: str) -> dict:
     try:
         payload = json.loads(raw)
     except json.JSONDecodeError:
-        return {"error": "Hermes terminal returned invalid JSON.", "raw": raw}
+        return {"error": "terminal returned invalid JSON.", "raw": raw}
     if not isinstance(payload, dict):
-        return {"error": f"Hermes terminal returned unexpected payload type: {type(payload).__name__}", "raw": raw}
+        return {"error": f"terminal returned unexpected payload type: {type(payload).__name__}", "raw": raw}
     return payload
 
 
@@ -210,7 +210,7 @@ def _terminal_impl(
     watch_patterns: list[str] | None = None,
     runtime: ToolRuntime | None = None,
 ) -> str:
-    task_id = hermes_task_id_from_runtime(runtime)
+    task_id = runtime_task_id_from_runtime(runtime)
     raw = run_terminal(
         command=command,
         background=background,
@@ -222,20 +222,20 @@ def _terminal_impl(
         watch_patterns=watch_patterns,
         force=False,
     )
-    payload = _decode_hermes_payload(raw)
+    payload = _decode_terminal_payload(raw)
     if payload.get("error"):
         return tool_error(
             "terminal",
             str(payload["error"]),
             code=_status_code_from_payload(payload),
             data=payload,
-            meta={"backend": "hermes_terminal_toolkit", "task_id": task_id},
+            meta={"backend": "terminal_toolkit", "task_id": task_id},
         )
     return tool_ok(
         "terminal",
         data=payload,
         message="Terminal command completed." if not background else "Background process started.",
-        meta={"backend": "hermes_terminal_toolkit", "task_id": task_id},
+        meta={"backend": "terminal_toolkit", "task_id": task_id},
     )
 
 
@@ -250,7 +250,7 @@ def terminal(
     notify_on_complete: bool = False,
     watch_patterns: list[str] | None = None,
 ) -> str:
-    """Execute shell commands through Hermes terminal with runtime-scoped task isolation."""
+    """Execute shell commands through terminal with runtime-scoped task isolation."""
     return _terminal_impl(
         command=command,
         background=background,
@@ -268,7 +268,7 @@ def terminal(
 Run:
 
 ```bash
-/home/miku/miniforge3/envs/langchain/bin/python -m pytest tests/test_terminal_tools.py::test_terminal_schema_does_not_expose_task_id tests/test_terminal_tools.py::test_terminal_injects_runtime_thread_as_task_id tests/test_terminal_tools.py::test_terminal_preserves_hermes_guard_block_response -v
+/home/miku/miniforge3/envs/langchain/bin/python -m pytest tests/test_terminal_tools.py::test_terminal_schema_does_not_expose_task_id tests/test_terminal_tools.py::test_terminal_injects_runtime_thread_as_task_id tests/test_terminal_tools.py::test_terminal_preserves_toolkit_guard_block_response -v
 ```
 
 Expected: PASS for the three terminal tests.
@@ -277,7 +277,7 @@ Expected: PASS for the three terminal tests.
 
 ```bash
 git add agent_tools/terminal_tools.py tests/test_terminal_tools.py
-git commit -m "feat: add runtime-scoped Hermes terminal tool"
+git commit -m "feat: add runtime-scoped terminal tool"
 ```
 
 ## Task 2: Add Process Tool With Task Ownership Enforcement
@@ -301,7 +301,7 @@ def test_process_schema_does_not_expose_task_id():
 
 def test_process_list_is_scoped_to_runtime_task_id(monkeypatch):
     import agent_tools.terminal_tools as terminal_tools
-    from agent_core.session_context import hermes_task_id_from_thread_id
+    from agent_core.session_context import runtime_task_id_from_thread_id
 
     calls = []
 
@@ -325,7 +325,7 @@ def test_process_list_is_scoped_to_runtime_task_id(monkeypatch):
 
     assert payload["ok"] is True
     assert payload["data"]["processes"] == []
-    assert calls[0]["task_id"] == hermes_task_id_from_thread_id("process-thread-1")
+    assert calls[0]["task_id"] == runtime_task_id_from_thread_id("process-thread-1")
 
 
 def test_process_rejects_cross_task_session(monkeypatch):
@@ -385,7 +385,7 @@ def _process_impl(
     limit: int = 200,
     runtime: ToolRuntime | None = None,
 ) -> str:
-    task_id = hermes_task_id_from_runtime(runtime)
+    task_id = runtime_task_id_from_runtime(runtime)
     if action in _PROCESS_ACTIONS_REQUIRING_SESSION:
         if not session_id:
             return tool_error("process", f"session_id is required for {action}", code="invalid_input")
@@ -407,20 +407,20 @@ def _process_impl(
         limit=limit,
         task_id=task_id,
     )
-    payload = _decode_hermes_payload(raw)
+    payload = _decode_terminal_payload(raw)
     if payload.get("error"):
         return tool_error(
             "process",
             str(payload["error"]),
             code=_status_code_from_payload(payload),
             data=payload,
-            meta={"backend": "hermes_terminal_toolkit", "task_id": task_id},
+            meta={"backend": "terminal_toolkit", "task_id": task_id},
         )
     return tool_ok(
         "process",
         data=payload,
         message="Process action completed.",
-        meta={"backend": "hermes_terminal_toolkit", "task_id": task_id},
+        meta={"backend": "terminal_toolkit", "task_id": task_id},
     )
 
 
@@ -434,7 +434,7 @@ def process(
     offset: int = 0,
     limit: int = 200,
 ) -> str:
-    """Manage Hermes background processes scoped to the current runtime task id."""
+    """Manage reference implementation background processes scoped to the current runtime task id."""
     return _process_impl(
         action=action,
         session_id=session_id,
@@ -460,7 +460,7 @@ Expected: PASS.
 
 ```bash
 git add agent_tools/terminal_tools.py tests/test_terminal_tools.py
-git commit -m "feat: add runtime-scoped Hermes process tool"
+git commit -m "feat: add runtime-scoped terminal process tool"
 ```
 
 ## Task 3: Wire Tools Into Parent Agent And Human Approval
@@ -541,11 +541,11 @@ Modify `HUMAN_INTERRUPT_ON` in `agent_core/builders.py`:
 ```python
     "terminal": {
         "allowed_decisions": ["approve", "edit", "reject", "respond"],
-        "description": "Review this Hermes terminal command before it executes.",
+        "description": "Review this terminal command before it executes.",
     },
     "process": {
         "allowed_decisions": ["approve", "edit", "reject", "respond"],
-        "description": "Review this Hermes background process action before it executes.",
+        "description": "Review this reference implementation background process action before it executes.",
     },
 ```
 
@@ -565,7 +565,7 @@ Expected: PASS.
 
 ```bash
 git add agent_core/delegation.py agent_core/builders.py tests/test_terminal_tools.py
-git commit -m "feat: expose Hermes terminal tools to parent agent"
+git commit -m "feat: expose terminal tools to parent agent"
 ```
 
 ## Task 4: Add Terminal Lifecycle Recovery And Explicit Cleanup
@@ -582,7 +582,7 @@ Create `tests/test_terminal_lifecycle.py`:
 ```python
 from types import SimpleNamespace
 
-from agent_core.session_context import hermes_task_id_from_thread_id
+from agent_core.session_context import runtime_task_id_from_thread_id
 
 
 def test_recover_terminal_processes_delegates_to_registry(monkeypatch):
@@ -603,7 +603,7 @@ def test_recover_terminal_processes_delegates_to_registry(monkeypatch):
 def test_cleanup_terminal_session_for_thread_id_kills_processes_and_cleans_env(monkeypatch):
     import agent_core.terminal_lifecycle as lifecycle
 
-    task_id = hermes_task_id_from_thread_id("cleanup-thread")
+    task_id = runtime_task_id_from_thread_id("cleanup-thread")
     killed = []
     cleaned = []
 
@@ -620,7 +620,7 @@ def test_cleanup_terminal_session_for_thread_id_kills_processes_and_cleans_env(m
 def test_cleanup_terminal_session_for_runtime_uses_runtime_thread(monkeypatch):
     import agent_core.terminal_lifecycle as lifecycle
 
-    task_id = hermes_task_id_from_thread_id("runtime-cleanup-thread")
+    task_id = runtime_task_id_from_thread_id("runtime-cleanup-thread")
     killed = []
     cleaned = []
     runtime = SimpleNamespace(execution_info=SimpleNamespace(thread_id="runtime-cleanup-thread"))
@@ -656,23 +656,23 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from agent_core.session_context import hermes_task_id_from_runtime, hermes_task_id_from_thread_id
-from agent_tools.hermes_terminal_toolkit.process_registry import process_registry
-from agent_tools.hermes_terminal_toolkit.terminal_tool import cleanup_vm
+from agent_core.session_context import runtime_task_id_from_runtime, runtime_task_id_from_thread_id
+from agent_tools.terminal_toolkit.process_registry import process_registry
+from agent_tools.terminal_toolkit.terminal_tool import cleanup_vm
 
 logger = logging.getLogger(__name__)
 
 
 def recover_terminal_processes() -> int:
-    """Recover host-backed Hermes background processes from checkpoint metadata."""
+    """Recover host-backed reference implementation background processes from checkpoint metadata."""
     recovered = process_registry.recover_from_checkpoint()
-    logger.info("Recovered %s Hermes terminal process(es) from checkpoint.", recovered)
+    logger.info("Recovered %s terminal process(es) from checkpoint.", recovered)
     return recovered
 
 
 def cleanup_terminal_session_for_thread_id(thread_id: str | None) -> dict:
     """Explicitly end a terminal session: kill scoped processes and clean environment."""
-    task_id = hermes_task_id_from_thread_id(thread_id)
+    task_id = runtime_task_id_from_thread_id(thread_id)
     killed = process_registry.kill_all(task_id=task_id)
     cleanup_vm(task_id)
     return {
@@ -684,7 +684,7 @@ def cleanup_terminal_session_for_thread_id(thread_id: str | None) -> dict:
 
 def cleanup_terminal_session_for_runtime(runtime: Any | None) -> dict:
     """Explicitly end the terminal session associated with a ToolRuntime-like object."""
-    task_id = hermes_task_id_from_runtime(runtime)
+    task_id = runtime_task_id_from_runtime(runtime)
     killed = process_registry.kill_all(task_id=task_id)
     cleanup_vm(task_id)
     return {
@@ -722,7 +722,7 @@ Expected: PASS.
 
 ```bash
 git add agent_core/terminal_lifecycle.py agent_core/builders.py tests/test_terminal_lifecycle.py
-git commit -m "feat: add Hermes terminal lifecycle helpers"
+git commit -m "feat: add terminal lifecycle helpers"
 ```
 
 ## Task 5: Add Real LangGraph Injection Smoke Test
@@ -741,7 +741,7 @@ def test_terminal_toolnode_injects_runtime_thread(monkeypatch):
     from langgraph.prebuilt import ToolNode
 
     import agent_tools.terminal_tools as terminal_tools
-    from agent_core.session_context import hermes_task_id_from_thread_id
+    from agent_core.session_context import runtime_task_id_from_thread_id
     from agent_tools.terminal_tools import terminal
 
     calls = []
@@ -779,7 +779,7 @@ def test_terminal_toolnode_injects_runtime_thread(monkeypatch):
     payload = json.loads(result["messages"][-1].content)
 
     assert payload["ok"] is True
-    assert calls[0]["task_id"] == hermes_task_id_from_thread_id("toolnode-terminal-thread")
+    assert calls[0]["task_id"] == runtime_task_id_from_thread_id("toolnode-terminal-thread")
 ```
 
 - [ ] **Step 2: Run smoke test**
@@ -806,30 +806,30 @@ git commit -m "test: cover terminal ToolNode runtime injection"
 
 - [ ] **Step 1: Add documentation**
 
-Replace the existing `## Hermes Terminal Session Contract` section in `README.md` with:
+Replace the existing `## Terminal Session Contract` section in `README.md` with:
 
 ```markdown
-## Hermes Terminal Session Contract
+## Terminal Session Contract
 
 The project exposes three shell-related tools:
 
 - `execute_command`: compatibility tool for foreground commands with the legacy output schema and stricter project-side blocking.
-- `terminal`: first-class Hermes terminal tool for foreground and background commands.
-- `process`: first-class Hermes process tool for background process polling, logs, waiting, stdin, and killing.
+- `terminal`: first-class terminal tool for foreground and background commands.
+- `process`: first-class terminal process tool for background process polling, logs, waiting, stdin, and killing.
 
 Runtime session isolation is derived from the LangGraph execution thread:
 
-- When LangChain provides `ToolRuntime.execution_info.thread_id`, terminal tools hash that thread id into a path-safe Hermes `task_id`.
+- When LangChain provides `ToolRuntime.execution_info.thread_id`, terminal tools hash that thread id into a path-safereference implementation `task_id`.
 - If `execution_info.thread_id` is unavailable, tools fall back to `runtime.config["configurable"]["thread_id"]`.
-- The raw thread id is not exposed to the model and is not written into Hermes paths or checkpoints.
-- If no runtime thread id is available, tools fall back to the Hermes `default` task id. This fallback is intended for local tests and direct implementation calls only.
+- The raw thread id is not exposed to the model and is not written into reference implementation paths or checkpoints.
+- If no runtime thread id is available, tools fall back to thereference implementation `default` task id. This fallback is intended for local tests and direct implementation calls only.
 - Production callers should provide a stable LangGraph `thread_id` for each user conversation/session.
 
 `terminal` and `process` do not expose `task_id` in their tool schemas. `process` validates that `session_id` belongs to the current runtime-derived `task_id` before allowing `poll`, `log`, `wait`, `kill`, `write`, `submit`, or `close`.
 
 Security and approval:
 
-- `terminal` uses Hermes built-in command guards by calling Hermes with `force=False`.
+- `terminal` uses reference implementation built-in command guards by calling reference implementation with `force=False`.
 - `terminal` and `process` are intercepted by the human-in-the-loop middleware before execution.
 - `execute_command` remains as a compatibility layer and should not be used for new long-running/background workflows.
 
@@ -837,8 +837,8 @@ Lifecycle policy:
 
 - Normal agent turns preserve background processes.
 - Explicit user-session shutdown should call `cleanup_terminal_session_for_thread_id(thread_id)` or `cleanup_terminal_session_for_runtime(runtime)`.
-- Explicit cleanup kills running processes for the session task id and cleans the active Hermes environment.
-- Parent agent startup calls `recover_terminal_processes()`. Hermes can recover host-backed background processes as detached sessions after restart; sandbox-backed processes are skipped by Hermes because their in-sandbox PIDs are not meaningful after restart.
+- Explicit cleanup kills running processes for the session task id and cleans the active terminal environment.
+- Parent agent startup calls `recover_terminal_processes()`. reference implementation can recover host-backed background processes as detached sessions after restart; sandbox-backed processes are skipped by reference implementation because their in-sandbox PIDs are not meaningful after restart.
 ```
 
 - [ ] **Step 2: Run documentation-adjacent checks**
@@ -855,7 +855,7 @@ Expected: no output and exit code 0.
 
 ```bash
 git add README.md
-git commit -m "docs: document Hermes terminal lifecycle contract"
+git commit -m "docs: document terminal lifecycle contract"
 ```
 
 ## Task 7: Full Verification
@@ -868,7 +868,7 @@ git commit -m "docs: document Hermes terminal lifecycle contract"
 Run:
 
 ```bash
-/home/miku/miniforge3/envs/langchain/bin/python -m pytest tests/test_terminal_tools.py tests/test_terminal_lifecycle.py tests/test_execute_command_runtime_smoke.py tests/test_shell_task_id.py tests/test_session_context.py tests/test_hermes_shell_adapter_task_id.py -v
+/home/miku/miniforge3/envs/langchain/bin/python -m pytest tests/test_terminal_tools.py tests/test_terminal_lifecycle.py tests/test_execute_command_runtime_smoke.py tests/test_shell_task_id.py tests/test_session_context.py tests/test_shell_adapter_task_id.py -v
 ```
 
 Expected: all tests pass.
@@ -909,8 +909,8 @@ Expected: diff contains only terminal/process tool wiring, lifecycle helpers, do
 Use `superpowers:requesting-code-review` with:
 
 ```text
-DESCRIPTION: Added first-class Hermes terminal/process tools with runtime-derived task_id, process ownership checks, human approval wiring, lifecycle cleanup, and restart recovery.
-PLAN_OR_REQUIREMENTS: docs/superpowers/plans/2026-05-15-hermes-terminal-process-tools.md
+DESCRIPTION: Added first-class terminal/process tools with runtime-derived task_id, process ownership checks, human approval wiring, lifecycle cleanup, and restart recovery.
+PLAN_OR_REQUIREMENTS: docs/superpowers/plans/2026-05-15-archived_reference-terminal-process-tools.md
 BASE_SHA: origin/main
 HEAD_SHA: HEAD
 ```
@@ -923,7 +923,7 @@ Spec coverage:
 
 - First-class `terminal` and `process`: Task 1, Task 2, Task 3.
 - `runtime: ToolRuntime` injection: Task 1, Task 2, Task 5.
-- Use Hermes guard: Task 1 passes `force=False`.
+- Use reference implementation guard: Task 1 passes `force=False`.
 - Use human approval: Task 3 adds middleware entries.
 - Decide cleanup policy: Policy section and Task 4 implement explicit cleanup.
 - Preserve background processes: Policy section documents preservation during normal turns.
@@ -939,4 +939,4 @@ Type consistency:
 
 - `terminal(command, runtime, ...)` and `process(action, runtime, ...)` use required `ToolRuntime` so LangGraph `ToolNode` injects runtime.
 - Internal implementations use optional runtime for direct unit tests only.
-- Task id derivation consistently uses `hermes_task_id_from_runtime()`.
+- Task id derivation consistently uses `runtime_task_id_from_runtime()`.

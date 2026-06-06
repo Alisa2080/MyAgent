@@ -40,7 +40,7 @@
 - Update existing tests:
   - `tests/test_permissions_terminal_wrappers.py`
   - `tests/test_permissions_process_wrappers.py`
-  - `tests/test_file_tools_hermes_env.py`
+  - `tests/test_file_tools_active_env.py`
 
 ---
 
@@ -261,7 +261,7 @@ from agent_core.permissions.approvals import (
 from agent_core.permissions.tool_grants import consume_tool_policy_grant
 from agent_core.permissions.tool_policy import canonical_tool_args
 from agent_core.policy_tool_middleware import PolicyToolMiddleware
-from agent_core.session_context import hermes_task_id_from_thread_id
+from agent_core.session_context import runtime_task_id_from_thread_id
 
 
 def _runtime(thread_id="policy-thread", tool_call_id="call-policy"):
@@ -294,7 +294,7 @@ def test_policy_tool_middleware_passes_allow_to_handler():
     assert result.content == '{"ok": true}'
     assert calls == [request]
     grant = consume_tool_policy_grant(
-        task_id=hermes_task_id_from_thread_id("policy-thread"),
+        task_id=runtime_task_id_from_thread_id("policy-thread"),
         tool_call_id="call-policy",
         tool_name="terminal",
     )
@@ -345,7 +345,7 @@ def test_policy_tool_middleware_consumes_approval_and_records_grant():
         ApprovalRecord(
             approval_id="approval-network",
             decision_id="decision-network",
-            task_id=hermes_task_id_from_thread_id("thread-network"),
+            task_id=runtime_task_id_from_thread_id("thread-network"),
             tool_call_id="call-network",
             tool_name="terminal",
             args_digest=make_args_digest(args),
@@ -365,7 +365,7 @@ def test_policy_tool_middleware_consumes_approval_and_records_grant():
 
     assert json.loads(result.content)["ok"] is True
     grant = consume_tool_policy_grant(
-        task_id=hermes_task_id_from_thread_id("thread-network"),
+        task_id=runtime_task_id_from_thread_id("thread-network"),
         tool_call_id="call-network",
         tool_name="terminal",
     )
@@ -613,7 +613,7 @@ In `tests/test_permissions_terminal_wrappers.py`, add:
 def test_terminal_uses_middleware_grant_without_consuming_approval(monkeypatch):
     from agent_core.permissions.approvals import clear_approvals
     from agent_core.permissions.tool_grants import ToolPolicyGrant, record_tool_policy_grant
-    from agent_core.session_context import hermes_task_id_from_thread_id
+    from agent_core.session_context import runtime_task_id_from_thread_id
 
     terminal_tools = _terminal_module()
     clear_approvals()
@@ -623,7 +623,7 @@ def test_terminal_uses_middleware_grant_without_consuming_approval(monkeypatch):
 
     record_tool_policy_grant(
         ToolPolicyGrant(
-            task_id=hermes_task_id_from_thread_id(thread_id),
+            task_id=runtime_task_id_from_thread_id(thread_id),
             tool_call_id=tool_call_id,
             tool_name="terminal",
             risk_tags=("network_access",),
@@ -652,7 +652,7 @@ In `tests/test_permissions_process_wrappers.py`, add:
 ```python
 def test_process_uses_middleware_grant_without_consuming_approval(monkeypatch):
     from agent_core.permissions.tool_grants import ToolPolicyGrant, record_tool_policy_grant
-    from agent_core.session_context import hermes_task_id_from_thread_id
+    from agent_core.session_context import runtime_task_id_from_thread_id
 
     terminal_tools = _terminal_module()
     calls = []
@@ -661,7 +661,7 @@ def test_process_uses_middleware_grant_without_consuming_approval(monkeypatch):
 
     record_tool_policy_grant(
         ToolPolicyGrant(
-            task_id=hermes_task_id_from_thread_id(thread_id),
+            task_id=runtime_task_id_from_thread_id(thread_id),
             tool_call_id=tool_call_id,
             tool_name="process",
             risk_tags=("process_stdin",),
@@ -830,7 +830,7 @@ git commit -m "refactor: use policy grants in terminal tools"
 
 **Files:**
 - Modify: `agent_tools/public/files.py`
-- Modify: `tests/test_file_tools_hermes_env.py`
+- Modify: `tests/test_file_tools_active_env.py`
 
 - [ ] **Step 1: Add failing file grant-path tests**
 
@@ -842,7 +842,7 @@ def test_write_file_uses_middleware_grant_for_review_path(monkeypatch):
     from types import SimpleNamespace
 
     from agent_core.permissions.tool_grants import ToolPolicyGrant, record_tool_policy_grant
-    from agent_core.session_context import hermes_task_id_from_thread_id
+    from agent_core.session_context import runtime_task_id_from_thread_id
     from agent_tools.public import files
 
     calls = []
@@ -855,7 +855,7 @@ def test_write_file_uses_middleware_grant_for_review_path(monkeypatch):
 
     record_tool_policy_grant(
         ToolPolicyGrant(
-            task_id=hermes_task_id_from_thread_id(thread_id),
+            task_id=runtime_task_id_from_thread_id(thread_id),
             tool_call_id=tool_call_id,
             tool_name="write_file",
             risk_tags=("external_file_write",),
@@ -895,7 +895,7 @@ def test_patch_uses_middleware_grant_for_review_path(monkeypatch):
     from types import SimpleNamespace
 
     from agent_core.permissions.tool_grants import ToolPolicyGrant, record_tool_policy_grant
-    from agent_core.session_context import hermes_task_id_from_thread_id
+    from agent_core.session_context import runtime_task_id_from_thread_id
     from agent_tools.public import files
 
     calls = []
@@ -908,7 +908,7 @@ def test_patch_uses_middleware_grant_for_review_path(monkeypatch):
 
     record_tool_policy_grant(
         ToolPolicyGrant(
-            task_id=hermes_task_id_from_thread_id(thread_id),
+            task_id=runtime_task_id_from_thread_id(thread_id),
             tool_call_id=tool_call_id,
             tool_name="patch",
             risk_tags=("external_file_write",),
@@ -951,7 +951,7 @@ def test_patch_uses_middleware_grant_for_review_path(monkeypatch):
 Run the specific test file containing the new tests:
 
 ```bash
-pytest tests/test_file_tools_hermes_env.py -q
+pytest tests/test_file_tools_active_env.py -q
 ```
 
 Expected: FAIL because file wrappers still consume raw approvals and ignore grants.
@@ -1016,7 +1016,7 @@ approval_args = patch_policy_args(
 Run:
 
 ```bash
-pytest tests/test_file_tools_hermes_env.py -q
+pytest tests/test_file_tools_active_env.py -q
 ```
 
 Expected: PASS.
@@ -1034,7 +1034,7 @@ Expected: PASS.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add agent_tools/public/files.py tests/test_file_tools_hermes_env.py
+git add agent_tools/public/files.py tests/test_file_tools_active_env.py
 git commit -m "refactor: use policy grants in file tools"
 ```
 
@@ -1124,7 +1124,7 @@ git commit -m "feat: wire policy tool middleware"
 Run:
 
 ```bash
-pytest tests/test_policy_tool_middleware.py tests/test_permissions_human_loop.py tests/test_permissions_terminal_wrappers.py tests/test_permissions_process_wrappers.py tests/test_permissions_approvals.py tests/test_permissions_tool_policy.py tests/test_file_tools_hermes_env.py -q
+pytest tests/test_policy_tool_middleware.py tests/test_permissions_human_loop.py tests/test_permissions_terminal_wrappers.py tests/test_permissions_process_wrappers.py tests/test_permissions_approvals.py tests/test_permissions_tool_policy.py tests/test_file_tools_active_env.py -q
 ```
 
 Expected: PASS.

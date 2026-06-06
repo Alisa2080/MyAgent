@@ -18,7 +18,7 @@ This plan covers one cohesive cleanup: neutral naming for `agent_tools` runtime 
 
 Create or rename:
 
-- Rename `agent_tools/web_hermes/` to `agent_tools/web_toolkit/`
+- Rename the previous externally branded web helper package to `agent_tools/web_toolkit/`
   - `__init__.py`: neutral package docstring.
   - `backends.py`: backend selection and provider adapters, unchanged behavior.
   - `content.py`: content cleanup and optional auxiliary summarization, unchanged behavior.
@@ -64,25 +64,13 @@ def test_web_toolkit_import_path_is_project_native():
 
 - [ ] **Step 2: Update existing helper imports in web migration tests**
 
-In `tests/test_web_tools_migration.py`, replace:
-
-```python
-agent_tools.web_hermes
-```
-
-with:
+In `tests/test_web_tools_migration.py`, replace obsolete web helper imports with:
 
 ```python
 agent_tools.web_toolkit
 ```
 
-Also replace monkeypatch target strings:
-
-```python
-"agent_tools.web_hermes.backends.httpx.post"
-```
-
-with:
+Also update monkeypatch target strings to:
 
 ```python
 "agent_tools.web_toolkit.backends.httpx.post"
@@ -124,38 +112,19 @@ git commit -m "test: require neutral web toolkit imports"
 ## Task 2: Rename Runtime Web Helper Package
 
 **Files:**
-- Rename: `agent_tools/web_hermes/` -> `agent_tools/web_toolkit/`
+- Rename: previous externally branded web helper package -> `agent_tools/web_toolkit/`
 - Modify: `agent_tools/public/web.py`
 - Modify: `agent_tools/web_toolkit/__init__.py`
 
 - [ ] **Step 1: Rename the package**
 
-Run:
-
-```bash
-git mv agent_tools/web_hermes agent_tools/web_toolkit
-```
+Run the corresponding `git mv` from the obsolete helper package name to `agent_tools/web_toolkit`.
 
 Expected: Git records a directory rename containing `__init__.py`, `backends.py`, `content.py`, and `safety.py`.
 
 - [ ] **Step 2: Update public web imports**
 
-In `agent_tools/public/web.py`, replace:
-
-```python
-from agent_tools.web_hermes.backends import BackendConfigurationError, get_backend
-from agent_tools.web_hermes.content import (
-    DEFAULT_MAX_CHARS_PER_URL,
-    DEFAULT_MIN_LENGTH_FOR_SUMMARIZATION,
-    bound_content,
-    clean_base64_images,
-    should_summarize,
-    summarize_with_auxiliary,
-)
-from agent_tools.web_hermes.safety import is_safe_url
-```
-
-with:
+In `agent_tools/public/web.py`, import from the neutral helper package:
 
 ```python
 from agent_tools.web_toolkit.backends import BackendConfigurationError, get_backend
@@ -195,7 +164,7 @@ Expected: all selected tests pass.
 
 ```bash
 git add agent_tools/public/web.py agent_tools/web_toolkit tests/test_web_tools_migration.py tests/test_agent_tools_public_imports.py tests/test_public_toolmessage_results.py
-git add -u agent_tools/web_hermes
+git add -u
 git commit -m "refactor: rename web helper toolkit"
 ```
 
@@ -271,54 +240,19 @@ git commit -m "chore: remove unused web reference references"
 
 - [ ] **Step 1: Rename web migration docs to neutral filenames**
 
-Run:
-
-```bash
-git mv docs/superpowers/specs/2026-06-06-hermes-web-tools-migration-design.md docs/superpowers/specs/2026-06-06-web-tools-migration-design.md
-git mv docs/superpowers/plans/2026-06-06-hermes-web-tools-migration.md docs/superpowers/plans/2026-06-06-web-tools-migration.md
-```
+Rename any specs/plans file whose filename still contains external branding to a neutral filename, including the web migration spec and plan.
 
 Expected: both files are renamed by git.
 
 - [ ] **Step 2: Replace runtime path references**
 
-Run:
-
-```bash
-rg -l "web_hermes|agent_tools/web_hermes" docs/superpowers/specs docs/superpowers/plans agent_tools/README.md README.md tests agent_tools agent_core \
-  | xargs sed -i 's/agent_tools\\/web_hermes/agent_tools\\/web_toolkit/g; s/agent_tools\\.web_hermes/agent_tools.web_toolkit/g; s/web_hermes/web_toolkit/g'
-```
+Run a targeted replacement that updates obsolete web helper package references to `web_toolkit`.
 
 Expected: references to the old web helper package path are replaced with `web_toolkit`.
 
 - [ ] **Step 3: Neutralize external branding words in target docs**
 
-Run:
-
-```bash
-rg -l "Hermes|hermes" docs/superpowers/specs docs/superpowers/plans agent_tools/README.md README.md \
-  | xargs sed -i \
-    -e 's/Hermes-compatible/provider-compatible/g' \
-    -e 's/Hermes-style/reference-style/g' \
-    -e 's/Hermes reference/legacy reference/g' \
-    -e 's/Hermes Reference/Legacy Reference/g' \
-    -e 's/Hermes web tools migration/web tools migration/g' \
-    -e 's/Hermes Web Tools Migration/Web Tools Migration/g' \
-    -e 's/Hermes terminal toolkit/terminal toolkit/g' \
-    -e 's/Hermes Terminal Toolkit/Terminal Toolkit/g' \
-    -e 's/Hermes terminal/terminal/g' \
-    -e 's/Hermes Terminal/Terminal/g' \
-    -e 's/Hermes cron/cron reference/g' \
-    -e 's/Hermes Cron/Cron Reference/g' \
-    -e 's/Hermes CLI/CLI reference/g' \
-    -e 's/Hermes TUI/TUI reference/g' \
-    -e 's/Hermes approval/approval/g' \
-    -e 's/Hermes skin/skin/g' \
-    -e 's/Hermes gateway/gateway reference/g' \
-    -e 's/Hermes Gateway/Gateway Reference/g' \
-    -e 's/Hermes/Reference project/g' \
-    -e 's/hermes/reference_project/g'
-```
+Run replacements or a small script that changes exact external branding words in the target docs to neutral language such as `reference implementation`, `archived reference`, `upstream reference`, `project-native`, `provider-compatible`, and `reference-style`.
 
 Expected: target docs no longer contain the exact external project branding.
 
@@ -330,12 +264,12 @@ Review the remaining changed docs:
 git diff -- docs/superpowers/specs docs/superpowers/plans agent_tools/README.md README.md
 ```
 
-Fix awkward phrases so they read naturally. Use these preferred replacements:
+Fix awkward phrases so they read naturally. Use these checks:
 
-- `Reference project-style` -> `reference-style`
-- `reference_project_task_id` -> `runtime_task_id`
-- `reference_project-agent-main` -> `reference-agent-main` only in historical reference paths, or remove the path if it is not needed.
-- `Reference project` -> `reference project` unless it starts a sentence.
+- Avoid self-referential replacement examples after the target terms have already changed.
+- Prefer `project-native`, `provider-compatible`, or `reference implementation` based on sentence meaning.
+- Keep historical reference paths only when they still clarify where an old design came from.
+- Ensure rewritten sentences do not contain doubled spaces, broken possessives, or temporary placeholder identifiers.
 
 Expected: docs preserve technical meaning and read naturally.
 
@@ -344,7 +278,7 @@ Expected: docs preserve technical meaning and read naturally.
 Run:
 
 ```bash
-rg -n "Hermes|hermes|web_hermes" agent_tools tests docs/superpowers/specs docs/superpowers/plans README.md agent_tools/README.md
+rg -n "[H]ermes|[h]ermes|web_[h]ermes" agent_tools tests docs/superpowers/specs docs/superpowers/plans README.md agent_tools/README.md
 ```
 
 Expected: no matches in target paths.
@@ -399,7 +333,7 @@ Expected: no output and exit code 0.
 Run:
 
 ```bash
-rg -n "Hermes|hermes|web_hermes" agent_tools tests docs/superpowers/specs docs/superpowers/plans README.md agent_tools/README.md
+rg -n "[H]ermes|[h]ermes|web_[h]ermes" agent_tools tests docs/superpowers/specs docs/superpowers/plans README.md agent_tools/README.md
 ```
 
 Expected: no matches.

@@ -5,7 +5,7 @@ Date: 2026-05-27
 ## Goal
 
 Improve the Agent CLI's everyday terminal UX by borrowing the low-risk text
-handling ideas from the Hermes CLI while keeping the current project's small,
+handling ideas from the CLI reference while keeping the current project's small,
 testable module structure.
 
 This phase focuses on pure text safety and lightweight interactive commands:
@@ -43,7 +43,7 @@ The current CLI is already split into focused modules:
   counts.
 - `agent_cli/checkpoints.py` contains the LangGraph checkpoint access helpers.
 
-Hermes has mature implementations for file-drop detection, bracketed paste
+Reference implementation has mature implementations for file-drop detection, bracketed paste
 cleanup, large-paste collapsing, image attachment, copy/retry/undo/branch
 commands, and usage display. This project should reuse the proven behavior and
 edge cases, but not copy the monolithic TUI control flow.
@@ -121,7 +121,7 @@ actual pasted content, while the terminal editing surface stays compact.
 If paste-file creation fails, the CLI should fall back to inserting the
 sanitized text rather than dropping user input.
 
-The fallback text-change heuristic from Hermes can be added only if it stays
+The fallback text-change heuristic from reference implementation can be added only if it stays
 small and testable. The minimum first-phase requirement is bracketed-paste
 event handling plus submit-time sanitization.
 

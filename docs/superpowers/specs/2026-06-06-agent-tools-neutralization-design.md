@@ -26,7 +26,7 @@ Out of scope:
 
 The current web migration introduced a focused implementation under an externally-branded helper package, but that package name and docstrings still tie runtime code to a reference-project identity. There is also an untracked `agent_tools/web_tools.py` file that appears to be original reference code. It imports paths such as `tools.registry`, `tools.url_safety`, and `agent.auxiliary_client`, which are not project modules. Keeping that file in `agent_tools/` makes the package look more cluttered and can mislead future work.
 
-Historical plans and specs also contain many explicit references to that external project. Some references are useful as design history, but the user request is to fully neutralize the language. These references should become terms such as "reference implementation", "legacy reference", "upstream reference", or "project-native" while preserving the technical intent of the documents.
+Historical plans and specs also contain many explicit references to that external project. Some references are useful as design history, but the user request is to fully neutralize the language. These references should become terms such as "reference implementation", "archived reference", "upstream reference", or "project-native" while preserving the technical intent of the documents.
 
 ## Proposed Structure
 
@@ -53,8 +53,8 @@ All target docs should avoid the external project name. Examples:
 
 - External-reference web tools migration -> "web tools migration"
 - External-reference-compatible -> "provider-compatible" or "project-compatible"
-- External-reference files -> "legacy reference files"
-- External-reference-style -> "reference-style" only where the behavior comparison matters, otherwise "project-native"
+- External-reference files -> "archived reference files"
+- provider-specific style -> "project-native" only where the behavior comparison matters, otherwise "project-native"
 - Externally-branded web helper package path -> `agent_tools/web_toolkit`
 
 File names under `docs/superpowers/specs/` and `docs/superpowers/plans/` that contain the external project name should be renamed to neutral names. Cross-references inside those files should be updated.

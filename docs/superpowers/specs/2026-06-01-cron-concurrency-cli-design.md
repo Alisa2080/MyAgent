@@ -2,9 +2,9 @@
 
 ## Context
 
-The cron system has already moved beyond the reference `hermes_agent_cron` design in the areas that matter for reliability: jobs, runs, and delivery events now live in SQLite; scheduler service status and leader leases exist; runs record activity and timeout exit reasons; delivery has a registry-backed dispatcher.
+The cron system has already moved beyond the reference `cron_reference` design in the areas that matter for reliability: jobs, runs, and delivery events now live in SQLite; scheduler service status and leader leases exist; runs record activity and timeout exit reasons; delivery has a registry-backed dispatcher.
 
-Hermes remains useful as a reference for operational simplicity and user-facing management commands, but its scheduler still relies on `jobs.json`, a tick file lock, pre-advancing `next_run_at`, and runner-side workdir serialization. The next step in this project should not copy that runner-level serialization. It should use the current SQLite state machine to make concurrency decisions at claim time and make those decisions observable through CLI commands.
+Reference implementation remains useful as a reference for operational simplicity and user-facing management commands, but its scheduler still relies on `jobs.json`, a tick file lock, pre-advancing `next_run_at`, and runner-side workdir serialization. The next step in this project should not copy that runner-level serialization. It should use the current SQLite state machine to make concurrency decisions at claim time and make those decisions observable through CLI commands.
 
 ## Goals
 
@@ -119,7 +119,7 @@ Each scheduler tick should follow this order:
 
 ## Workdir Compatibility
 
-Hermes serialized jobs with `workdir` because those jobs mutated process-global environment state. This project should not automatically turn workdir into the concurrency key unless implementation reveals the same process-global contamination still exists.
+Reference implementation serialized jobs with `workdir` because those jobs mutated process-global environment state. This project should not automatically turn workdir into the concurrency key unless implementation reveals the same process-global contamination still exists.
 
 The first-stage default remains `job:{job_id}`. Users can explicitly set a shared key such as `workdir:/repo/path` or `repo:/repo/path` when they want multiple jobs to serialize against the same resource.
 

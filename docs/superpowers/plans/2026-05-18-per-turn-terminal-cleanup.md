@@ -2,17 +2,17 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add Hermes-style per-turn terminal environment cleanup so non-persistent terminal environments are cleaned after each completed agent turn, while persistent environments remain available for the idle reaper.
+**Goal:** Add project-style per-turn terminal environment cleanup so non-persistent terminal environments are cleaned after each completed agent turn, while persistent environments remain available for the idle reaper.
 
-**Architecture:** Keep cleanup policy in `agent_core/terminal_lifecycle.py`, because that module already owns thread-id-to-task-id mapping and terminal session lifecycle. Call the policy from `agent_core/agent_runner.py` in `finally` blocks around the initial turn and each terminal-notification resume turn, so cleanup runs for success and error paths. Do not add browser cleanup now: this repository has no browser tool or `cleanup_browser` equivalent, unlike `/home/miku/projects/hermes-agent-main/`.
+**Architecture:** Keep cleanup policy in `agent_core/terminal_lifecycle.py`, because that module already owns thread-id-to-task-id mapping and terminal session lifecycle. Call the policy from `agent_core/agent_runner.py` in `finally` blocks around the initial turn and each terminal-notification resume turn, so cleanup runs for success and error paths. Do not add browser cleanup now: this repository has no browser tool or `cleanup_browser` equivalent, unlike `/home/miku/projects/reference-agent-main/`.
 
-**Tech Stack:** Python, LangGraph/LangChain agent runner, Hermes terminal toolkit, pytest.
+**Tech Stack:** Python, LangGraph/LangChain agent runner, terminal toolkit, pytest.
 
 ---
 
 ## Reference Behavior
 
-Reference project: `/home/miku/projects/hermes-agent-main/run_agent.py`
+Reference implementation: `/home/miku/projects/reference-agent-main/run_agent.py`
 
 Important behavior to mirror:
 
@@ -24,7 +24,7 @@ Important behavior to mirror:
 Current repository facts:
 
 - `agent_core/terminal_lifecycle.py` already exposes `end_terminal_session(thread_id)`, but that is explicit session shutdown and kills scoped background processes.
-- `agent_tools/hermes_terminal_toolkit/terminal_tool.py` already has `cleanup_vm(task_id)`, `is_persistent_env(task_id)`, and the idle reaper.
+- `agent_tools/terminal_toolkit/terminal_tool.py` already has `cleanup_vm(task_id)`, `is_persistent_env(task_id)`, and the idle reaper.
 - `agent_core/agent_runner.py` is the only production-style helper that wraps `agent.invoke(...)`; direct `agent.invoke(...)` callers remain responsible for lifecycle hooks.
 
 ## File Structure
@@ -36,7 +36,7 @@ Current repository facts:
   - Keep `end_terminal_session()` unchanged as explicit session shutdown.
 
 - Modify: `agent_core/agent_runner.py`
-  - Add `HERMES_TERMINAL_PER_TURN_CLEANUP` parsing.
+  - Add `TERMINAL_PER_TURN_CLEANUP` parsing.
   - Wrap each `agent.invoke(...)` call in a helper that runs `terminal_execution_scope(thread_id)` and then per-turn cleanup in `finally`.
   - Preserve auto-resume behavior and queued-notification behavior.
 
@@ -119,7 +119,7 @@ def test_cleanup_task_resources_for_task_id_reports_cleanup_error(monkeypatch):
 def test_cleanup_task_resources_for_thread_id_uses_hashed_task_id(monkeypatch):
     import agent_core.terminal_lifecycle as lifecycle
 
-    task_id = hermes_task_id_from_thread_id("thread-cleanup")
+    task_id = runtime_task_id_from_thread_id("thread-cleanup")
     calls = []
 
     monkeypatch.setattr(
@@ -172,7 +172,7 @@ Expected: FAIL with `AttributeError: module 'agent_core.terminal_lifecycle' has 
 Change the terminal-tool import near the top:
 
 ```python
-from agent_tools.hermes_terminal_toolkit.terminal_tool import cleanup_vm, is_persistent_env
+from agent_tools.terminal_toolkit.terminal_tool import cleanup_vm, is_persistent_env
 ```
 
 - [ ] **Step 2: Add per-turn cleanup helpers**
@@ -183,10 +183,10 @@ Insert these functions after `cleanup_terminal_session_for_runtime(...)` and bef
 def cleanup_task_resources_for_task_id(
     task_id: str, *, reason: str = "turn_finished"
 ) -> dict:
-    """Clean per-turn terminal resources for a Hermes task id.
+    """Clean per-turn terminal resources for a runtime task id.
 
     Persistent environments intentionally survive normal turn boundaries and are
-    left for the Hermes idle reaper. Non-persistent environments are torn down at
+    left for the reference implementation idle reaper. Non-persistent environments are torn down at
     turn end to avoid leaking sandbox resources.
     """
     try:
@@ -233,7 +233,7 @@ def cleanup_task_resources_for_thread_id(
             "cleanup_reason": reason,
             "error": "thread_id is required for per-turn terminal cleanup",
         }
-    task_id = hermes_task_id_from_thread_id(thread_id)
+    task_id = runtime_task_id_from_thread_id(thread_id)
     return cleanup_task_resources_for_task_id(task_id, reason=reason)
 ```
 
@@ -414,7 +414,7 @@ from agent_core.terminal_lifecycle import (
 Add constants after `MAX_AUTO_RESUMES_ENV`:
 
 ```python
-PER_TURN_CLEANUP_ENV = "HERMES_TERMINAL_PER_TURN_CLEANUP"
+PER_TURN_CLEANUP_ENV = "TERMINAL_PER_TURN_CLEANUP"
 ```
 
 Add this helper after `max_terminal_auto_resumes()`:
@@ -512,12 +512,12 @@ Replace the current `Lifecycle policy:` bullets with:
 Lifecycle policy:
 
 - Agent turns invoked through `agent_core.agent_runner.invoke_agent_with_terminal_notifications(...)` run per-turn terminal cleanup by default.
-- Per-turn cleanup mirrors Hermes agent behavior: non-persistent terminal environments are cleaned at turn end; persistent environments are left for the Hermes idle reaper controlled by `TERMINAL_LIFETIME_SECONDS`, defaulting to 300 seconds.
-- Set `HERMES_TERMINAL_PER_TURN_CLEANUP=false` to disable per-turn cleanup for embedding applications that need the previous behavior.
+- Per-turn cleanup mirrors reference implementation agent behavior: non-persistent terminal environments are cleaned at turn end; persistent environments are left for the reference implementation idle reaper controlled by `TERMINAL_LIFETIME_SECONDS`, defaulting to 300 seconds.
+- Set `TERMINAL_PER_TURN_CLEANUP=false` to disable per-turn cleanup for embedding applications that need the previous behavior.
 - Direct `agent.invoke(...)` callers are responsible for invoking lifecycle helpers themselves.
 - Explicit user-session shutdown should call `end_terminal_session(thread_id)`. Lower-level cleanup helpers remain available as `cleanup_terminal_session_for_thread_id(thread_id)` and `cleanup_terminal_session_for_runtime(runtime)`.
-- Explicit shutdown kills running processes for the session task id and cleans the active Hermes environment.
-- Parent agent startup calls `recover_terminal_processes()`. Hermes can recover host-backed background processes as detached sessions after restart; sandbox-backed processes are skipped by Hermes because their in-sandbox PIDs are not meaningful after restart.
+- Explicit shutdown kills running processes for the session task id and cleans the active terminal environment.
+- Parent agent startup calls `recover_terminal_processes()`. reference implementation can recover host-backed background processes as detached sessions after restart; sandbox-backed processes are skipped by reference implementation because their in-sandbox PIDs are not meaningful after restart.
 ```
 
 In `Embedding applications are responsible for terminal lifecycle events:`, add this bullet after the stable `thread_id` bullet:
@@ -531,12 +531,12 @@ In `Embedding applications are responsible for terminal lifecycle events:`, add 
 Run:
 
 ```bash
-rg -n "HERMES_TERMINAL_PER_TURN_CLEANUP|per-turn terminal cleanup|Normal agent turns preserve background processes" README.md
+rg -n "TERMINAL_PER_TURN_CLEANUP|per-turn terminal cleanup|Normal agent turns preserve background processes" README.md
 ```
 
 Expected:
 
-- Finds `HERMES_TERMINAL_PER_TURN_CLEANUP`.
+- Finds `TERMINAL_PER_TURN_CLEANUP`.
 - Finds `per-turn terminal cleanup`.
 - Does not find `Normal agent turns preserve background processes`.
 
@@ -605,6 +605,6 @@ Expected:
 
 ## Self-Review
 
-- Spec coverage: The plan implements Hermes-style per-turn cleanup, persistent-env skip, idle-reaper handoff, and runner integration. Browser cleanup is explicitly omitted because this repository has no browser subsystem.
+- Spec coverage: The plan implements project-style per-turn cleanup, persistent-env skip, idle-reaper handoff, and runner integration. Browser cleanup is explicitly omitted because this repository has no browser subsystem.
 - Placeholder scan: No deferred-work placeholders remain.
-- Type consistency: `thread_id` remains the LangGraph-facing identifier; `task_id` remains the Hermes-facing identifier; helper names are consistent across tests and implementation.
+- Type consistency: `thread_id` remains the LangGraph-facing identifier; `task_id` remains the reference implementation-facing identifier; helper names are consistent across tests and implementation.

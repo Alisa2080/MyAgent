@@ -35,12 +35,12 @@ state.
   process outside the current CLI process.
 - Do not merge cron jobs into the background task registry. Background tasks
   are in-process and temporary; cron jobs are persistent scheduled work.
-- Do not support Hermes platform delivery targets such as Telegram, Discord,
+- Do not support reference implementation platform delivery targets such as Telegram, Discord,
   Signal, Slack, or `platform:chat_id`.
 - Do not rewrite `cron/` scheduling, persistence, or runner internals.
 - Do not make `ask`, `sessions`, `doctor`, or `config` start a scheduler
   thread.
-- Do not port Hermes's large CLI implementation style into this codebase.
+- Do not port reference implementation's large CLI implementation style into this codebase.
 
 ## User-Facing Behavior
 
