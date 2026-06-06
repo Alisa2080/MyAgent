@@ -19,7 +19,7 @@ from agent_tools.public.clarify import clarify
 from agent_tools.public.files import file_info, list_directory, patch, read_file, search_files, write_file
 from agent_tools.public.skills import skill_manage, skill_view, skills_list
 from agent_tools.public.terminal import process, terminal
-from agent_tools.public.web import web_fetch, web_search
+from agent_tools.public.web import web_extract, web_search
 from agent_tools.shared.tool_result import tool_failure, tool_success
 
 logger = logging.getLogger(__name__)
@@ -30,7 +30,7 @@ READ_ONLY_TOOLS = [
     read_file,
     file_info,
     web_search,
-    web_fetch,
+    web_extract,
     skills_list,
     skill_view,
 ]

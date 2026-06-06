@@ -8,6 +8,12 @@ from unittest.mock import MagicMock
 import pytest
 
 
+import os
+
+os.environ.setdefault("OPENAI_API_KEY", "test-openai-key")
+os.environ.setdefault("ANTHROPIC_API_KEY", "test-anthropic-key")
+
+
 def _fake_tool(name=None, *tool_args, **tool_kwargs):
     def decorate(func):
         func.name = str(name or getattr(func, "__name__", "tool"))
