@@ -77,6 +77,20 @@ def test_is_safe_url_allows_public_https_hostname(monkeypatch):
     assert reason is None
 
 
+def test_is_safe_url_blocks_unresolvable_hostname(monkeypatch):
+    from agent_tools.web_hermes import safety
+
+    def raise_dns_error(*args, **kwargs):
+        raise OSError("temporary DNS failure")
+
+    monkeypatch.setattr(safety.socket, "getaddrinfo", raise_dns_error)
+
+    ok, reason = safety.is_safe_url("https://unresolvable.example.test/docs")
+
+    assert ok is False
+    assert reason == "URL hostname could not be resolved"
+
+
 def test_contains_embedded_secret_detects_raw_and_encoded_values():
     from agent_tools.web_hermes.safety import contains_embedded_secret
 
@@ -197,6 +211,125 @@ def test_normalize_search_result_shape():
     ]
 
 
+def test_normalize_extract_result_reads_provider_content_fields():
+    from agent_tools.web_hermes.backends import normalize_extract_result
+
+    tavily_doc = normalize_extract_result(
+        "tavily",
+        {"url": "https://example.com/a", "raw_content": "Tavily raw markdown"},
+        requested_format="markdown",
+    )
+    parallel_doc = normalize_extract_result(
+        "parallel",
+        {"url": "https://example.com/b", "full_content": "Parallel full content"},
+        requested_format="markdown",
+    )
+    parallel_excerpt_doc = normalize_extract_result(
+        "parallel",
+        {
+            "url": "https://example.com/c",
+            "excerpts": [{"text": "first excerpt"}, {"content": "second excerpt"}],
+        },
+        requested_format="markdown",
+    )
+
+    assert tavily_doc["content"] == "Tavily raw markdown"
+    assert parallel_doc["content"] == "Parallel full content"
+    assert parallel_excerpt_doc["content"] == "first excerpt\n\nsecond excerpt"
+
+
+def test_firecrawl_search_flattens_current_response_shape():
+    from agent_tools.web_hermes.backends import FirecrawlBackend
+
+    class FakeClient:
+        def search(self, **kwargs):
+            return {
+                "success": True,
+                "data": {
+                    "web": [
+                        {
+                            "title": "Web result",
+                            "url": "https://example.com",
+                            "description": "Snippet",
+                        }
+                    ]
+                },
+            }
+
+    backend = FirecrawlBackend(api_key="key", api_url=None)
+    backend._client = lambda: FakeClient()
+
+    response = backend.search("langchain", 5)
+
+    assert response["results"][0]["title"] == "Web result"
+    assert response["results"][0]["url"] == "https://example.com"
+
+
+def test_firecrawl_extract_supports_current_scrape_method():
+    from agent_tools.web_hermes.backends import FirecrawlBackend
+
+    calls = []
+
+    class FakeClient:
+        def scrape(self, **kwargs):
+            calls.append(kwargs)
+            return {"data": {"markdown": "Firecrawl markdown", "metadata": {"title": "Firecrawl"}}}
+
+    backend = FirecrawlBackend(api_key="key", api_url=None)
+    backend._client = lambda: FakeClient()
+
+    docs = backend.extract(["https://example.com"], "markdown")
+
+    assert calls == [{"url": "https://example.com", "formats": ["markdown"]}]
+    assert docs[0]["content"] == "Firecrawl markdown"
+
+
+def test_tavily_extract_uses_bearer_auth_and_markdown_format(monkeypatch):
+    from agent_tools.web_hermes.backends import TavilyBackend
+
+    calls = []
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"results": [{"url": "https://example.com", "raw_content": "Tavily markdown"}]}
+
+    def fake_post(url, **kwargs):
+        calls.append((url, kwargs))
+        return FakeResponse()
+
+    monkeypatch.setattr("agent_tools.web_hermes.backends.httpx.post", fake_post)
+
+    docs = TavilyBackend(api_key="tvly-key").extract(["https://example.com"], "html")
+
+    assert calls[0][0] == "https://api.tavily.com/extract"
+    assert calls[0][1]["headers"]["Authorization"] == "Bearer tvly-key"
+    assert calls[0][1]["json"]["format"] == "markdown"
+    assert "api_key" not in calls[0][1]["json"]
+    assert docs[0]["content"] == "Tavily markdown"
+
+
+def test_exa_extract_maps_html_request_to_text_content():
+    from agent_tools.web_hermes.backends import ExaBackend
+
+    calls = []
+
+    class FakeClient:
+        def get_contents(self, urls, **kwargs):
+            calls.append((urls, kwargs))
+            return {"results": [{"url": urls[0], "text": "Exa text content"}]}
+
+    backend = ExaBackend(api_key="exa-key")
+    backend._client = lambda: FakeClient()
+
+    docs = backend.extract(["https://example.com"], "html")
+
+    assert calls == [(["https://example.com"], {"text": True, "highlights": True})]
+    assert docs[0]["content"] == "Exa text content"
+
+
 def test_web_search_clamps_limit_and_returns_backend_artifact(monkeypatch):
     import agent_tools.public.web as web
 
@@ -270,6 +403,13 @@ def test_web_extract_rechecks_unsafe_final_url(monkeypatch):
             ]
 
     monkeypatch.setattr(web, "get_backend", lambda: FakeBackend())
+    monkeypatch.setattr(
+        web,
+        "is_safe_url",
+        lambda url: (False, "private or local IP URLs are not allowed")
+        if str(url).startswith("http://127.0.0.1")
+        else (True, None),
+    )
 
     result = web.web_extract.func(["https://example.com"], runtime=_runtime("call-redirect"))
 
@@ -301,6 +441,7 @@ def test_web_extract_cleans_base64_and_caps_output(monkeypatch):
             ]
 
     monkeypatch.setattr(web, "get_backend", lambda: FakeBackend())
+    monkeypatch.setattr(web, "is_safe_url", lambda url: (True, None))
 
     result = web.web_extract.func(
         ["https://example.com"],
@@ -343,6 +484,7 @@ def test_web_extract_returns_partial_success_for_mixed_results(monkeypatch):
             ]
 
     monkeypatch.setattr(web, "get_backend", lambda: FakeBackend())
+    monkeypatch.setattr(web, "is_safe_url", lambda url: (True, None))
 
     result = web.web_extract.func(
         ["https://example.com/ok", "https://example.com/fail"],
@@ -376,6 +518,7 @@ def test_web_extract_skips_summarization_without_auxiliary_config(monkeypatch):
             ]
 
     monkeypatch.setattr(web, "get_backend", lambda: FakeBackend())
+    monkeypatch.setattr(web, "is_safe_url", lambda url: (True, None))
     monkeypatch.delenv("AUXILIARY_WEB_EXTRACT_API_KEY", raising=False)
     monkeypatch.delenv("AUXILIARY_WEB_EXTRACT_BASE_URL", raising=False)
     monkeypatch.delenv("AUXILIARY_WEB_EXTRACT_MODEL", raising=False)
@@ -412,6 +555,7 @@ def test_web_extract_summarization_failure_falls_back_to_bounded_raw(monkeypatch
             ]
 
     monkeypatch.setattr(web, "get_backend", lambda: FakeBackend())
+    monkeypatch.setattr(web, "is_safe_url", lambda url: (True, None))
     monkeypatch.setenv("AUXILIARY_WEB_EXTRACT_API_KEY", "aux-key")
     monkeypatch.setenv("AUXILIARY_WEB_EXTRACT_BASE_URL", "https://aux.example.com/v1")
     monkeypatch.setenv("AUXILIARY_WEB_EXTRACT_MODEL", "aux-model")

@@ -58,6 +58,33 @@ def _as_list(value: Any) -> list[Any]:
     return [value]
 
 
+def _flatten_search_payload(value: Any) -> list[Any]:
+    if isinstance(value, dict):
+        flattened: list[Any] = []
+        for key in ("web", "results", "data", "news", "images"):
+            if key in value:
+                flattened.extend(_as_list(value[key]))
+        if flattened:
+            return flattened
+    return _as_list(value)
+
+
+def _join_excerpts(value: Any) -> str:
+    parts: list[str] = []
+    for item in _as_list(value):
+        text = _obj_get(item, "text", "content", "summary", default="")
+        if text:
+            parts.append(str(text))
+    return "\n\n".join(parts)
+
+
+def _provider_format(backend: str, requested_format: str) -> str:
+    requested = "html" if requested_format == "html" else "markdown"
+    if backend in {"tavily", "exa"}:
+        return "markdown"
+    return requested
+
+
 def _configured(name: str) -> bool:
     return bool(os.getenv(name))
 
@@ -119,7 +146,17 @@ def normalize_extract_result(backend: str, item: Any, *, requested_format: str) 
     url = str(_obj_get(item, "url", "source_url", "sourceURL", default="") or "")
     final_url = str(_obj_get(item, "final_url", "finalUrl", "sourceURL", "source_url", "url", default=url) or url)
     title = str(_obj_get(item, "title", default="") or "")
-    markdown = _obj_get(item, "markdown", "text", "content", "summary", default="")
+    excerpts = _join_excerpts(_obj_get(item, "excerpts", default=[]))
+    markdown = _obj_get(
+        item,
+        "markdown",
+        "raw_content",
+        "full_content",
+        "text",
+        "content",
+        "summary",
+        default=excerpts,
+    )
     html = _obj_get(item, "html", default="")
     content = html if requested_format == "html" and html else markdown
     metadata = _obj_get(item, "metadata", default={}) or {}
@@ -174,14 +211,19 @@ class FirecrawlBackend:
         except Exception as exc:
             raise _redacted_backend_error(self.name, "search", exc) from exc
         raw = _obj_get(response, "data", "results", default=response)
-        return {"backend": self.name, "results": normalize_search_results(self.name, _as_list(raw), limit=limit)}
+        return {"backend": self.name, "results": normalize_search_results(self.name, _flatten_search_payload(raw), limit=limit)}
 
     def extract(self, urls: list[str], format: str) -> list[dict[str, Any]]:
         client = self._client()
         docs = []
+        provider_format = _provider_format(self.name, format)
         for url in urls:
             try:
-                response = client.scrape_url(url, formats=[format])
+                scrape = getattr(client, "scrape", None)
+                if scrape is not None:
+                    response = scrape(url=url, formats=[provider_format])
+                else:
+                    response = client.scrape_url(url, formats=[provider_format])
             except Exception as exc:
                 raise _redacted_backend_error(self.name, "extract", exc) from exc
             raw = _obj_get(response, "data", default=response)
@@ -230,7 +272,7 @@ class ParallelBackend:
         if method is None:
             raise BackendConfigurationError("Parallel client does not expose extract.", code="missing_dependency")
         try:
-            response = method(urls=urls, format=format)
+            response = method(urls=urls, format=_provider_format(self.name, format))
         except Exception as exc:
             raise _redacted_backend_error(self.name, "extract", exc) from exc
         raw = _obj_get(response, "results", "data", default=response)
@@ -257,10 +299,12 @@ class TavilyBackend:
         return {"backend": self.name, "results": normalize_search_results(self.name, raw, limit=limit)}
 
     def extract(self, urls: list[str], format: str) -> list[dict[str, Any]]:
+        provider_format = _provider_format(self.name, format)
         try:
             response = httpx.post(
                 "https://api.tavily.com/extract",
-                json={"api_key": self.api_key, "urls": urls, "extract_depth": "advanced", "format": format},
+                headers={"Authorization": f"Bearer {self.api_key}"},
+                json={"urls": urls, "extract_depth": "advanced", "format": provider_format},
                 timeout=60.0,
             )
             response.raise_for_status()
@@ -304,7 +348,7 @@ class ExaBackend:
 
     def extract(self, urls: list[str], format: str) -> list[dict[str, Any]]:
         try:
-            response = self._client().get_contents(urls, text=format == "markdown", highlights=True)
+            response = self._client().get_contents(urls, text=True, highlights=True)
         except BackendConfigurationError:
             raise
         except Exception as exc:
@@ -340,4 +384,3 @@ def get_backend() -> WebBackend:
             raise BackendConfigurationError("Exa backend requires EXA_API_KEY.", code="missing_configuration")
         return ExaBackend(api_key=api_key)
     raise BackendConfigurationError(f"Unsupported web backend '{name}'.", code="invalid_input")
-

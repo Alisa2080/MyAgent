@@ -80,7 +80,7 @@ def is_safe_url(url: str) -> tuple[bool, str | None]:
     try:
         infos = socket.getaddrinfo(hostname, port, type=socket.SOCK_STREAM)
     except OSError:
-        return True, None
+        return False, "URL hostname could not be resolved"
 
     for info in infos:
         address = info[4][0]

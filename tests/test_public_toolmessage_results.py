@@ -160,6 +160,7 @@ def test_web_extract_preserves_runtime_tool_call_id(monkeypatch):
             ]
 
     monkeypatch.setattr(web, "get_backend", lambda: FakeBackend())
+    monkeypatch.setattr(web, "is_safe_url", lambda url: (True, None))
 
     result = web.web_extract.func(["https://example.com"], runtime=_runtime("call-extract"))
 
