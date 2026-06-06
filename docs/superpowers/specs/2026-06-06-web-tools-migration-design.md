@@ -20,7 +20,7 @@ The migration should replace the current TinyFish tools with a provider-compatib
 
 1. Replace the current TinyFish web tool surface with provider-compatible `web_search` and `web_extract`.
 2. Preserve the current project's LangChain-native public tool pattern: `@tool`, Pydantic args schemas, injected `ToolRuntime`, and `ToolMessage` results through `tool_success` / `tool_failure`.
-3. Support provider-compatible provider routing across Firecrawl, Parallel, Tavily, and Exa without making any one SDK a hard import-time dependency.
+3. Support provider-compatible routing across Firecrawl, Parallel, Tavily, and Exa without making any one SDK a hard import-time dependency.
 4. Port the important safety behavior from reference implementation:
    - SSRF blocking for private, loopback, link-local, localhost, metadata, and non-HTTP(S) targets.
    - Embedded secret / token exfiltration blocking in URL strings, including URL-decoded forms.
@@ -135,7 +135,7 @@ Each backend client must be lazily imported and lazily constructed. Missing prov
 
 ## Backend Adapters
 
-Create a small internal adapter layer inside `agent_tools/public/web.py` or a helper module under `agent_tools/web/` if the file becomes too large.
+Create a small internal adapter layer inside `agent_tools/public/web.py` or helper modules under `agent_tools/web_toolkit/` if the public file becomes too large.
 
 Each adapter should implement two operations:
 
@@ -268,7 +268,7 @@ Update:
   - Add base64 cleanup tests.
   - Add `web_fetch` removal assertions where appropriate.
 
-The pasted `agent_tools/web_tools.py` can be used as a reference source during implementation, but final runtime imports should go through `agent_tools.public.web`.
+The removed scratch `agent_tools/web_tools.py` file should not be used as a runtime dependency; final runtime imports should go through `agent_tools.public.web` and `agent_tools.web_toolkit`.
 
 ## Error Handling
 
