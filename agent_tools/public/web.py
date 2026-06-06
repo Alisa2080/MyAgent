@@ -8,8 +8,8 @@ from pydantic import BaseModel, Field
 
 from agent_tools.file_toolkit.redact import redact_sensitive_text
 from agent_tools.shared.tool_result import tool_failure, tool_success
-from agent_tools.web_hermes.backends import BackendConfigurationError, get_backend
-from agent_tools.web_hermes.content import (
+from agent_tools.web_toolkit.backends import BackendConfigurationError, get_backend
+from agent_tools.web_toolkit.content import (
     DEFAULT_MAX_CHARS_PER_URL,
     DEFAULT_MIN_LENGTH_FOR_SUMMARIZATION,
     bound_content,
@@ -17,7 +17,7 @@ from agent_tools.web_hermes.content import (
     should_summarize,
     summarize_with_auxiliary,
 )
-from agent_tools.web_hermes.safety import is_safe_url
+from agent_tools.web_toolkit.safety import is_safe_url
 
 
 dotenv.load_dotenv()
