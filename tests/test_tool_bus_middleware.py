@@ -71,6 +71,21 @@ def test_handler_exception_returns_tool_failure():
     assert "boom" in result.content
 
 
+def test_prepare_request_exception_returns_tool_failure():
+    from agent_core.tool_bus_middleware import ToolBusMiddleware
+
+    request = _request("terminal", args={"count": "nan"})
+    request.tool = SimpleNamespace(name="terminal", args={"count": {"type": "integer"}})
+
+    result = ToolBusMiddleware().wrap_tool_call(request, lambda req: _message())
+
+    assert result.status == "error"
+    assert result.artifact["ok"] is False
+    assert result.artifact["tool"] == "terminal"
+    assert result.artifact["error"]["code"] == "tool_exception"
+    assert "cannot convert float NaN to integer" in result.content
+
+
 def test_handler_exception_uses_tool_call_id_when_runtime_lacks_it():
     from agent_core.tool_bus_middleware import ToolBusMiddleware
 
@@ -195,6 +210,28 @@ def test_coercion_uses_request_override_without_mutating_original_tool_call():
     assert request.overrides == [{"name": "fake_tool", "args": {"count": 42}, "id": "call-toolbus"}]
 
 
+def test_coerces_anyof_string_args_before_handler():
+    from agent_core.tool_bus_middleware import ToolBusMiddleware
+
+    request = _request(args={"timeout": "5", "watch_patterns": '["done"]'})
+    request.tool = SimpleNamespace(
+        name="terminal",
+        args={
+            "timeout": {"anyOf": [{"type": "integer"}, {"type": "null"}]},
+            "watch_patterns": {"anyOf": [{"type": "array"}, {"type": "null"}]},
+        },
+    )
+    captured = {}
+
+    def handler(req):
+        captured.update(req.tool_call["args"])
+        return _message()
+
+    ToolBusMiddleware().wrap_tool_call(request, handler)
+
+    assert captured == {"timeout": 5, "watch_patterns": ["done"]}
+
+
 def test_result_limit_truncates_content_only_when_spec_sets_limit():
     from agent_core.tool_bus_middleware import ToolBusMiddleware
     from agent_core.tool_catalog import ToolSpec
@@ -209,9 +246,69 @@ def test_result_limit_truncates_content_only_when_spec_sets_limit():
 
     result = bus.wrap_tool_call(_request(), lambda req: _message(content="abcdefghijklmnopqrstuvwxyz"))
 
-    assert len(result.content) < 80
-    assert "truncated" in result.content.lower()
-    assert result.artifact["ok"] is True
+    assert result.content.startswith("abcdefghij")
+    assert "original content was 26 chars" in result.content
+    assert "artifact exceeded 10 chars" in result.content
+    assert result.artifact["truncated"] is True
+    assert result.artifact["original_chars"] > 10
+
+
+def test_result_limit_replaces_large_artifact_even_outside_data_field():
+    from agent_core.tool_bus_middleware import ToolBusMiddleware
+    from agent_core.tool_catalog import ToolSpec
+
+    spec = ToolSpec(
+        name="fake_tool",
+        toolset="fake",
+        tool=SimpleNamespace(name="fake_tool"),
+        max_result_size_chars=40,
+    )
+    bus = ToolBusMiddleware(specs={"fake_tool": spec})
+
+    def handler(_req):
+        return ToolMessage(
+            content="ok",
+            name="fake_tool",
+            tool_call_id="call-toolbus",
+            status="success",
+            artifact={"meta": {"huge": "x" * 200}, "data": None},
+        )
+
+    result = bus.wrap_tool_call(_request(), handler)
+
+    assert result.artifact["truncated"] is True
+    assert result.artifact["original_chars"] > 40
+    assert len(result.artifact["preview"]) == 40
+    assert "artifact exceeded 40 chars" in result.content
+
+
+def test_result_limit_replaces_large_transformed_artifact_with_nonstandard_shape():
+    from agent_core.tool_bus_middleware import ToolBusHooks, ToolBusMiddleware
+    from agent_core.tool_catalog import ToolSpec
+
+    spec = ToolSpec(
+        name="fake_tool",
+        toolset="fake",
+        tool=SimpleNamespace(name="fake_tool"),
+        max_result_size_chars=30,
+    )
+    transformed = ToolMessage(
+        content="ok",
+        name="fake_tool",
+        tool_call_id="call-toolbus",
+        status="success",
+        artifact={"payload": "y" * 120},
+    )
+    bus = ToolBusMiddleware(
+        specs={"fake_tool": spec},
+        hooks=ToolBusHooks(transform_tool_result=[lambda req, result: transformed]),
+    )
+
+    result = bus.wrap_tool_call(_request(), lambda req: _message())
+
+    assert result.artifact["truncated"] is True
+    assert result.artifact["original_chars"] > 30
+    assert len(result.artifact["preview"]) == 30
 
 
 def test_command_result_is_not_transformed_or_truncated():

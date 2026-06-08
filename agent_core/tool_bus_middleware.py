@@ -74,52 +74,63 @@ class ToolBusMiddleware(AgentMiddleware):
         request: ToolCallRequest,
         handler: Callable[[ToolCallRequest], ToolResponse],
     ) -> ToolResponse:
-        bus_request, call_request = self._prepare_request(request)
-        blocked = self._run_pre_hooks(bus_request)
-        if blocked is not None:
-            return blocked
-
         started = time.monotonic()
-        error = None
         try:
-            result = handler(call_request)
+            bus_request, call_request = self._prepare_request(request)
+            blocked = self._run_pre_hooks(bus_request)
+            if blocked is not None:
+                return blocked
+
+            error = None
+            try:
+                result = handler(call_request)
+            except Exception as exc:
+                error = exc
+                logger.exception("Tool %s failed in ToolBusMiddleware", bus_request.tool_name)
+                result = tool_failure(
+                    bus_request.tool_name,
+                    f"Tool execution failed: {type(exc).__name__}: {exc}",
+                    code="tool_exception",
+                    runtime=_runtime_with_tool_call_id(request.runtime, bus_request.tool_call_id),
+                )
+            duration_ms = int((time.monotonic() - started) * 1000)
+            return self._finalize(bus_request, result, duration_ms, error)
         except Exception as exc:
-            error = exc
-            logger.exception("Tool %s failed in ToolBusMiddleware", bus_request.tool_name)
-            result = tool_failure(
-                bus_request.tool_name,
-                f"Tool execution failed: {type(exc).__name__}: {exc}",
-                code="tool_exception",
-                runtime=_runtime_with_tool_call_id(request.runtime, bus_request.tool_call_id),
-            )
-        duration_ms = int((time.monotonic() - started) * 1000)
-        return self._finalize(bus_request, result, duration_ms, error)
+            logger.exception("Tool %s failed during ToolBusMiddleware request preparation", _request_tool_name(request))
+            return _tool_exception_message(request, exc)
 
     async def awrap_tool_call(
         self,
         request: ToolCallRequest,
         handler: Callable[[ToolCallRequest], Awaitable[ToolResponse]],
     ) -> ToolResponse:
-        bus_request, call_request = self._prepare_request(request)
-        blocked = self._run_pre_hooks(bus_request)
-        if blocked is not None:
-            return blocked
-
         started = time.monotonic()
-        error = None
         try:
-            result = await handler(call_request)
+            bus_request, call_request = self._prepare_request(request)
+            blocked = self._run_pre_hooks(bus_request)
+            if blocked is not None:
+                return blocked
+
+            error = None
+            try:
+                result = await handler(call_request)
+            except Exception as exc:
+                error = exc
+                logger.exception("Tool %s failed in ToolBusMiddleware", bus_request.tool_name)
+                result = tool_failure(
+                    bus_request.tool_name,
+                    f"Tool execution failed: {type(exc).__name__}: {exc}",
+                    code="tool_exception",
+                    runtime=_runtime_with_tool_call_id(request.runtime, bus_request.tool_call_id),
+                )
+            duration_ms = int((time.monotonic() - started) * 1000)
+            return self._finalize(bus_request, result, duration_ms, error)
         except Exception as exc:
-            error = exc
-            logger.exception("Tool %s failed in ToolBusMiddleware", bus_request.tool_name)
-            result = tool_failure(
-                bus_request.tool_name,
-                f"Tool execution failed: {type(exc).__name__}: {exc}",
-                code="tool_exception",
-                runtime=_runtime_with_tool_call_id(request.runtime, bus_request.tool_call_id),
+            logger.exception(
+                "Tool %s failed during ToolBusMiddleware request preparation",
+                _request_tool_name(request),
             )
-        duration_ms = int((time.monotonic() - started) * 1000)
-        return self._finalize(bus_request, result, duration_ms, error)
+            return _tool_exception_message(request, exc)
 
     def _prepare_request(self, request: ToolCallRequest) -> tuple[ToolBusRequest, ToolCallRequest]:
         tool_call = request.tool_call
@@ -194,18 +205,11 @@ class ToolBusMiddleware(AgentMiddleware):
             return result
         content = str(getattr(result, "content", "") or "")
         artifact = getattr(result, "artifact", None)
-        if len(content) <= limit and len(str(artifact)) <= limit:
+        serialized_artifact = _serialize_for_limit_check(artifact)
+        if len(content) <= limit and len(serialized_artifact) <= limit:
             return result
 
-        new_artifact = copy.deepcopy(artifact)
-        if isinstance(new_artifact, dict):
-            data = new_artifact.get("data")
-            if data is not None and len(str(data)) > limit:
-                new_artifact["data"] = {
-                    "truncated": True,
-                    "original_chars": len(str(data)),
-                    "preview": str(data)[:limit],
-                }
+        truncated_artifact, artifact_was_truncated = _truncate_artifact(artifact, limit)
 
         truncated_content = content
         if len(truncated_content) > limit:
@@ -213,18 +217,19 @@ class ToolBusMiddleware(AgentMiddleware):
                 truncated_content[:limit]
                 + f"\n\n[truncated: original content was {len(content)} chars]"
             )
-        elif len(str(artifact)) > limit:
-            truncated_content = (
-                truncated_content
-                + f"\n\n[truncated: artifact exceeded {limit} chars]"
+        if artifact_was_truncated:
+            suffix = (
+                f"[truncated: artifact exceeded {limit} chars"
+                f"; original artifact was {len(serialized_artifact)} chars]"
             )
+            truncated_content = f"{truncated_content}\n\n{suffix}" if truncated_content else suffix
 
         return ToolMessage(
             content=truncated_content,
             name=getattr(result, "name", spec.name),
             tool_call_id=getattr(result, "tool_call_id", ""),
             status=getattr(result, "status", "success"),
-            artifact=new_artifact,
+            artifact=truncated_artifact,
         )
 
 
@@ -279,6 +284,14 @@ def _expected_type(schema: Any) -> str | None:
         for item in value:
             if item != "null":
                 return str(item)
+    for any_of_key in ("anyOf", "oneOf"):
+        variants = schema.get(any_of_key)
+        if not isinstance(variants, list):
+            continue
+        for variant in variants:
+            expected = _expected_type(variant)
+            if expected is not None and expected != "null":
+                return expected
     return None
 
 
@@ -319,6 +332,72 @@ def _coerce_json(value: str, expected_python_type: type) -> Any:
     except (TypeError, ValueError):
         return value
     return parsed if isinstance(parsed, expected_python_type) else value
+
+
+def _serialize_for_limit_check(value: Any) -> str:
+    try:
+        return json.dumps(value, ensure_ascii=False, default=str)
+    except Exception:
+        return str(value)
+
+
+def _truncate_artifact(artifact: Any, limit: int) -> tuple[Any, bool]:
+    serialized = _serialize_for_limit_check(artifact)
+    if len(serialized) <= limit:
+        return artifact, False
+    return {
+        "truncated": True,
+        "original_chars": len(serialized),
+        "preview": serialized[:limit],
+    }, True
+
+
+def _request_tool_name(request: ToolCallRequest) -> str:
+    try:
+        tool_call = getattr(request, "tool_call", None) or {}
+        tool_name = tool_call.get("name") if isinstance(tool_call, dict) else None
+        if tool_name:
+            return str(tool_name)
+    except Exception:
+        pass
+    try:
+        tool = getattr(request, "tool", None)
+        tool_name = getattr(tool, "name", None)
+        if tool_name:
+            return str(tool_name)
+    except Exception:
+        pass
+    return ""
+
+
+def _request_tool_call_id(request: ToolCallRequest) -> str:
+    try:
+        tool_call = getattr(request, "tool_call", None) or {}
+        tool_call_id = tool_call.get("id") if isinstance(tool_call, dict) else None
+        if tool_call_id:
+            return str(tool_call_id)
+    except Exception:
+        pass
+    try:
+        runtime = getattr(request, "runtime", None)
+        tool_call_id = getattr(runtime, "tool_call_id", None)
+        if tool_call_id:
+            return str(tool_call_id)
+    except Exception:
+        pass
+    return ""
+
+
+def _tool_exception_message(request: ToolCallRequest, exc: Exception) -> ToolMessage:
+    tool_name = _request_tool_name(request)
+    tool_call_id = _request_tool_call_id(request)
+    runtime = _runtime_with_tool_call_id(getattr(request, "runtime", None), tool_call_id)
+    return tool_failure(
+        tool_name,
+        f"Tool execution failed: {type(exc).__name__}: {exc}",
+        code="tool_exception",
+        runtime=runtime,
+    )
 
 
 def _override_request_tool_call(request: ToolCallRequest, tool_call: dict[str, Any]) -> ToolCallRequest:
