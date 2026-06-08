@@ -14,6 +14,8 @@ __pycache__/
 .codex/
 .claude/
 .agents/
+.codegraph/
+hermes_agent_reference/
 agent_cli.backup-before-agent-cli-mvp-20260526/
 base/
 agent_tools/hermes_terminal_toolkit/process_registry copy.py
