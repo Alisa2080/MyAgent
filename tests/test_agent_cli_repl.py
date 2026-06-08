@@ -49,6 +49,15 @@ class FakeStore:
     def list_sessions(self, limit=20):
         return list(self.sessions.values())
 
+    def list_session_items(self, *, checkpointer=None, limit=20):
+        return [
+            SimpleNamespace(**record.__dict__, first_user_prompt_preview=record.title)
+            for record in list(self.sessions.values())[:limit]
+        ]
+
+    def delete_session(self, session_id):
+        self.sessions.pop(session_id, None)
+
     def touch_session(self, session_id, **kwargs):
         self.touched.append((session_id, kwargs))
 
@@ -548,6 +557,90 @@ def test_handle_command_resume_touches_session_metadata():
     assert result == "Resumed session: known"
     assert cli.session_id == "known"
     assert store.touched == [("known", {})]
+
+
+class PickerPrompt:
+    pass
+
+
+def test_handle_command_sessions_uses_picker_and_resumes_selected_session():
+    store = FakeStore()
+    first = store.create_session(
+        workdir="/repo",
+        model=None,
+        title="First",
+        session_id="first",
+    )
+    second = store.create_session(
+        workdir="/repo",
+        model=None,
+        title="Second",
+        session_id="second",
+    )
+
+    def list_session_items(*, checkpointer=None, limit=20):
+        return [
+            SimpleNamespace(**first.__dict__, first_user_prompt_preview="first prompt"),
+            SimpleNamespace(**second.__dict__, first_user_prompt_preview="second prompt"),
+        ]
+
+    store.list_session_items = list_session_items
+    cli = AgentCLI(
+        session_store=store,
+        checkpointer=None,
+        agent_factory=lambda checkpointer: "agent",
+        runner=lambda agent, input_data, config: {},
+        workdir="/repo",
+        model_name=None,
+        prompt_session=PickerPrompt(),
+    )
+
+    import agent_cli.session_picker as session_picker
+
+    original = session_picker.pick_session
+    session_picker.pick_session = lambda items: items[1]
+    try:
+        result = cli.handle_command("/sessions")
+    finally:
+        session_picker.pick_session = original
+
+    assert result == "Resumed session: second"
+    assert cli.session_id == "second"
+    assert store.touched == [("second", {})]
+
+
+def test_handle_command_sessions_returns_cancel_message_when_picker_aborts():
+    store = FakeStore()
+    record = store.create_session(
+        workdir="/repo",
+        model=None,
+        title="First",
+        session_id="first",
+    )
+    store.list_session_items = lambda **kwargs: [
+        SimpleNamespace(**record.__dict__, first_user_prompt_preview="first prompt")
+    ]
+    cli = AgentCLI(
+        session_store=store,
+        checkpointer=None,
+        agent_factory=lambda checkpointer: "agent",
+        runner=lambda agent, input_data, config: {},
+        workdir="/repo",
+        model_name=None,
+        prompt_session=PickerPrompt(),
+    )
+
+    import agent_cli.session_picker as session_picker
+
+    original = session_picker.pick_session
+    session_picker.pick_session = lambda items: None
+    try:
+        result = cli.handle_command("/sessions")
+    finally:
+        session_picker.pick_session = original
+
+    assert result == "Session selection cancelled."
+    assert cli.session_id is None
 
 
 def test_run_repl_uses_prompt_adapter(monkeypatch, capsys):

@@ -6,6 +6,9 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
+
+from agent_cli.history import filter_transcript_messages
 
 
 SCHEMA = """
@@ -33,6 +36,11 @@ class SessionRecord:
     model: str | None
     status: str
     last_message_preview: str | None
+
+
+@dataclass(frozen=True)
+class SessionListItem(SessionRecord):
+    first_user_prompt_preview: str
 
 
 class SessionStore:
@@ -94,6 +102,60 @@ class SessionStore:
             status=row[6],
             last_message_preview=row[7],
         )
+
+    @staticmethod
+    def _normalize_preview_text(text: str, *, max_length: int = 80) -> str:
+        normalized = re.sub(r"\s+", " ", text).strip()
+        if len(normalized) <= max_length:
+            return normalized
+        return normalized[: max_length - 3].rstrip() + "..."
+
+    @staticmethod
+    def _first_user_prompt_preview(checkpointer: Any, session_id: str) -> str | None:
+        if checkpointer is None:
+            return None
+        from agent_cli.history import load_thread_transcript
+
+        transcript = load_thread_transcript(checkpointer, session_id)
+        for message in transcript:
+            if message.role != "user":
+                continue
+            preview = SessionStore._normalize_preview_text(message.content)
+            if preview:
+                return preview
+        return None
+
+    def delete_session(self, session_id: str) -> None:
+        with self.connect() as conn:
+            conn.execute("DELETE FROM cli_sessions WHERE session_id = ?", (session_id,))
+
+    def list_session_items(
+        self, *, checkpointer: Any = None, limit: int = 20
+    ) -> list[SessionListItem]:
+        rows = self.list_sessions(limit=limit)
+        items: list[SessionListItem] = []
+        empty_session_ids: list[str] = []
+        for row in rows:
+            preview = self._first_user_prompt_preview(checkpointer, row.session_id)
+            if not preview:
+                empty_session_ids.append(row.session_id)
+                continue
+            items.append(
+                SessionListItem(
+                    session_id=row.session_id,
+                    title=row.title,
+                    created_at=row.created_at,
+                    updated_at=row.updated_at,
+                    workdir=row.workdir,
+                    model=row.model,
+                    status=row.status,
+                    last_message_preview=row.last_message_preview,
+                    first_user_prompt_preview=preview,
+                )
+            )
+        for session_id in empty_session_ids:
+            self.delete_session(session_id)
+        return items
 
     def create_session(
         self,

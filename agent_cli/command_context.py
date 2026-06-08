@@ -68,6 +68,10 @@ class CommandContext:
         return self.cli.last_usage_metadata
 
     @property
+    def prompt_session(self):
+        return self.cli.prompt_session
+
+    @property
     def default_title(self):
         return self.cli.default_title
 

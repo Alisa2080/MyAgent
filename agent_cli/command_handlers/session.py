@@ -39,7 +39,20 @@ def handle_new(ctx, arg, command):
 
 
 def handle_sessions(ctx, arg, command):
-    return format_sessions(ctx.session_store.list_sessions())
+    items = ctx.session_store.list_session_items(
+        checkpointer=ctx.checkpointer,
+        limit=20,
+    )
+    if not items:
+        return "No sessions found."
+    if ctx.prompt_session is not None:
+        from agent_cli.session_picker import pick_session
+
+        selected = pick_session(items)
+        if selected is None:
+            return "Session selection cancelled."
+        return handle_resume(ctx, selected.session_id, command)
+    return format_sessions(items)
 
 
 def handle_resume(ctx, arg, command):

@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any
+
+from dateutil import parser as dateutil_parser
 
 
 def _message_role(message: Any) -> str:
@@ -32,6 +35,43 @@ def _content_text(content: Any) -> str:
     return str(content)
 
 
+def _parse_datetime(value: str | datetime | None) -> datetime:
+    if value is None:
+        return datetime.now(timezone.utc)
+    if isinstance(value, datetime):
+        return value
+    return dateutil_parser.isoparse(value)
+
+
+def _truncate_text(text: str, *, max_length: int) -> str:
+    normalized = " ".join(text.split())
+    if len(normalized) <= max_length:
+        return normalized
+    return normalized[: max_length - 3].rstrip() + "..."
+
+
+def format_relative_time(value: str | datetime, *, now: datetime | None = None) -> str:
+    target = _parse_datetime(value)
+    reference = now or datetime.now(timezone.utc)
+    if target.tzinfo is None:
+        target = target.replace(tzinfo=timezone.utc)
+    if reference.tzinfo is None:
+        reference = reference.replace(tzinfo=timezone.utc)
+    delta_seconds = max(0, int((reference - target).total_seconds()))
+    if delta_seconds < 60:
+        return "just now"
+    if delta_seconds < 3600:
+        return f"{delta_seconds // 60}m ago"
+    if delta_seconds < 86400:
+        return f"{delta_seconds // 3600}h ago"
+    return f"{delta_seconds // 86400}d ago"
+
+
+def format_session_picker_label(row: Any, *, now: datetime | None = None, max_prompt_length: int = 60) -> str:
+    prompt = getattr(row, "first_user_prompt_preview", "") or getattr(row, "title", "") or "New session"
+    return f"{format_relative_time(row.updated_at, now=now)}  {_truncate_text(prompt, max_length=max_prompt_length)}"
+
+
 def latest_ai_text(result: Any) -> str:
     if isinstance(result, str):
         return result
@@ -57,13 +97,12 @@ def latest_user_text(result: Any) -> str:
     return ""
 
 
-def format_sessions(rows: list[Any]) -> str:
+def format_sessions(rows: list[Any], *, now: datetime | None = None) -> str:
     if not rows:
         return "No sessions found."
     lines = ["Recent sessions:"]
     for row in rows:
-        preview = f" - {row.last_message_preview}" if row.last_message_preview else ""
-        lines.append(f"{row.session_id}  {row.updated_at}  {row.title}{preview}")
+        lines.append(format_session_picker_label(row, now=now, max_prompt_length=72))
     return "\n".join(lines)
 
 

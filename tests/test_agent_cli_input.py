@@ -1,9 +1,13 @@
+from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from pathlib import Path
 
 from prompt_toolkit.document import Document
 
 from agent_cli.input import SlashCommandCompleter, build_prompt_session
-from agent_cli.session_store import SessionStore
+from agent_cli.session_picker import pick_session
+from agent_cli.session_store import SessionStore, SessionListItem
+from agent_cli.rendering import latest_user_text, format_relative_time, format_session_picker_label, format_sessions
 
 
 def _completion_texts(completer, text):
@@ -179,20 +183,94 @@ def test_build_prompt_session_accepts_cli_home_for_paste_collapse(tmp_path):
     assert Path(tmp_path / "cli-home").exists()
 
 
-def test_prepare_user_message_expands_paste_and_detects_files(tmp_path):
-    from agent_cli.text_input import collapse_large_paste, prepare_user_message
+def test_format_relative_time_prefers_compact_units():
+    now = datetime(2026, 6, 8, 8, 0, tzinfo=timezone.utc)
 
-    target = tmp_path / "notes.md"
-    target.write_text("my notes content", encoding="utf-8")
+    assert format_relative_time(now - timedelta(minutes=5), now=now) == "5m ago"
+    assert format_relative_time(now - timedelta(hours=2), now=now) == "2h ago"
+    assert format_relative_time(now - timedelta(days=3), now=now) == "3d ago"
 
-    paste = collapse_large_paste("line1\nline2\nline3\nline4\nline5", cli_home=tmp_path, counter=1)
-    assert paste.collapsed is True
 
-    raw_input = f"{target.name} read this and {paste.placeholder}"
-    processed = prepare_user_message(raw_input, workdir=str(tmp_path), cli_home=tmp_path)
+def test_format_session_picker_label_truncates_prompt_preview():
+    item = SessionListItem(
+        session_id="s1",
+        title="ignored",
+        created_at="2026-06-08T06:00:00+00:00",
+        updated_at="2026-06-08T06:00:00+00:00",
+        workdir="/repo",
+        model=None,
+        status="active",
+        last_message_preview=None,
+        first_user_prompt_preview="hello world " * 10,
+    )
 
-    assert "User referenced file" in processed
-    assert "line1\nline2\nline3\nline4\nline5" in processed
+    label = format_session_picker_label(item, now=datetime(2026, 6, 8, 8, 0, tzinfo=timezone.utc), max_prompt_length=24)
+
+    assert label.startswith("2h ago  ")
+    assert "hello world" in label
+    assert label.endswith("...")
+
+
+def test_format_sessions_renders_compact_list_items():
+    item = SessionListItem(
+        session_id="s1",
+        title="ignored",
+        created_at="2026-06-08T06:00:00+00:00",
+        updated_at="2026-06-08T06:00:00+00:00",
+        workdir="/repo",
+        model=None,
+        status="active",
+        last_message_preview=None,
+        first_user_prompt_preview="summarize the CLI architecture",
+    )
+
+    rendered = format_sessions([item], now=datetime(2026, 6, 8, 8, 0, tzinfo=timezone.utc))
+
+    assert "Recent sessions:" in rendered
+    assert "2h ago  summarize the CLI architecture" in rendered
+    assert "New session" not in rendered
+
+
+def test_pick_session_returns_selected_item():
+    first = SessionListItem(
+        session_id="s1",
+        title="first",
+        created_at="2026-06-08T06:00:00+00:00",
+        updated_at="2026-06-08T06:00:00+00:00",
+        workdir="/repo",
+        model=None,
+        status="active",
+        last_message_preview=None,
+        first_user_prompt_preview="first prompt",
+    )
+    second = SessionListItem(
+        session_id="s2",
+        title="second",
+        created_at="2026-06-08T07:00:00+00:00",
+        updated_at="2026-06-08T07:00:00+00:00",
+        workdir="/repo",
+        model=None,
+        status="active",
+        last_message_preview=None,
+        first_user_prompt_preview="second prompt",
+    )
+
+    import agent_cli.session_picker as session_picker
+
+    original_application = session_picker.Application
+
+    class FakeApplication:
+        def __init__(self, **kwargs):
+            pass
+
+        def run(self):
+            return second
+
+    session_picker.Application = FakeApplication
+    try:
+        assert pick_session([first, second]) == second
+    finally:
+        session_picker.Application = original_application
 
 
 def test_expand_paste_references_rejects_paths_outside_cli_home(tmp_path):
