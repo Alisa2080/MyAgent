@@ -56,6 +56,106 @@ def test_pre_hook_blocks_handler():
     assert calls == []
 
 
+def test_pre_hook_blocked_result_triggers_post_but_skips_transform_and_limit():
+    from agent_core.tool_bus_middleware import ToolBusHooks, ToolBusMiddleware
+    from agent_core.tool_catalog import ToolSpec
+
+    request = _request()
+    blocked = _message(content="blocked result should not be truncated", status="error")
+    handler_calls = []
+    post_calls = []
+    transform_calls = []
+    spec = ToolSpec(
+        name="fake_tool",
+        toolset="fake",
+        tool=SimpleNamespace(name="fake_tool"),
+        max_result_size_chars=10,
+    )
+
+    def post(req, res):
+        post_calls.append((req, res.result, res.error))
+
+    def transform(req, result):
+        transform_calls.append((req, result))
+        return _message(content="transformed")
+
+    bus = ToolBusMiddleware(
+        specs={"fake_tool": spec},
+        hooks=ToolBusHooks(
+            pre_tool_call=[lambda req: blocked],
+            post_tool_call=[post],
+            transform_tool_result=[transform],
+        ),
+    )
+
+    result = bus.wrap_tool_call(
+        request,
+        lambda received: handler_calls.append(received) or _message(),
+    )
+
+    assert handler_calls == []
+    assert result is blocked
+    assert len(post_calls) == 1
+    assert post_calls[0][1] is blocked
+    assert post_calls[0][2] is None
+    assert post_calls[0][0].tool_name == "fake_tool"
+    assert transform_calls == []
+    assert result.content == "blocked result should not be truncated"
+
+
+def test_async_pre_hook_blocked_result_triggers_post_but_skips_transform_and_limit():
+    from agent_core.tool_bus_middleware import ToolBusHooks, ToolBusMiddleware
+    from agent_core.tool_catalog import ToolSpec
+
+    async def run():
+        request = _request()
+        blocked = _message(content="blocked result should not be truncated", status="error")
+        handler_calls = []
+        post_calls = []
+        transform_calls = []
+        spec = ToolSpec(
+            name="fake_tool",
+            toolset="fake",
+            tool=SimpleNamespace(name="fake_tool"),
+            max_result_size_chars=10,
+        )
+
+        def post(req, res):
+            post_calls.append((req, res.result, res.error))
+
+        def transform(req, result):
+            transform_calls.append((req, result))
+            return _message(content="transformed")
+
+        bus = ToolBusMiddleware(
+            specs={"fake_tool": spec},
+            hooks=ToolBusHooks(
+                pre_tool_call=[lambda req: blocked],
+                post_tool_call=[post],
+                transform_tool_result=[transform],
+            ),
+        )
+
+        async def handler(received):
+            handler_calls.append(received)
+            return _message()
+
+        result = await bus.awrap_tool_call(request, handler)
+
+        return result, blocked, handler_calls, post_calls, transform_calls
+
+    result, blocked, handler_calls, post_calls, transform_calls = asyncio.run(run())
+
+    assert handler_calls == []
+    assert result is blocked
+    assert len(post_calls) == 1
+    assert post_calls[0][1] is blocked
+    assert post_calls[0][2] is None
+    assert post_calls[0][0].tool_name == "fake_tool"
+    assert transform_calls == []
+    assert result.content == "blocked result should not be truncated"
+
+
 def test_handler_exception_returns_tool_failure():
     from agent_core.tool_bus_middleware import ToolBusMiddleware
 
