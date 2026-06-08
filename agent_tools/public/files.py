@@ -14,7 +14,7 @@ from agent_core.permissions.approvals import consume_approval
 from agent_core.permissions.constants import UNRESOLVED_BACKEND_WRITE_PATH
 from agent_core.permissions.models import PolicyDecision
 from agent_core.permissions.tool_grants import consume_tool_policy_grant
-from agent_core.policy_tool_middleware import patch_policy_args, write_file_policy_args
+from agent_core.policy_tool_gate import patch_policy_args, write_file_policy_args
 from agent_core.session_context import RuntimeContext
 from agent_core.workspace import WORKDIR, safe_path
 from agent_tools.file_toolkit.backend_paths import (

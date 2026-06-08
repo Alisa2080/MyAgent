@@ -317,7 +317,7 @@ def test_write_file_uses_middleware_grant_for_review_path(monkeypatch):
 
     from agent_core.permissions.approvals import make_args_digest
     from agent_core.permissions.tool_grants import ToolPolicyGrant, record_tool_policy_grant
-    from agent_core.policy_tool_middleware import write_file_policy_args
+    from agent_core.policy_tool_gate import write_file_policy_args
     from agent_core.session_context import runtime_task_id_from_thread_id
     from agent_tools.public import files
 
@@ -378,7 +378,7 @@ def test_write_file_consumes_middleware_grant_for_allow_path(monkeypatch):
         consume_tool_policy_grant,
         record_tool_policy_grant,
     )
-    from agent_core.policy_tool_middleware import write_file_policy_args
+    from agent_core.policy_tool_gate import write_file_policy_args
     from agent_core.session_context import runtime_task_id_from_thread_id
     from agent_tools.public import files
 
@@ -434,7 +434,7 @@ def test_patch_uses_middleware_grant_for_review_path(monkeypatch):
 
     from agent_core.permissions.approvals import make_args_digest
     from agent_core.permissions.tool_grants import ToolPolicyGrant, record_tool_policy_grant
-    from agent_core.policy_tool_middleware import patch_policy_args
+    from agent_core.policy_tool_gate import patch_policy_args
     from agent_core.session_context import runtime_task_id_from_thread_id
     from agent_tools.public import files
 
@@ -510,7 +510,7 @@ def test_patch_consumes_middleware_grant_for_allow_path(monkeypatch):
         consume_tool_policy_grant,
         record_tool_policy_grant,
     )
-    from agent_core.policy_tool_middleware import patch_policy_args
+    from agent_core.policy_tool_gate import patch_policy_args
     from agent_core.session_context import runtime_task_id_from_thread_id
     from agent_tools.public import files
 
@@ -581,7 +581,7 @@ def test_patch_review_requires_union_of_risk_tags(monkeypatch):
 
     from agent_core.permissions.approvals import make_args_digest
     from agent_core.permissions.tool_grants import ToolPolicyGrant, record_tool_policy_grant
-    from agent_core.policy_tool_middleware import patch_policy_args
+    from agent_core.policy_tool_gate import patch_policy_args
     from agent_core.session_context import runtime_task_id_from_thread_id
     from agent_tools.public import files
 

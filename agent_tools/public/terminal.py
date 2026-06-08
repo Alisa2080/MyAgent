@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field
 from agent_core.permissions import tool_policy
 from agent_core.permissions.approvals import consume_approval
 from agent_core.permissions.tool_grants import consume_tool_policy_grant
-from agent_core.policy_tool_middleware import process_policy_args, terminal_policy_args
+from agent_core.policy_tool_gate import process_policy_args, terminal_policy_args
 from agent_core.session_context import RuntimeContext
 from agent_core.terminal_process_policy import background_quota_available, background_quota_guard
 from agent_core.workspace import WORKDIR
