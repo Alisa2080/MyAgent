@@ -126,4 +126,17 @@ def build_langchain_tools(default_task_id: str = "default", expose_task_id: bool
             runtime=_runtime_for_task_id(task_id),
         )
 
-    return [terminal, process]
+    return [_ensure_invoke(terminal), _ensure_invoke(process)]
+
+
+def _ensure_invoke(tool_obj):
+    if hasattr(tool_obj, "invoke"):
+        return tool_obj
+
+    def invoke(args):
+        if isinstance(args, dict):
+            return tool_obj(**args)
+        return tool_obj(args)
+
+    setattr(tool_obj, "invoke", invoke)
+    return tool_obj

@@ -6,8 +6,7 @@ import logging
 from collections.abc import Callable
 from typing import Any
 
-from langgraph.types import Command
-
+from agent_cli.langgraph_compat import Command
 from agent_cli.command_context import CommandContext
 from agent_cli.commands import COMMAND_LOOKUP, resolve_command
 from agent_cli.approval import collect_approval_decisions
