@@ -36,6 +36,19 @@ def _gate_request(tool_name: str, args: dict, *, tool_call_id: str = "call-polic
     )
 
 
+def _toolbus_request(tool_name: str, args: dict, *, tool_call_id: str = "call-toolbus-policy", runtime=None):
+    from agent_core.tool_bus_middleware import ToolBusRequest
+
+    return ToolBusRequest(
+        tool_name=tool_name,
+        args=args,
+        tool_call_id=tool_call_id,
+        runtime=runtime or _runtime(tool_call_id=tool_call_id),
+        request=None,
+        spec=None,
+    )
+
+
 def test_policy_tool_gate_allows_and_records_grant():
     from agent_core.permissions.approvals import make_args_digest
     from agent_core.permissions.tool_grants import consume_tool_policy_grant
@@ -58,6 +71,99 @@ def test_policy_tool_gate_allows_and_records_grant():
     assert grant is not None
     assert grant.args_digest == make_args_digest(args)
     assert grant.risk_tags == ()
+
+
+def test_policy_pre_hook_denies_toolbus_request():
+    from agent_core.policy_tool_gate import build_policy_pre_hook
+
+    hook = build_policy_pre_hook(policy_tools={"terminal"})
+
+    result = hook(_toolbus_request("terminal", {"command": "rm -rf /"}, tool_call_id="call-hook-deny"))
+
+    assert result is not None
+    assert result.status == "error"
+    assert result.artifact["error"]["code"] == "policy_denied"
+
+
+def test_policy_pre_hook_requires_approval_for_review_toolbus_request():
+    from agent_core.policy_tool_gate import build_policy_pre_hook
+
+    hook = build_policy_pre_hook(policy_tools={"terminal"})
+
+    result = hook(
+        _toolbus_request(
+            "terminal",
+            {"command": "touch approval-required.txt"},
+            tool_call_id="call-hook-review",
+        )
+    )
+
+    assert result is not None
+    assert result.status == "error"
+    assert result.artifact["error"]["code"] == "approval_required"
+
+
+def test_policy_pre_hook_allows_and_records_grant():
+    from agent_core.permissions.approvals import make_args_digest
+    from agent_core.permissions.tool_grants import consume_tool_policy_grant
+    from agent_core.permissions.tool_policy import canonical_tool_args
+    from agent_core.policy_tool_gate import build_policy_pre_hook
+
+    hook = build_policy_pre_hook(policy_tools={"terminal"})
+
+    result = hook(_toolbus_request("terminal", {"command": "pwd"}, tool_call_id="call-hook-allow"))
+
+    assert result is None
+    args = canonical_tool_args("terminal", {"command": "pwd"})
+    grant = consume_tool_policy_grant(
+        task_id=runtime_task_id_from_thread_id("policy-gate-thread"),
+        tool_call_id="call-hook-allow",
+        tool_name="terminal",
+        args=args,
+    )
+    assert grant is not None
+    assert grant.args_digest == make_args_digest(args)
+
+
+def test_policy_pre_hook_consumes_approval_and_records_grant():
+    from agent_core.permissions.approvals import ApprovalRecord, make_args_digest, record_approval
+    from agent_core.permissions.tool_grants import consume_tool_policy_grant
+    from agent_core.permissions.tool_policy import canonical_tool_args
+    from agent_core.policy_tool_gate import build_policy_pre_hook
+
+    args = canonical_tool_args("terminal", {"command": "curl https://example.com"})
+    record_approval(
+        ApprovalRecord(
+            approval_id="approval-hook-network",
+            decision_id="decision-hook-network",
+            task_id=runtime_task_id_from_thread_id("policy-gate-thread"),
+            tool_call_id="call-hook-network",
+            tool_name="terminal",
+            args_digest=make_args_digest(args),
+            risk_tags=("network_access",),
+            allow_network_once=True,
+        )
+    )
+    hook = build_policy_pre_hook(policy_tools={"terminal"})
+
+    result = hook(
+        _toolbus_request(
+            "terminal",
+            {"command": "curl https://example.com"},
+            tool_call_id="call-hook-network",
+        )
+    )
+
+    assert result is None
+    grant = consume_tool_policy_grant(
+        task_id=runtime_task_id_from_thread_id("policy-gate-thread"),
+        tool_call_id="call-hook-network",
+        tool_name="terminal",
+        args=args,
+    )
+    assert grant is not None
+    assert grant.risk_tags == ("network_access",)
+    assert grant.allow_network_once is True
 
 
 def test_policy_tool_gate_denies_without_recording_grant():
