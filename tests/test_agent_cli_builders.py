@@ -59,7 +59,8 @@ def test_build_agent_includes_tool_bus_before_policy(monkeypatch):
     import agent_core.builders as builders
 
     class FakeToolBus:
-        pass
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
 
     class FakePolicy:
         def __init__(self, **kwargs):
@@ -80,3 +81,5 @@ def test_build_agent_includes_tool_bus_before_policy(monkeypatch):
     policy_index = next(i for i, item in enumerate(middleware) if isinstance(item, FakePolicy))
 
     assert tool_bus_index < policy_index
+    assert middleware[tool_bus_index].kwargs["specs"]
+    assert "terminal" in middleware[tool_bus_index].kwargs["specs"]

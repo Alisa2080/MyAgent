@@ -71,6 +71,21 @@ def test_handler_exception_returns_tool_failure():
     assert "boom" in result.content
 
 
+def test_handler_exception_uses_tool_call_id_when_runtime_lacks_it():
+    from agent_core.tool_bus_middleware import ToolBusMiddleware
+
+    request = _request("terminal", tool_call_id="call-from-tool-call")
+    request.runtime = SimpleNamespace()
+
+    def handler(_request):
+        raise RuntimeError("boom")
+
+    result = ToolBusMiddleware().wrap_tool_call(request, handler)
+
+    assert result.status == "error"
+    assert result.tool_call_id == "call-from-tool-call"
+
+
 def test_post_hook_receives_result_and_duration():
     from agent_core.tool_bus_middleware import ToolBusHooks, ToolBusMiddleware
 
@@ -144,6 +159,40 @@ def test_coerces_simple_string_args_before_handler():
         "items": [1, 2],
         "meta": {"a": 1},
     }
+
+
+def test_coercion_uses_request_override_without_mutating_original_tool_call():
+    from agent_core.tool_bus_middleware import ToolBusMiddleware
+
+    class FakeRequest:
+        def __init__(self):
+            self.tool_call = {"name": "fake_tool", "args": {"count": "42"}, "id": "call-toolbus"}
+            self.runtime = _runtime()
+            self.tool = SimpleNamespace(name="fake_tool", args={"count": {"type": "integer"}})
+            self.state = {}
+            self.overrides = []
+
+        def override(self, *, tool_call):
+            self.overrides.append(tool_call)
+            return SimpleNamespace(
+                tool_call=tool_call,
+                runtime=self.runtime,
+                tool=self.tool,
+                state=self.state,
+            )
+
+    request = FakeRequest()
+    captured = {}
+
+    def handler(req):
+        captured.update(req.tool_call["args"])
+        return _message()
+
+    ToolBusMiddleware().wrap_tool_call(request, handler)
+
+    assert captured == {"count": 42}
+    assert request.tool_call["args"] == {"count": "42"}
+    assert request.overrides == [{"name": "fake_tool", "args": {"count": 42}, "id": "call-toolbus"}]
 
 
 def test_result_limit_truncates_content_only_when_spec_sets_limit():

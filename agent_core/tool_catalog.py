@@ -93,27 +93,27 @@ def default_tool_specs(*, include_cron_tools: bool = False) -> list[ToolSpec]:
     from agent_core.delegation import task
 
     specs = [
-        _spec(list_directory, toolset="file_read", read_only=True, emoji="📁"),
-        _spec(search_files, toolset="file_read", read_only=True, emoji="🔎"),
-        _spec(read_file, toolset="file_read", read_only=True, emoji="📄"),
-        _spec(file_info, toolset="file_read", read_only=True, emoji="ℹ️"),
-        _spec(web_search, toolset="web", read_only=True, emoji="🌐"),
-        _spec(web_extract, toolset="web", read_only=True, emoji="🌐"),
-        _spec(skills_list, toolset="skills", read_only=True, emoji="🧰"),
-        _spec(skill_view, toolset="skills", read_only=True, emoji="🧰"),
-        _spec(write_file, toolset="file_write", read_only=False, risk_level="medium", emoji="✍️"),
-        _spec(patch, toolset="file_write", read_only=False, risk_level="medium", emoji="🩹"),
-        _spec(terminal, toolset="terminal", read_only=False, risk_level="high", emoji="💻", max_result_size_chars=100_000),
-        _spec(process, toolset="terminal", read_only=False, risk_level="high", emoji="⚙️", max_result_size_chars=100_000),
-        _spec(skill_manage, toolset="skills", read_only=False, risk_level="medium", emoji="🧰"),
+        _spec(list_directory, toolset="file_read", read_only=True),
+        _spec(search_files, toolset="file_read", read_only=True),
+        _spec(read_file, toolset="file_read", read_only=True),
+        _spec(file_info, toolset="file_read", read_only=True),
+        _spec(web_search, toolset="web", read_only=True),
+        _spec(web_extract, toolset="web", read_only=True),
+        _spec(skills_list, toolset="skills", read_only=True),
+        _spec(skill_view, toolset="skills", read_only=True),
+        _spec(write_file, toolset="file_write", read_only=False, risk_level="medium"),
+        _spec(patch, toolset="file_write", read_only=False, risk_level="medium"),
+        _spec(terminal, toolset="terminal", read_only=False, risk_level="high", max_result_size_chars=100_000),
+        _spec(process, toolset="terminal", read_only=False, risk_level="high", max_result_size_chars=100_000),
+        _spec(skill_manage, toolset="skills", read_only=False, risk_level="medium"),
         _spec(clarify, toolset="clarify", read_only=True, emoji="?"),
-        _spec(memory_manage, toolset="memory", read_only=False, risk_level="medium", emoji="🧠"),
-        _spec(task, toolset="delegation", read_only=True, emoji="🧭"),
+        _spec(memory_manage, toolset="memory", read_only=False, risk_level="medium"),
+        _spec(task, toolset="delegation", read_only=True),
     ]
     if include_cron_tools:
         from agent_tools.public.cronjob import cronjob
 
-        specs.append(_spec(cronjob, toolset="cron", read_only=False, risk_level="medium", emoji="⏱️"))
+        specs.append(_spec(cronjob, toolset="cron", read_only=False, risk_level="medium"))
     return specs
 
 
@@ -137,7 +137,7 @@ def build_tools_from_specs(
     enabled = set(enabled_toolsets) if enabled_toolsets is not None else None
     tools = []
     for spec in specs:
-        if enabled is None and not spec.enabled_by_default:
+        if not spec.enabled_by_default:
             continue
         if enabled is not None and spec.toolset not in enabled:
             continue

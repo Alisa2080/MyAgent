@@ -22,7 +22,7 @@ from agent_core.system_prompt import (
     model_display_name,
 )
 from agent_core.terminal_lifecycle import recover_terminal_processes
-from agent_core.tool_catalog import build_tools
+from agent_core.tool_catalog import build_tools, get_tool_specs
 from agent_core.tool_limits import build_tool_call_limit_middleware
 from agent_core.workspace import WORKDIR
 
@@ -82,6 +82,10 @@ def build_agent(*, include_cron_tools: bool = False, checkpointer=None):
         include_cron_tools=include_cron_tools,
         runtime_profile=os.environ.get("AGENT_RUNTIME_PROFILE"),
     )
+    tool_specs = {
+        spec.name: spec
+        for spec in get_tool_specs(include_cron_tools=include_cron_tools)
+    }
 
     return create_agent(
         model=MAIN_MODEL,
@@ -103,7 +107,7 @@ def build_agent(*, include_cron_tools: bool = False, checkpointer=None):
                 policy_tools=POLICY_REVIEW_TOOLS,
                 description_prefix="Approval required before tool execution",
             ),
-            ToolBusMiddleware(),
+            ToolBusMiddleware(specs=tool_specs),
             PolicyToolMiddleware(policy_tools=POLICY_REVIEW_TOOLS),
             # ModelCallLimitMiddleware(
             #     thread_limit=20,

@@ -357,12 +357,17 @@ def test_build_agent_registers_policy_tool_middleware(monkeypatch):
 
     captured = {}
 
+    class FakeToolRetryMiddleware:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
     monkeypatch.setattr(builders, "install_process_signal_handlers", lambda: None)
     monkeypatch.setattr(builders.memory_store, "load_from_disk", lambda: None)
     monkeypatch.setattr(builders, "recover_terminal_processes", lambda: None)
     monkeypatch.setattr(builders.memory_store, "format_for_system_prompt", lambda name: "")
     monkeypatch.setattr(builders, "load_project_instruction_blocks", lambda workdir: [])
     monkeypatch.setattr(builders, "build_tool_call_limit_middleware", lambda include_task=True: [])
+    monkeypatch.setattr(builders, "ToolRetryMiddleware", FakeToolRetryMiddleware)
     monkeypatch.setattr(builders, "create_agent", lambda **kwargs: captured.update(kwargs) or "agent")
 
     assert builders.build_agent() == "agent"

@@ -72,6 +72,22 @@ def test_build_tools_hides_tools_when_check_fn_fails():
     assert build_tools_from_specs(specs, enabled_toolsets=["fake"]) == []
 
 
+def test_build_tools_respects_enabled_by_default_for_explicit_toolsets():
+    from agent_core.tool_catalog import ToolSpec, build_tools_from_specs
+
+    fake_tool = SimpleNamespace(name="disabled_tool")
+    specs = [
+        ToolSpec(
+            name="disabled_tool",
+            toolset="fake",
+            tool=fake_tool,
+            enabled_by_default=False,
+        )
+    ]
+
+    assert build_tools_from_specs(specs, enabled_toolsets=["fake"]) == []
+
+
 def test_check_fn_result_is_cached_until_cleared():
     from agent_core.tool_catalog import (
         ToolSpec,

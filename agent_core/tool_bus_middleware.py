@@ -6,11 +6,19 @@ import logging
 import time
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
+from types import SimpleNamespace
 from typing import Any
 
 from langchain.agents.middleware import AgentMiddleware, ToolCallRequest
 from langchain_core.messages import ToolMessage
-from langgraph.types import Command
+
+try:
+    from langgraph.types import Command
+except ImportError:  # pragma: no cover - exercised by subprocess smoke tests without langgraph installed
+    class Command:
+        def __init__(self, **kwargs: Any) -> None:
+            for key, value in kwargs.items():
+                setattr(self, key, value)
 
 from agent_core.tool_catalog import ToolSpec
 from agent_tools.shared.tool_result import tool_failure
@@ -18,7 +26,7 @@ from agent_tools.shared.tool_result import tool_failure
 
 logger = logging.getLogger(__name__)
 
-ToolResponse = ToolMessage | Command[Any]
+ToolResponse = ToolMessage | Command
 PreToolHook = Callable[["ToolBusRequest"], ToolMessage | None]
 PostToolHook = Callable[["ToolBusRequest", "ToolBusResult"], None]
 TransformToolResultHook = Callable[["ToolBusRequest", ToolMessage], ToolMessage | None]
@@ -66,7 +74,7 @@ class ToolBusMiddleware(AgentMiddleware):
         request: ToolCallRequest,
         handler: Callable[[ToolCallRequest], ToolResponse],
     ) -> ToolResponse:
-        bus_request = self._prepare_request(request)
+        bus_request, call_request = self._prepare_request(request)
         blocked = self._run_pre_hooks(bus_request)
         if blocked is not None:
             return blocked
@@ -74,7 +82,7 @@ class ToolBusMiddleware(AgentMiddleware):
         started = time.monotonic()
         error = None
         try:
-            result = handler(request)
+            result = handler(call_request)
         except Exception as exc:
             error = exc
             logger.exception("Tool %s failed in ToolBusMiddleware", bus_request.tool_name)
@@ -82,7 +90,7 @@ class ToolBusMiddleware(AgentMiddleware):
                 bus_request.tool_name,
                 f"Tool execution failed: {type(exc).__name__}: {exc}",
                 code="tool_exception",
-                runtime=request.runtime,
+                runtime=_runtime_with_tool_call_id(request.runtime, bus_request.tool_call_id),
             )
         duration_ms = int((time.monotonic() - started) * 1000)
         return self._finalize(bus_request, result, duration_ms, error)
@@ -92,7 +100,7 @@ class ToolBusMiddleware(AgentMiddleware):
         request: ToolCallRequest,
         handler: Callable[[ToolCallRequest], Awaitable[ToolResponse]],
     ) -> ToolResponse:
-        bus_request = self._prepare_request(request)
+        bus_request, call_request = self._prepare_request(request)
         blocked = self._run_pre_hooks(bus_request)
         if blocked is not None:
             return blocked
@@ -100,7 +108,7 @@ class ToolBusMiddleware(AgentMiddleware):
         started = time.monotonic()
         error = None
         try:
-            result = await handler(request)
+            result = await handler(call_request)
         except Exception as exc:
             error = exc
             logger.exception("Tool %s failed in ToolBusMiddleware", bus_request.tool_name)
@@ -108,27 +116,32 @@ class ToolBusMiddleware(AgentMiddleware):
                 bus_request.tool_name,
                 f"Tool execution failed: {type(exc).__name__}: {exc}",
                 code="tool_exception",
-                runtime=request.runtime,
+                runtime=_runtime_with_tool_call_id(request.runtime, bus_request.tool_call_id),
             )
         duration_ms = int((time.monotonic() - started) * 1000)
         return self._finalize(bus_request, result, duration_ms, error)
 
-    def _prepare_request(self, request: ToolCallRequest) -> ToolBusRequest:
+    def _prepare_request(self, request: ToolCallRequest) -> tuple[ToolBusRequest, ToolCallRequest]:
         tool_call = request.tool_call
         tool_name = str(tool_call.get("name") or "")
         raw_args = tool_call.get("args") or {}
         args = raw_args if isinstance(raw_args, dict) else {}
+        call_request = request
         if self.coerce_args:
-            args = _coerce_tool_args(request.tool, args)
-            tool_call["args"] = args
-        return ToolBusRequest(
+            coerced_args = _coerce_tool_args(request.tool, args)
+            if coerced_args != args:
+                tool_call = {**tool_call, "args": coerced_args}
+                call_request = _override_request_tool_call(request, tool_call)
+                args = coerced_args
+        bus_request = ToolBusRequest(
             tool_name=tool_name,
             args=args,
             tool_call_id=str(tool_call.get("id") or ""),
             runtime=request.runtime,
-            request=request,
+            request=call_request,
             spec=self.specs.get(tool_name),
         )
+        return bus_request, call_request
 
     def _run_pre_hooks(self, bus_request: ToolBusRequest) -> ToolMessage | None:
         for hook in self.hooks.pre_tool_call:
@@ -306,3 +319,42 @@ def _coerce_json(value: str, expected_python_type: type) -> Any:
     except (TypeError, ValueError):
         return value
     return parsed if isinstance(parsed, expected_python_type) else value
+
+
+def _override_request_tool_call(request: ToolCallRequest, tool_call: dict[str, Any]) -> ToolCallRequest:
+    override = getattr(request, "override", None)
+    if callable(override):
+        return override(tool_call=tool_call)
+
+    try:
+        copied = copy.copy(request)
+        copied.tool_call = tool_call
+        return copied
+    except Exception:
+        return SimpleNamespace(
+            tool_call=tool_call,
+            runtime=getattr(request, "runtime", None),
+            tool=getattr(request, "tool", None),
+            state=getattr(request, "state", {}),
+        )
+
+
+class _RuntimeToolCallProxy:
+    def __init__(self, runtime: Any, tool_call_id: str) -> None:
+        self._runtime = runtime
+        self.tool_call_id = tool_call_id
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._runtime, name)
+
+
+def _runtime_with_tool_call_id(runtime: Any, tool_call_id: str) -> Any:
+    if not tool_call_id:
+        return runtime
+    try:
+        existing = getattr(runtime, "tool_call_id", None)
+    except Exception:
+        existing = None
+    if existing:
+        return runtime
+    return _RuntimeToolCallProxy(runtime, tool_call_id)
