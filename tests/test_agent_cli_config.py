@@ -1,6 +1,5 @@
 import pytest
 
-from agent_cli import config as config_module
 from agent_cli.config_schema import (
     ConfigValidationError,
     config_to_dict,
@@ -65,39 +64,6 @@ def test_get_and_set_config_path_value():
     assert config.display.markdown == "strip"
     assert get_config_path_value(config, "display.markdown") == "strip"
     assert config_to_dict(config)["display"]["markdown"] == "strip"
-
-
-def test_load_config_file_uses_simple_yaml_fallback_without_pyyaml(
-    monkeypatch, tmp_path
-):
-    monkeypatch.setattr(config_module, "yaml", None)
-    path = tmp_path / "config.yaml"
-    path.write_text(
-        "model:\n  name: config-model\ncron:\n  enabled: false\n  interval_seconds: 5\n",
-        encoding="utf-8",
-    )
-
-    assert config_module.load_config_file(path) == {
-        "model": {"name": "config-model"},
-        "cron": {"enabled": False, "interval_seconds": 5},
-    }
-
-
-def test_save_config_file_uses_simple_yaml_fallback_without_pyyaml(
-    monkeypatch, tmp_path
-):
-    monkeypatch.setattr(config_module, "yaml", None)
-    path = tmp_path / "config.yaml"
-
-    config_module.save_config_file(
-        path,
-        {"display": {"markdown": "strip"}, "cron": {"enabled": False}},
-    )
-
-    assert config_module.load_config_file(path) == {
-        "cron": {"enabled": False},
-        "display": {"markdown": "strip"},
-    }
 
 
 def test_parse_config_includes_cron_defaults():

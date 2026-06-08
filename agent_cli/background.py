@@ -13,7 +13,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from agent_cli.langgraph_compat import Command
+from langgraph.types import Command
+
 from agent_cli.interrupts import extract_interrupt_review_requests, has_interrupt
 from agent_cli.rendering import latest_ai_text
 
