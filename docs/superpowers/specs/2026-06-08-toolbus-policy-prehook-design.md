@@ -8,24 +8,26 @@ Move execution-time policy enforcement from a standalone
 `PolicyToolMiddleware` production path into `ToolBusMiddleware` as a pre-tool
 hook, while preserving the existing approval and grant semantics.
 
-The design covers three implementation stages:
+The original migration covered three implementation stages:
 
-1. Lock the current `ToolBusMiddleware + PolicyToolMiddleware` integration
+1. Lock the original `ToolBusMiddleware + PolicyToolMiddleware` integration
    behavior with tests.
 2. Extract policy execution gating into a reusable pure gate.
 3. Add a ToolBus policy pre-hook and switch `build_agent()` to use it.
 
+The current effective architecture also includes the follow-up deletion in
+`2026-06-09-remove-policy-tool-middleware-design.md`: the old standalone
+execution-time policy middleware module is removed, and production policy
+enforcement runs only through the ToolBus policy pre-hook.
+
 ## Context
 
-The project currently has two layers around tool execution:
+The project has two active governance layers around tool execution:
 
 - `FlexibleHumanInTheLoopMiddleware` runs after the model response and before
   tool execution. It inspects proposed tool calls, interrupts for human review
   when policy says `review`, and records `ApprovalRecord` values after approval.
-- `PolicyToolMiddleware` runs at tool execution time. It evaluates the real tool
-  call arguments, denies unsafe calls, consumes recorded approvals for reviewed
-  calls, records `ToolPolicyGrant` values, and lets allowed calls execute.
-- `ToolBusMiddleware` also runs at tool execution time. It prepares normalized
+- `ToolBusMiddleware` runs at tool execution time. It prepares normalized
   tool requests, runs pre hooks, calls the LangChain handler, normalizes
   exceptions, runs post hooks, transforms `ToolMessage` results, and applies
   result limits.
@@ -33,12 +35,12 @@ The project currently has two layers around tool execution:
 LangChain's official middleware model supports this split. Human-in-the-loop
 middleware uses `after_model` to pause after a model proposes tool calls and
 before execution. Custom `wrap_tool_call` middleware is the official interception
-point around tool execution. The current project already uses those same phases.
+point around tool execution. The project uses those same phases.
 
-The remaining issue is ownership: production execution-time policy enforcement
-is currently a separate `wrap_tool_call` middleware nested with ToolBus. Since
-policy gating is a pre-execution tool-bus concern, the production path should be
-owned by ToolBus pre hooks.
+The ownership issue addressed by this migration was that production
+execution-time policy enforcement used to be a separate `wrap_tool_call`
+middleware nested with ToolBus. Since policy gating is a pre-execution tool-bus
+concern, the current production path is owned by ToolBus pre hooks.
 
 ## Non-Goals
 
@@ -46,8 +48,6 @@ owned by ToolBus pre hooks.
 - Do not change `tool_policy.evaluate_tool_call(...)` semantics.
 - Do not broaden policy coverage beyond the existing policy tools:
   `terminal`, `process`, `write_file`, and `patch`.
-- Do not remove `PolicyToolMiddleware` immediately. It remains as a compatibility
-  wrapper during this migration.
 - Do not change public tool schemas.
 - Do not redesign approval or grant storage.
 - Do not make ToolBus responsible for deciding which model-proposed calls should
@@ -55,16 +55,16 @@ owned by ToolBus pre hooks.
 
 ## Recommended Design
 
-Use a staged migration:
+The staged migration was:
 
-1. Add integration tests that document the current combined behavior of
+1. Add integration tests that document the original combined behavior of
    `ToolBusMiddleware` wrapping `PolicyToolMiddleware`.
 2. Extract policy enforcement into a reusable gate that is independent of
    LangChain middleware nesting.
 3. Add a ToolBus pre-hook adapter for that gate.
 4. Change `build_agent()` so production execution-time policy enforcement runs
    through `ToolBusMiddleware(hooks=...)`.
-5. Keep `PolicyToolMiddleware` as a compatibility wrapper around the same gate.
+5. Remove the old standalone execution-time policy middleware path.
 
 This keeps behavior testable throughout the migration and avoids a large
 delete-and-rewrite change.
@@ -112,8 +112,8 @@ def run_policy_tool_gate(
     ...
 ```
 
-The gate owns the execution-time sequence currently implemented by
-`PolicyToolMiddleware._gate_tool_call()`:
+The gate owns the execution-time sequence originally implemented by the removed
+middleware:
 
 1. Ignore tools that are not configured policy tools.
 2. Ignore tools without a policy arg builder.
@@ -160,30 +160,13 @@ This is intentional: execution-time policy should gate the real execution
 payload. Tests must prove that approval consumption still matches approval
 records produced by the HITL phase.
 
-## Compatibility Wrapper
+## Current Design Decision
 
-Keep `PolicyToolMiddleware` for compatibility, but reduce it to a wrapper around
-the shared gate.
-
-```python
-class PolicyToolMiddleware(AgentMiddleware):
-    def _gate_tool_call(self, request: ToolCallRequest) -> ToolMessage | None:
-        tool_call = request.tool_call
-        return run_policy_tool_gate(
-            PolicyToolGateRequest(
-                tool_name=str(tool_call.get("name") or ""),
-                args=tool_call.get("args") or {},
-                tool_call_id=str(tool_call.get("id") or ""),
-                runtime=request.runtime,
-                request=request,
-            ),
-            policy_tools=self.policy_tools,
-        )
-```
-
-`POLICY_ARG_BUILDERS` may move to `policy_tool_gate.py`, but the old import path
-should keep working during this migration because `human_loop.py` currently
-imports it from `agent_core.policy_tool_middleware`.
+The migration originally kept `PolicyToolMiddleware` as a temporary compatibility
+wrapper. The follow-up deletion design
+`2026-06-09-remove-policy-tool-middleware-design.md` removes that wrapper, so
+`agent_core.policy_tool_gate` is the only execution-time policy gate module and
+production enforcement runs only through the ToolBus policy pre-hook.
 
 ## Blocked Result Semantics
 
@@ -196,17 +179,17 @@ The target ToolBus policy pre-hook behavior is:
 - A blocked result does not run `transform_tool_result` hooks.
 - A blocked result does not run result limiting.
 
-This is an intentional behavior change from the current middleware nesting, where
-a policy-blocked `ToolMessage` can be seen by ToolBus as the handler result and
+This was an intentional behavior change from the old middleware nesting, where a
+policy-blocked `ToolMessage` could be seen by ToolBus as the handler result and
 therefore flow through the existing finalize path. The new semantics better
 separate execution observation from result shaping: post hooks may audit that a
 tool was blocked, while safety and approval errors remain unmodified.
 
-## Stage 0: Lock Current Behavior
+## Stage 0: Lock Original Behavior
 
 Add integration tests in `tests/test_policy_tool_bus_integration.py`.
 
-The tests should exercise `ToolBusMiddleware` combined with
+At that stage, tests exercised `ToolBusMiddleware` combined with
 `PolicyToolMiddleware` before any production wiring changes:
 
 - `allow`: handler is called, result succeeds, grant is recorded, and ToolBus
@@ -223,19 +206,23 @@ This stage is a baseline. It should not change implementation behavior.
 
 ## Stage 1: Extract the Pure Policy Gate
 
+This historical stage extracted shared behavior before the old middleware module
+was deleted by the follow-up design.
+
 Implementation tasks:
 
 - Add `agent_core/policy_tool_gate.py`.
 - Define `PolicyToolGateRequest`.
 - Move or share `POLICY_ARG_BUILDERS`.
 - Implement `run_policy_tool_gate(...)`.
-- Update `PolicyToolMiddleware` to delegate to the gate.
-- Keep the existing `PolicyToolMiddleware` public behavior unchanged.
+- During the intermediate migration, update `PolicyToolMiddleware` to delegate
+  to the gate.
+- During the intermediate migration, keep the existing `PolicyToolMiddleware`
+  public behavior unchanged.
 - Keep `human_loop.py` policy arg behavior unchanged.
 
 Tests:
 
-- Existing `tests/test_policy_tool_middleware.py` should continue to pass.
 - Add direct gate tests for allow, deny, review without approval, review with
   approval, unsupported tool pass-through, and tool-call-id fallback.
 
@@ -256,7 +243,7 @@ Implementation tasks:
 - Ensure blocked pre-hook results skip transform hooks and result limits.
 - Update `build_agent()` to construct `ToolBusHooks` with the policy pre-hook.
 - Remove `PolicyToolMiddleware(...)` from `build_agent()` production middleware.
-- Keep the `PolicyToolMiddleware` class available as a compatibility wrapper.
+- Delete the old standalone execution-time policy middleware module.
 
 The builder target shape is:
 
@@ -289,8 +276,7 @@ Success criteria:
 
 - Production execution-time policy enforcement runs through ToolBus pre hooks.
 - HITL approval recording still happens in `FlexibleHumanInTheLoopMiddleware`.
-- `PolicyToolMiddleware` remains usable for compatibility tests and external
-  callers.
+- The old execution-time middleware entry point is removed.
 - The new blocked-result lifecycle is locked by tests.
 
 ## Data Flow
@@ -346,7 +332,7 @@ asserting broad exception swallowing.
 Run targeted tests after each stage:
 
 ```text
-tests/test_policy_tool_middleware.py
+tests/test_policy_tool_gate.py
 tests/test_tool_bus_middleware.py
 tests/test_policy_tool_bus_integration.py
 tests/test_permissions_human_loop.py
@@ -367,7 +353,7 @@ execution-time gate.
   consumption, grant recording, digest, and `allow_network_once` behavior.
 - Policy-blocked ToolBus pre-hook results trigger post hooks and skip
   transform/result limiting.
-- `PolicyToolMiddleware` remains as a compatibility wrapper around the shared
-  gate.
+- The old `PolicyToolMiddleware` module has been removed; policy behavior is
+  covered by gate, ToolBus, integration, and builder tests.
 - Tests document both the migration baseline and the final ToolBus pre-hook
   behavior.
