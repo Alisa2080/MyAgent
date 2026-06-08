@@ -66,8 +66,23 @@ def test_build_agent_wires_policy_pre_hook_into_toolbus(monkeypatch):
         def __init__(self, **kwargs):
             self.kwargs = kwargs
 
+    factory_calls = []
+
+    def sentinel_hook(*args, **kwargs):
+        return None
+
+    def fake_build_policy_pre_hook(*, policy_tools):
+        factory_calls.append(policy_tools)
+        return sentinel_hook
+
     monkeypatch.setattr(builders, "ToolBusMiddleware", FakeToolBus)
     monkeypatch.setattr(builders, "PolicyToolMiddleware", FakePolicy, raising=False)
+    monkeypatch.setattr(
+        builders,
+        "build_policy_pre_hook",
+        fake_build_policy_pre_hook,
+        raising=False,
+    )
     monkeypatch.setattr(builders.memory_store, "load_from_disk", lambda: None)
     monkeypatch.setattr(builders.memory_store, "format_for_system_prompt", lambda target: "")
     monkeypatch.setattr(builders, "install_process_signal_handlers", lambda: None)
@@ -85,8 +100,8 @@ def test_build_agent_wires_policy_pre_hook_into_toolbus(monkeypatch):
     assert tool_bus_items[0].kwargs["specs"]
     assert "terminal" in tool_bus_items[0].kwargs["specs"]
     hooks = tool_bus_items[0].kwargs["hooks"]
-    assert len(hooks.pre_tool_call) == 1
-    assert hooks.pre_tool_call[0].__name__ == "hook"
+    assert factory_calls == [builders.POLICY_REVIEW_TOOLS]
+    assert hooks.pre_tool_call == [sentinel_hook]
 
 
 def test_build_agent_wires_read_only_before_toolbus(monkeypatch):
@@ -101,6 +116,15 @@ def test_build_agent_wires_read_only_before_toolbus(monkeypatch):
             self.specs = specs
             self.hooks = hooks
 
+    factory_calls = []
+
+    def sentinel_hook(*args, **kwargs):
+        return None
+
+    def fake_build_policy_pre_hook(*, policy_tools):
+        factory_calls.append(policy_tools)
+        return sentinel_hook
+
     captured = {}
 
     def fake_create_agent(**kwargs):
@@ -110,6 +134,12 @@ def test_build_agent_wires_read_only_before_toolbus(monkeypatch):
     monkeypatch.setattr(builders, "create_agent", fake_create_agent)
     monkeypatch.setattr(builders, "ConsecutiveReadOnlyToolLimitMiddleware", FakeReadOnlyLimit)
     monkeypatch.setattr(builders, "ToolBusMiddleware", FakeToolBus)
+    monkeypatch.setattr(
+        builders,
+        "build_policy_pre_hook",
+        fake_build_policy_pre_hook,
+        raising=False,
+    )
     monkeypatch.setattr(builders.memory_store, "load_from_disk", lambda: None)
     monkeypatch.setattr(builders.memory_store, "format_for_system_prompt", lambda target: "")
     monkeypatch.setattr(builders, "install_process_signal_handlers", lambda: None)
@@ -130,4 +160,5 @@ def test_build_agent_wires_read_only_before_toolbus(monkeypatch):
 
     assert read_only_index < toolbus_index
     assert middleware[read_only_index].specs is middleware[toolbus_index].specs
-    assert len(middleware[toolbus_index].hooks.pre_tool_call) == 1
+    assert factory_calls == [builders.POLICY_REVIEW_TOOLS]
+    assert middleware[toolbus_index].hooks.pre_tool_call == [sentinel_hook]
