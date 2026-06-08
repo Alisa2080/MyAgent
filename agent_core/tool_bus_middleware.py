@@ -20,6 +20,7 @@ except ImportError:  # pragma: no cover - exercised by subprocess smoke tests wi
             for key, value in kwargs.items():
                 setattr(self, key, value)
 
+from agent_core.tool_arg_coercion import ToolArgCoercionError, normalize_tool_args
 from agent_core.tool_catalog import ToolSpec
 from agent_tools.shared.tool_result import tool_failure
 
@@ -95,6 +96,9 @@ class ToolBusMiddleware(AgentMiddleware):
                 )
             duration_ms = int((time.monotonic() - started) * 1000)
             return self._finalize(bus_request, result, duration_ms, error)
+        except ToolArgCoercionError as exc:
+            logger.info("Tool %s received invalid input", _request_tool_name(request), exc_info=True)
+            return _invalid_input_message(request, exc)
         except Exception as exc:
             logger.exception("Tool %s failed during ToolBusMiddleware request preparation", _request_tool_name(request))
             return _tool_exception_message(request, exc)
@@ -125,6 +129,9 @@ class ToolBusMiddleware(AgentMiddleware):
                 )
             duration_ms = int((time.monotonic() - started) * 1000)
             return self._finalize(bus_request, result, duration_ms, error)
+        except ToolArgCoercionError as exc:
+            logger.info("Tool %s received invalid input", _request_tool_name(request), exc_info=True)
+            return _invalid_input_message(request, exc)
         except Exception as exc:
             logger.exception(
                 "Tool %s failed during ToolBusMiddleware request preparation",
@@ -139,7 +146,7 @@ class ToolBusMiddleware(AgentMiddleware):
         args = raw_args if isinstance(raw_args, dict) else {}
         call_request = request
         if self.coerce_args:
-            coerced_args = _coerce_tool_args(request.tool, args)
+            coerced_args = normalize_tool_args(request.tool, args)
             if coerced_args != args:
                 tool_call = {**tool_call, "args": coerced_args}
                 call_request = _override_request_tool_call(request, tool_call)
@@ -233,107 +240,6 @@ class ToolBusMiddleware(AgentMiddleware):
         )
 
 
-def _coerce_tool_args(tool: Any, args: dict[str, Any]) -> dict[str, Any]:
-    if not isinstance(args, dict):
-        return args
-    schema = _tool_arg_schema(tool)
-    if not schema:
-        return args
-    coerced = dict(args)
-    for key, value in args.items():
-        if not isinstance(value, str):
-            continue
-        expected = _expected_type(schema.get(key))
-        if expected is None:
-            continue
-        coerced[key] = _coerce_value(value, expected)
-    return coerced
-
-
-def _tool_arg_schema(tool: Any) -> dict[str, Any]:
-    args = getattr(tool, "args", None)
-    if isinstance(args, dict):
-        return args
-    args_schema = getattr(tool, "args_schema", None)
-    model_fields = getattr(args_schema, "model_fields", None)
-    if isinstance(model_fields, dict):
-        schema = {}
-        for name, field in model_fields.items():
-            annotation = getattr(field, "annotation", None)
-            if annotation is int:
-                schema[name] = {"type": "integer"}
-            elif annotation is float:
-                schema[name] = {"type": "number"}
-            elif annotation is bool:
-                schema[name] = {"type": "boolean"}
-            elif annotation is list:
-                schema[name] = {"type": "array"}
-            elif annotation is dict:
-                schema[name] = {"type": "object"}
-        return schema
-    return {}
-
-
-def _expected_type(schema: Any) -> str | None:
-    if not isinstance(schema, dict):
-        return None
-    value = schema.get("type")
-    if isinstance(value, str):
-        return value
-    if isinstance(value, list):
-        for item in value:
-            if item != "null":
-                return str(item)
-    for any_of_key in ("anyOf", "oneOf"):
-        variants = schema.get(any_of_key)
-        if not isinstance(variants, list):
-            continue
-        for variant in variants:
-            expected = _expected_type(variant)
-            if expected is not None and expected != "null":
-                return expected
-    return None
-
-
-def _coerce_value(value: str, expected_type: str) -> Any:
-    if expected_type == "integer":
-        try:
-            parsed = float(value)
-        except (TypeError, ValueError, OverflowError):
-            return value
-        if parsed == int(parsed):
-            return int(parsed)
-        return value
-    if expected_type == "number":
-        try:
-            parsed = float(value)
-        except (TypeError, ValueError, OverflowError):
-            return value
-        if parsed != parsed or parsed in (float("inf"), float("-inf")):
-            return value
-        return int(parsed) if parsed == int(parsed) else parsed
-    if expected_type == "boolean":
-        lowered = value.strip().lower()
-        if lowered == "true":
-            return True
-        if lowered == "false":
-            return False
-        return value
-    if expected_type == "array":
-        return _coerce_json(value, list)
-    if expected_type == "object":
-        return _coerce_json(value, dict)
-    return value
-
-
-def _coerce_json(value: str, expected_python_type: type) -> Any:
-    try:
-        parsed = json.loads(value)
-    except (TypeError, ValueError):
-        return value
-    return parsed if isinstance(parsed, expected_python_type) else value
-
-
 def _serialize_for_limit_check(value: Any) -> str:
     try:
         return json.dumps(value, ensure_ascii=False, default=str)
@@ -396,6 +302,18 @@ def _tool_exception_message(request: ToolCallRequest, exc: Exception) -> ToolMes
         tool_name,
         f"Tool execution failed: {type(exc).__name__}: {exc}",
         code="tool_exception",
+        runtime=runtime,
+    )
+
+
+def _invalid_input_message(request: ToolCallRequest, exc: ToolArgCoercionError) -> ToolMessage:
+    tool_name = _request_tool_name(request)
+    tool_call_id = _request_tool_call_id(request)
+    runtime = _runtime_with_tool_call_id(getattr(request, "runtime", None), tool_call_id)
+    return tool_failure(
+        tool_name,
+        str(exc),
+        code="invalid_input",
         runtime=runtime,
     )
 

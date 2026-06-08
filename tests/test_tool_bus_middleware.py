@@ -71,19 +71,30 @@ def test_handler_exception_returns_tool_failure():
     assert "boom" in result.content
 
 
-def test_prepare_request_exception_returns_tool_failure():
+def test_invalid_input_returns_tool_failure_without_calling_handler():
+    from pydantic import BaseModel
+
     from agent_core.tool_bus_middleware import ToolBusMiddleware
 
-    request = _request("terminal", args={"count": "nan"})
-    request.tool = SimpleNamespace(name="terminal", args={"count": {"type": "integer"}})
+    class Args(BaseModel):
+        count: int
 
-    result = ToolBusMiddleware().wrap_tool_call(request, lambda req: _message())
+    request = _request("terminal", args={"count": "abc"})
+    request.tool = SimpleNamespace(name="terminal", args_schema=Args)
+    calls = []
 
+    result = ToolBusMiddleware().wrap_tool_call(
+        request,
+        lambda req: calls.append(req) or _message(),
+    )
+
+    assert calls == []
     assert result.status == "error"
+    assert result.tool_call_id == "call-toolbus"
     assert result.artifact["ok"] is False
     assert result.artifact["tool"] == "terminal"
-    assert result.artifact["error"]["code"] == "tool_exception"
-    assert "cannot convert float NaN to integer" in result.content
+    assert result.artifact["error"]["code"] == "invalid_input"
+    assert "count" in result.content
 
 
 def test_handler_exception_uses_tool_call_id_when_runtime_lacks_it():
