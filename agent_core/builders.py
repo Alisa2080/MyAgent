@@ -1,3 +1,5 @@
+import os
+
 from langchain.agents import create_agent
 from langchain.agents.middleware import (
     SummarizationMiddleware,
@@ -7,7 +9,6 @@ from langchain.agents.middleware import (
     ModelCallLimitMiddleware
 )
 
-from agent_core.delegation import BASE_TOOLS, task
 from agent_core.human_loop import FlexibleHumanInTheLoopMiddleware
 from agent_core.memory import memory_store
 from agent_core.model_config import MAIN_MODEL, SMALL_MODEL
@@ -20,9 +21,9 @@ from agent_core.system_prompt import (
     model_display_name,
 )
 from agent_core.terminal_lifecycle import recover_terminal_processes
+from agent_core.tool_catalog import build_tools
 from agent_core.tool_limits import build_tool_call_limit_middleware
 from agent_core.workspace import WORKDIR
-from agent_tools.public.memory import memory_manage
 
 
 TODO_SYSTEM_PROMPT = (
@@ -75,11 +76,11 @@ def build_agent(*, include_cron_tools: bool = False, checkpointer=None):
         project_instruction_blocks=load_project_instruction_blocks(WORKDIR),
     )
 
-    tools = [*BASE_TOOLS, memory_manage, task]
-    if include_cron_tools:
-        from agent_tools.public.cronjob import cronjob
-
-        tools.append(cronjob)
+    tools = build_tools(
+        enabled_toolsets=None,
+        include_cron_tools=include_cron_tools,
+        runtime_profile=os.environ.get("AGENT_RUNTIME_PROFILE"),
+    )
 
     return create_agent(
         model=MAIN_MODEL,
