@@ -7,14 +7,18 @@ import sqlite3
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal
+from typing import Literal
+from contextlib import contextmanager
 
 from agent_cli.config import ConfigError, settings_from_config
 from agent_cli.paths import get_cli_home
+from gateway.service_env import read_service_env as read_gateway_service_env
+from cron.service_env import read_service_env as read_cron_service_env
 
 from cron.service_manager import compose_service_status
 from cron.delivery_registry import default_delivery_registry
 from gateway.registry import default_gateway_registry
+from gateway.service_state import gateway_status_transport, read_gateway_status
 from cron.delivery_store import DeliveryStore
 from gateway.inbox_store import GatewayInboxStore
 
@@ -39,6 +43,22 @@ def warn(name: str, message: str) -> HealthCheck:
 
 def fail(name: str, message: str) -> HealthCheck:
     return HealthCheck(name, "FAIL", message)
+
+
+@contextmanager
+def _merged_env(service_values: dict[str, str]):
+    original = {key: os.environ.get(key) for key in service_values}
+    try:
+        for key, value in service_values.items():
+            if key not in os.environ:
+                os.environ[key] = value
+        yield
+    finally:
+        for key, value in original.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
 
 
 def check_python_version() -> HealthCheck:
@@ -186,20 +206,26 @@ def check_background_tasks(db_path: Path) -> HealthCheck:
     return ok("Background Tasks", "metadata readable")
 
 
-def check_feishu_gateway_config(env: dict[str, str] | None = None) -> list[str]:
+def check_feishu_gateway_config(env: dict[str, str] | None = None, *, transport: str | None = None) -> list[str]:
     values = env or os.environ
+    gateway_service_env = read_gateway_service_env()
+    required = ["FEISHU_APP_ID", "FEISHU_APP_SECRET"]
+    if transport in {None, "http", "feishu-http", "callback-http"}:
+        required.append("FEISHU_CALLBACK_TOKEN")
     missing = [
         name
-        for name in ("FEISHU_APP_ID", "FEISHU_APP_SECRET", "FEISHU_CALLBACK_TOKEN")
-        if not values.get(name)
+        for name in required
+        if not values.get(name) and not gateway_service_env.get(name)
     ]
     if not missing:
         return []
     return [f"missing Feishu gateway environment variables: {', '.join(missing)}"]
 
 
-def check_feishu_gateway() -> HealthCheck:
-    errors = check_feishu_gateway_config()
+def check_feishu_gateway(cli_home: Path) -> HealthCheck:
+    gateway_status = read_gateway_status(cli_home)
+    transport = gateway_status_transport(gateway_status)
+    errors = check_feishu_gateway_config(transport=transport)
     if errors:
         return warn("Feishu Gateway", "; ".join(errors))
     return ok("Feishu Gateway", "configured")
@@ -208,7 +234,12 @@ def check_feishu_gateway() -> HealthCheck:
 def check_feishu_ws_gateway_config() -> HealthCheck:
     import os as _os
 
-    missing = [key for key in ("FEISHU_APP_ID", "FEISHU_APP_SECRET") if not _os.getenv(key)]
+    gateway_service_env = read_gateway_service_env()
+    missing = [
+        key
+        for key in ("FEISHU_APP_ID", "FEISHU_APP_SECRET")
+        if not _os.getenv(key) and not gateway_service_env.get(key)
+    ]
     if missing:
         return warn("Feishu WebSocket", f"missing: {', '.join(missing)}")
     try:
@@ -281,7 +312,12 @@ def check_cron_service() -> HealthCheck:
 
 
 def check_feishu_token() -> HealthCheck:
-    missing = [k for k in ("FEISHU_APP_ID", "FEISHU_APP_SECRET") if not os.environ.get(k)]
+    gateway_service_env = read_gateway_service_env()
+    missing = [
+        k
+        for k in ("FEISHU_APP_ID", "FEISHU_APP_SECRET")
+        if not os.environ.get(k) and not gateway_service_env.get(k)
+    ]
     if missing:
         return warn("Feishu Token", f"missing env vars: {', '.join(missing)}")
     try:
@@ -292,7 +328,8 @@ def check_feishu_token() -> HealthCheck:
     if adapter is None:
         return warn("Feishu Token", "feishu gateway adapter not available")
     try:
-        result = adapter.token_smoke()
+        with _merged_env(gateway_service_env):
+            result = adapter.token_smoke()
     except Exception as exc:
         return warn("Feishu Token", f"token smoke failed: {exc}")
     if not getattr(result, "ok", False):
@@ -301,6 +338,15 @@ def check_feishu_token() -> HealthCheck:
 
 
 def check_cron_feishu_delivery() -> HealthCheck:
+    cron_service_env = read_cron_service_env()
+    missing_service_env = [
+        key for key in ("FEISHU_APP_ID", "FEISHU_APP_SECRET") if not cron_service_env.get(key)
+    ]
+    if missing_service_env:
+        return warn(
+            "Cron Feishu Delivery",
+            "cron service env missing required Feishu variables: " + ", ".join(missing_service_env),
+        )
     try:
         cron_reg = default_delivery_registry()
         gw_reg = default_gateway_registry()
@@ -323,9 +369,10 @@ def check_cron_feishu_delivery() -> HealthCheck:
     try:
         from gateway.contracts import PlatformMessageTarget
 
-        validation = gw_adapter.validate_target(
-            PlatformMessageTarget(platform="feishu", target_type="chat_id", target_id="doctor-probe")
-        )
+        with _merged_env(cron_service_env):
+            validation = gw_adapter.validate_target(
+                PlatformMessageTarget(platform="feishu", target_type="chat_id", target_id="doctor-probe")
+            )
     except Exception as exc:
         return warn("Cron Feishu Delivery", f"target validation failed: {exc}")
     if not validation.ok:
@@ -352,15 +399,22 @@ def check_cron_delivery_queue(*, cron_service_healthy: bool | None = None) -> He
     try:
         store = DeliveryStore()
         stats = store.stats()
+        recent_errors = store.recent_errors(limit=2)
     except Exception as exc:
         return warn("Cron Delivery Queue", f"cannot read delivery queue: {exc}")
     count_str = _format_counts(stats)
+    latest_error = next((row for row in recent_errors if row.get("last_error")), None)
     if stats.get("pending", 0) > 0 and cron_service_healthy is False:
         return warn(
             "Cron Delivery Queue",
             f"delivery: {count_str}; pending events may not dispatch because cron service is not healthy",
         )
     if stats.get("failed", 0) > 0 or stats.get("dead", 0) > 0:
+        if latest_error:
+            return warn(
+                "Cron Delivery Queue",
+                f"delivery: {count_str}; latest_error={latest_error.get('adapter_key') or '-'} {latest_error.get('status') or '-'} {latest_error.get('last_error') or '-'}",
+            )
         return warn("Cron Delivery Queue", f"delivery: {count_str}")
     return ok("Cron Delivery Queue", f"delivery: {count_str}")
 
@@ -384,7 +438,7 @@ def run_health_checks(workdir: str, cli_home: Path | None = None) -> list[Health
         check_dotenv(cli_home, cwd),
         check_openai_api_key(),
         check_background_tasks(db_path),
-        check_feishu_gateway(),
+        check_feishu_gateway(cli_home),
         check_feishu_ws_gateway(),
         check_gateway_service(),
         cron_service,
