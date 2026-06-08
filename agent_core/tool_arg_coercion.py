@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -31,6 +32,7 @@ def normalize_tool_args(tool: Any, args: dict[str, Any]) -> dict[str, Any]:
             continue
         coerced[key] = _coerce_value(value, field_schema)
 
+    _validate_with_json_schema(schema, coerced, tool_name)
     return _validate_with_pydantic(tool, coerced, tool_name)
 
 
@@ -105,6 +107,92 @@ def _format_validation_errors(exc: Exception) -> list[str]:
     return formatted or [str(exc)]
 
 
+def _validate_with_json_schema(
+    schema: dict[str, Any],
+    args: dict[str, Any],
+    tool_name: str,
+) -> None:
+    field_errors = []
+    for key, value in args.items():
+        field_schema = schema.get(key)
+        if not isinstance(field_schema, dict):
+            continue
+        if not _value_matches_schema(value, field_schema):
+            expected = _schema_description(field_schema)
+            field_errors.append(
+                f"{key}: expected {expected}, got {type(value).__name__}"
+            )
+    if field_errors:
+        raise ToolArgCoercionError(tool_name=tool_name, field_errors=field_errors)
+
+
+def _value_matches_schema(value: Any, schema: dict[str, Any]) -> bool:
+    if value is None:
+        return _schema_allows_null(schema)
+
+    schema_type = schema.get("type")
+    if isinstance(schema_type, list):
+        return any(
+            item != "null" and _value_matches_schema(value, {"type": item})
+            for item in schema_type
+        )
+    if isinstance(schema_type, str):
+        return _value_matches_type(value, schema_type)
+
+    for union_key in ("anyOf", "oneOf"):
+        variants = schema.get(union_key)
+        if not isinstance(variants, list):
+            continue
+        return any(
+            isinstance(variant, dict) and _value_matches_schema(value, variant)
+            for variant in variants
+        )
+
+    return True
+
+
+def _value_matches_type(value: Any, schema_type: str) -> bool:
+    if schema_type == "integer":
+        return isinstance(value, int) and not isinstance(value, bool)
+    if schema_type == "number":
+        return (
+            isinstance(value, (int, float))
+            and not isinstance(value, bool)
+            and value == value
+            and value not in (float("inf"), float("-inf"))
+        )
+    if schema_type == "boolean":
+        return isinstance(value, bool)
+    if schema_type == "array":
+        return isinstance(value, list)
+    if schema_type == "object":
+        return isinstance(value, dict)
+    if schema_type == "string":
+        return isinstance(value, str)
+    if schema_type == "null":
+        return value is None
+    return True
+
+
+def _schema_description(schema: dict[str, Any]) -> str:
+    schema_type = schema.get("type")
+    if isinstance(schema_type, str):
+        return schema_type
+    if isinstance(schema_type, list):
+        return " or ".join(str(item) for item in schema_type)
+    for union_key in ("anyOf", "oneOf"):
+        variants = schema.get(union_key)
+        if isinstance(variants, list):
+            parts = [
+                _schema_description(variant)
+                for variant in variants
+                if isinstance(variant, dict)
+            ]
+            if parts:
+                return " or ".join(parts)
+    return "valid value"
+
+
 def _coerce_value(value: Any, schema: dict[str, Any]) -> Any:
     expected = _expected_type(schema)
     if _schema_allows_null(schema) and isinstance(value, str) and value.strip().lower() == "null":
@@ -172,15 +260,13 @@ def _schema_allows_null(schema: dict[str, Any]) -> bool:
 
 
 def _coerce_integer(value: str) -> Any:
+    stripped = value.strip()
+    if not re.fullmatch(r"[+-]?\d+", stripped):
+        return value
     try:
-        parsed = float(value)
+        return int(stripped)
     except (TypeError, ValueError, OverflowError):
         return value
-    if parsed != parsed or parsed in (float("inf"), float("-inf")):
-        return value
-    if parsed == int(parsed):
-        return int(parsed)
-    return value
 
 
 def _coerce_number(value: str) -> Any:

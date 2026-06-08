@@ -97,6 +97,25 @@ def test_invalid_input_returns_tool_failure_without_calling_handler():
     assert "count" in result.content
 
 
+def test_json_schema_invalid_input_returns_tool_failure_without_calling_handler():
+    from agent_core.tool_bus_middleware import ToolBusMiddleware
+
+    request = _request("terminal", args={"count": "abc"})
+    request.tool = SimpleNamespace(name="terminal", args={"count": {"type": "integer"}})
+    calls = []
+
+    result = ToolBusMiddleware().wrap_tool_call(
+        request,
+        lambda req: calls.append(req) or _message(),
+    )
+
+    assert calls == []
+    assert result.status == "error"
+    assert result.tool_call_id == "call-toolbus"
+    assert result.artifact["error"]["code"] == "invalid_input"
+    assert "count" in result.content
+
+
 def test_handler_exception_uses_tool_call_id_when_runtime_lacks_it():
     from agent_core.tool_bus_middleware import ToolBusMiddleware
 

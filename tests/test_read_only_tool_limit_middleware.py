@@ -2,25 +2,23 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from langchain_core.messages import ToolMessage
+from langchain_core.messages import AIMessage, ToolMessage
 
 
-def _request(tool_name: str, tool_call_id: str = "call-read-loop"):
-    return SimpleNamespace(
-        tool_call={"name": tool_name, "args": {}, "id": tool_call_id},
-        runtime=SimpleNamespace(tool_call_id=tool_call_id),
-        tool=SimpleNamespace(name=tool_name),
-        state={"consecutive_read_only_tool_count": 0},
-    )
+def _runtime():
+    return SimpleNamespace()
 
 
-def _message(tool_name: str = "read_file"):
-    return ToolMessage(
-        content="ok",
-        name=tool_name,
-        tool_call_id="call-read-loop",
-        status="success",
-        artifact={"ok": True, "tool": tool_name, "message": "ok", "data": None, "error": None, "meta": {}},
+def _message(tool_name: str):
+    return AIMessage(
+        content="",
+        tool_calls=[
+            {
+                "name": tool_name,
+                "args": {},
+                "id": f"call-{tool_name}",
+            }
+        ],
     )
 
 
@@ -43,107 +41,203 @@ def _specs():
     }
 
 
-def test_consecutive_read_only_calls_are_blocked_after_threshold():
-    from agent_core.tool_limits import ConsecutiveReadOnlyToolLimitMiddleware
+def test_after_model_blocks_consecutive_read_only_calls_after_threshold():
+    from agent_core.tool_limits import (
+        READ_ONLY_COUNT_STATE_KEY,
+        ConsecutiveReadOnlyToolLimitMiddleware,
+    )
 
-    middleware = ConsecutiveReadOnlyToolLimitMiddleware(specs=_specs(), max_consecutive_read_only=2)
-    calls = []
+    middleware = ConsecutiveReadOnlyToolLimitMiddleware(
+        specs=_specs(),
+        max_consecutive_read_only=2,
+    )
+    state = {"messages": [_message("read_file")]}
 
-    def handler(req):
-        calls.append(req.tool_call["name"])
-        return _message(req.tool_call["name"])
+    first = middleware.after_model(state, _runtime())
+    assert first == {READ_ONLY_COUNT_STATE_KEY: 1}
 
-    state = {"consecutive_read_only_tool_count": 0}
-    first_request = _request("read_file")
-    second_request = _request("read_file")
-    third_request = _request("read_file")
-    first_request.state = state
-    second_request.state = state
-    third_request.state = state
+    state[READ_ONLY_COUNT_STATE_KEY] = first[READ_ONLY_COUNT_STATE_KEY]
+    second = middleware.after_model(state, _runtime())
+    assert second == {READ_ONLY_COUNT_STATE_KEY: 2}
 
-    first = middleware.wrap_tool_call(first_request, handler)
-    second = middleware.wrap_tool_call(second_request, handler)
-    third = middleware.wrap_tool_call(third_request, handler)
+    state[READ_ONLY_COUNT_STATE_KEY] = second[READ_ONLY_COUNT_STATE_KEY]
+    third = middleware.after_model(state, _runtime())
 
-    assert first.status == "success"
-    assert second.status == "success"
-    assert third.status == "error"
-    assert third.artifact["error"]["code"] == "read_loop_limit"
-    assert calls == ["read_file", "read_file"]
-
-
-def test_non_read_only_tool_resets_consecutive_read_only_counter():
-    from agent_core.tool_limits import ConsecutiveReadOnlyToolLimitMiddleware
-
-    middleware = ConsecutiveReadOnlyToolLimitMiddleware(specs=_specs(), max_consecutive_read_only=2)
-
-    def handler(req):
-        return _message(req.tool_call["name"])
-
-    state = {"consecutive_read_only_tool_count": 0}
-    requests = [
-        _request("read_file"),
-        _request("read_file"),
-        _request("write_file"),
-        _request("read_file"),
-        _request("read_file"),
-    ]
-    for request in requests:
-        request.state = state
-
-    assert middleware.wrap_tool_call(requests[0], handler).status == "success"
-    assert middleware.wrap_tool_call(requests[1], handler).status == "success"
-    assert middleware.wrap_tool_call(requests[2], handler).status == "success"
-    assert middleware.wrap_tool_call(requests[3], handler).status == "success"
-    assert middleware.wrap_tool_call(requests[4], handler).status == "success"
+    assert third is not None
+    assert third[READ_ONLY_COUNT_STATE_KEY] == 3
+    assert len(third["messages"]) == 1
+    blocked = third["messages"][0]
+    assert isinstance(blocked, ToolMessage)
+    assert blocked.status == "error"
+    assert blocked.name == "read_file"
+    assert blocked.tool_call_id == "call-read_file"
+    assert blocked.artifact["error"]["code"] == "read_loop_limit"
 
 
-def test_unknown_tool_defaults_to_non_read_only_and_resets_counter():
-    from agent_core.tool_limits import ConsecutiveReadOnlyToolLimitMiddleware
+def test_after_model_non_read_only_tool_resets_consecutive_read_only_counter():
+    from agent_core.tool_limits import (
+        READ_ONLY_COUNT_STATE_KEY,
+        ConsecutiveReadOnlyToolLimitMiddleware,
+    )
 
-    middleware = ConsecutiveReadOnlyToolLimitMiddleware(specs=_specs(), max_consecutive_read_only=2)
+    middleware = ConsecutiveReadOnlyToolLimitMiddleware(
+        specs=_specs(),
+        max_consecutive_read_only=2,
+    )
+    result = middleware.after_model(
+        {
+            "messages": [_message("write_file")],
+            READ_ONLY_COUNT_STATE_KEY: 2,
+        },
+        _runtime(),
+    )
 
-    def handler(req):
-        return _message(req.tool_call["name"])
-
-    state = {"consecutive_read_only_tool_count": 0}
-    requests = [
-        _request("read_file"),
-        _request("read_file"),
-        _request("unknown_tool"),
-        _request("read_file"),
-    ]
-    for request in requests:
-        request.state = state
-
-    assert middleware.wrap_tool_call(requests[0], handler).status == "success"
-    assert middleware.wrap_tool_call(requests[1], handler).status == "success"
-    assert middleware.wrap_tool_call(requests[2], handler).status == "success"
-    assert middleware.wrap_tool_call(requests[3], handler).status == "success"
+    assert result == {READ_ONLY_COUNT_STATE_KEY: 0}
 
 
-def test_async_consecutive_read_only_calls_are_blocked_after_threshold():
+def test_after_model_unknown_tool_defaults_to_non_read_only_and_resets_counter():
+    from agent_core.tool_limits import (
+        READ_ONLY_COUNT_STATE_KEY,
+        ConsecutiveReadOnlyToolLimitMiddleware,
+    )
+
+    middleware = ConsecutiveReadOnlyToolLimitMiddleware(
+        specs=_specs(),
+        max_consecutive_read_only=2,
+    )
+    result = middleware.after_model(
+        {
+            "messages": [_message("unknown_tool")],
+            READ_ONLY_COUNT_STATE_KEY: 2,
+        },
+        _runtime(),
+    )
+
+    assert result == {READ_ONLY_COUNT_STATE_KEY: 0}
+
+
+def test_after_model_handles_multiple_tool_calls_in_order():
+    from agent_core.tool_limits import (
+        READ_ONLY_COUNT_STATE_KEY,
+        ConsecutiveReadOnlyToolLimitMiddleware,
+    )
+
+    middleware = ConsecutiveReadOnlyToolLimitMiddleware(
+        specs=_specs(),
+        max_consecutive_read_only=2,
+    )
+    message = AIMessage(
+        content="",
+        tool_calls=[
+            {"name": "read_file", "args": {}, "id": "call-1"},
+            {"name": "write_file", "args": {}, "id": "call-2"},
+            {"name": "read_file", "args": {}, "id": "call-3"},
+        ],
+    )
+
+    result = middleware.after_model(
+        {
+            "messages": [message],
+            READ_ONLY_COUNT_STATE_KEY: 1,
+        },
+        _runtime(),
+    )
+
+    assert result == {READ_ONLY_COUNT_STATE_KEY: 1}
+
+
+def test_async_after_model_matches_sync_behavior():
     import asyncio
 
-    from agent_core.tool_limits import ConsecutiveReadOnlyToolLimitMiddleware
+    from agent_core.tool_limits import (
+        READ_ONLY_COUNT_STATE_KEY,
+        ConsecutiveReadOnlyToolLimitMiddleware,
+    )
 
     async def run():
-        middleware = ConsecutiveReadOnlyToolLimitMiddleware(specs=_specs(), max_consecutive_read_only=1)
-        state = {"consecutive_read_only_tool_count": 0}
-        first_request = _request("read_file")
-        second_request = _request("read_file")
-        first_request.state = state
-        second_request.state = state
+        middleware = ConsecutiveReadOnlyToolLimitMiddleware(
+            specs=_specs(),
+            max_consecutive_read_only=1,
+        )
+        return await middleware.aafter_model(
+            {
+                "messages": [_message("read_file")],
+                READ_ONLY_COUNT_STATE_KEY: 1,
+            },
+            _runtime(),
+        )
 
-        async def handler(req):
-            return _message(req.tool_call["name"])
+    result = asyncio.run(run())
 
-        first = await middleware.awrap_tool_call(first_request, handler)
-        second = await middleware.awrap_tool_call(second_request, handler)
-        return first, second
+    assert result is not None
+    assert result[READ_ONLY_COUNT_STATE_KEY] == 2
+    assert result["messages"][0].artifact["error"]["code"] == "read_loop_limit"
 
-    first, second = asyncio.run(run())
 
-    assert first.status == "success"
-    assert second.status == "error"
-    assert second.artifact["error"]["code"] == "read_loop_limit"
+def test_create_agent_blocks_read_only_loop_before_tool_execution():
+    from langchain.agents import create_agent
+    from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
+    from langchain_core.messages import HumanMessage
+    from langchain_core.tools import tool
+
+    from agent_core.tool_catalog import ToolSpec
+    from agent_core.tool_limits import ConsecutiveReadOnlyToolLimitMiddleware
+
+    class ToolBindableFakeChatModel(FakeMessagesListChatModel):
+        def bind_tools(self, tools, *, tool_choice=None, **kwargs):
+            return self
+
+    calls = []
+
+    @tool
+    def read_file() -> str:
+        """Read a file."""
+        calls.append("read_file")
+        return "ok"
+
+    model = ToolBindableFakeChatModel(
+        responses=[
+            AIMessage(
+                content="",
+                tool_calls=[{"name": "read_file", "args": {}, "id": "call-1"}],
+            ),
+            AIMessage(
+                content="",
+                tool_calls=[{"name": "read_file", "args": {}, "id": "call-2"}],
+            ),
+            AIMessage(
+                content="",
+                tool_calls=[{"name": "read_file", "args": {}, "id": "call-3"}],
+            ),
+            AIMessage(content="done"),
+        ]
+    )
+    specs = {
+        "read_file": ToolSpec(
+            name="read_file",
+            toolset="file_read",
+            tool=read_file,
+            read_only=True,
+        )
+    }
+    agent = create_agent(
+        model=model,
+        tools=[read_file],
+        middleware=[
+            ConsecutiveReadOnlyToolLimitMiddleware(
+                specs=specs,
+                max_consecutive_read_only=2,
+            )
+        ],
+    )
+
+    result = agent.invoke({"messages": [HumanMessage(content="go")]})
+
+    tool_messages = [
+        message for message in result["messages"]
+        if isinstance(message, ToolMessage)
+    ]
+    assert calls == ["read_file", "read_file"]
+    assert tool_messages[-1].tool_call_id == "call-3"
+    assert tool_messages[-1].status == "error"
+    assert tool_messages[-1].artifact["error"]["code"] == "read_loop_limit"

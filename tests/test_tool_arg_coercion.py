@@ -54,30 +54,58 @@ def test_normalize_tool_args_handles_anyof_and_nullable_values():
     ) == {"timeout": 5, "watch_patterns": ["done"], "optional": None}
 
 
-def test_normalize_tool_args_keeps_unsafe_numeric_values_unchanged():
+def test_normalize_tool_args_rejects_invalid_json_schema_values():
+    import pytest
+
+    from agent_core.tool_arg_coercion import ToolArgCoercionError, normalize_tool_args
+
+    invalid_cases = [
+        (
+            {"integer_decimal": {"type": "integer"}},
+            "integer_decimal",
+            "3.5",
+        ),
+        (
+            {"not_number": {"type": "number"}},
+            "not_number",
+            "NaN",
+        ),
+        (
+            {"not_boolean": {"type": "boolean"}},
+            "not_boolean",
+            "yes",
+        ),
+    ]
+
+    for schema, key, value in invalid_cases:
+        tool = SimpleNamespace(name="fake_tool", args=schema)
+        with pytest.raises(ToolArgCoercionError) as exc_info:
+            normalize_tool_args(tool, {key: value})
+        assert key in str(exc_info.value)
+
+
+def test_normalize_tool_args_preserves_large_integer_precision():
     from agent_core.tool_arg_coercion import normalize_tool_args
 
-    tool = SimpleNamespace(
-        name="fake_tool",
-        args={
-            "integer_decimal": {"type": "integer"},
-            "not_number": {"type": "number"},
-            "not_boolean": {"type": "boolean"},
-        },
-    )
+    tool = SimpleNamespace(name="fake_tool", args={"count": {"type": "integer"}})
 
-    assert normalize_tool_args(
-        tool,
-        {
-            "integer_decimal": "3.5",
-            "not_number": "NaN",
-            "not_boolean": "yes",
-        },
-    ) == {
-        "integer_decimal": "3.5",
-        "not_number": "NaN",
-        "not_boolean": "yes",
+    assert normalize_tool_args(tool, {"count": "9007199254740993"}) == {
+        "count": 9007199254740993
     }
+
+
+def test_normalize_tool_args_rejects_invalid_json_schema_integer():
+    import pytest
+
+    from agent_core.tool_arg_coercion import ToolArgCoercionError, normalize_tool_args
+
+    tool = SimpleNamespace(name="fake_tool", args={"count": {"type": "integer"}})
+
+    with pytest.raises(ToolArgCoercionError) as exc_info:
+        normalize_tool_args(tool, {"count": "abc"})
+
+    assert exc_info.value.tool_name == "fake_tool"
+    assert "count" in str(exc_info.value)
 
 
 def test_normalize_tool_args_wraps_scalar_for_array_targets():

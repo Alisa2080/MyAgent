@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 from typing import Annotated
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Mapping
 from typing import Any
 
-from langchain.agents.middleware import AgentMiddleware, ToolCallLimitMiddleware, ToolCallRequest
-from langchain_core.messages import ToolMessage
+from langchain.agents.middleware import AgentMiddleware, ToolCallLimitMiddleware
+from langchain_core.messages import AIMessage, ToolMessage
 from langgraph.channels.untracked_value import UntrackedValue
 from langchain.agents.middleware.types import AgentState, PrivateStateAttr
+from typing_extensions import NotRequired
 
 from agent_core.tool_catalog import ToolSpec
 from agent_tools.shared.tool_result import tool_failure
@@ -76,7 +77,9 @@ def build_tool_call_limit_middleware(
 
 
 class ConsecutiveReadOnlyToolLimitState(AgentState):
-    consecutive_read_only_tool_count: Annotated[int, UntrackedValue, PrivateStateAttr]
+    consecutive_read_only_tool_count: NotRequired[
+        Annotated[int, UntrackedValue, PrivateStateAttr]
+    ]
 
 
 class ConsecutiveReadOnlyToolLimitMiddleware(AgentMiddleware):
@@ -94,39 +97,45 @@ class ConsecutiveReadOnlyToolLimitMiddleware(AgentMiddleware):
         self.max_consecutive_read_only = int(max_consecutive_read_only)
         self.include_unknown_as_read_only = include_unknown_as_read_only
 
-    def wrap_tool_call(
+    def after_model(
         self,
-        request: ToolCallRequest,
-        handler: Callable[[ToolCallRequest], ToolMessage],
-    ) -> ToolMessage:
-        blocked = self._before_tool_call(request)
-        if blocked is not None:
-            return blocked
-        return handler(request)
-
-    async def awrap_tool_call(
-        self,
-        request: ToolCallRequest,
-        handler: Callable[[ToolCallRequest], Awaitable[ToolMessage]],
-    ) -> ToolMessage:
-        blocked = self._before_tool_call(request)
-        if blocked is not None:
-            return blocked
-        return await handler(request)
-
-    def _before_tool_call(self, request: ToolCallRequest) -> ToolMessage | None:
-        tool_name = _request_tool_name(request)
-        state = getattr(request, "state", None)
-        if not isinstance(state, dict):
-            state = {}
-        if self._is_read_only(tool_name):
-            count = int(state.get(READ_ONLY_COUNT_STATE_KEY, 0) or 0) + 1
-            state[READ_ONLY_COUNT_STATE_KEY] = count
-            if count > self.max_consecutive_read_only:
-                return _read_loop_failure(request, count, self.max_consecutive_read_only)
+        state: ConsecutiveReadOnlyToolLimitState,
+        runtime: Any,
+    ) -> dict[str, Any] | None:
+        messages = state.get("messages", [])
+        last_ai_message = _last_ai_message(messages)
+        if last_ai_message is None or not last_ai_message.tool_calls:
             return None
-        state[READ_ONLY_COUNT_STATE_KEY] = 0
-        return None
+
+        count = int(state.get(READ_ONLY_COUNT_STATE_KEY, 0) or 0)
+        blocked_messages: list[ToolMessage] = []
+
+        for tool_call in last_ai_message.tool_calls:
+            tool_name = str(tool_call.get("name") or "")
+            if self._is_read_only(tool_name):
+                count += 1
+                if count > self.max_consecutive_read_only:
+                    blocked_messages.append(
+                        _read_loop_failure(
+                            tool_call,
+                            count,
+                            self.max_consecutive_read_only,
+                        )
+                    )
+                continue
+            count = 0
+
+        result: dict[str, Any] = {READ_ONLY_COUNT_STATE_KEY: count}
+        if blocked_messages:
+            result["messages"] = blocked_messages
+        return result
+
+    async def aafter_model(
+        self,
+        state: ConsecutiveReadOnlyToolLimitState,
+        runtime: Any,
+    ) -> dict[str, Any] | None:
+        return self.after_model(state, runtime)
 
     def _is_read_only(self, tool_name: str) -> bool:
         spec = self.specs.get(tool_name)
@@ -135,17 +144,16 @@ class ConsecutiveReadOnlyToolLimitMiddleware(AgentMiddleware):
         return bool(spec.read_only)
 
 
-def _request_tool_name(request: ToolCallRequest) -> str:
-    tool_call = getattr(request, "tool_call", None) or {}
-    if isinstance(tool_call, dict) and tool_call.get("name"):
-        return str(tool_call["name"])
-    tool = getattr(request, "tool", None)
-    return str(getattr(tool, "name", "") or "")
+def _last_ai_message(messages: list[Any]) -> AIMessage | None:
+    for message in reversed(messages):
+        if isinstance(message, AIMessage):
+            return message
+    return None
 
 
-def _read_loop_failure(request: ToolCallRequest, count: int, limit: int) -> ToolMessage:
-    tool_name = _request_tool_name(request)
-    runtime = getattr(request, "runtime", None)
+def _read_loop_failure(tool_call: dict[str, Any], count: int, limit: int) -> ToolMessage:
+    tool_name = str(tool_call.get("name") or "")
+    runtime = _RuntimeToolCallProxy(str(tool_call.get("id") or ""))
     return tool_failure(
         tool_name,
         (
@@ -156,3 +164,8 @@ def _read_loop_failure(request: ToolCallRequest, count: int, limit: int) -> Tool
         code=READ_LOOP_LIMIT_ERROR_CODE,
         runtime=runtime,
     )
+
+
+class _RuntimeToolCallProxy:
+    def __init__(self, tool_call_id: str) -> None:
+        self.tool_call_id = tool_call_id
