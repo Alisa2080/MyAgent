@@ -62,10 +62,6 @@ def test_build_agent_wires_policy_pre_hook_into_toolbus(monkeypatch):
         def __init__(self, **kwargs):
             self.kwargs = kwargs
 
-    class FakePolicy:
-        def __init__(self, **kwargs):
-            self.kwargs = kwargs
-
     factory_calls = []
 
     def sentinel_hook(*args, **kwargs):
@@ -76,7 +72,6 @@ def test_build_agent_wires_policy_pre_hook_into_toolbus(monkeypatch):
         return sentinel_hook
 
     monkeypatch.setattr(builders, "ToolBusMiddleware", FakeToolBus)
-    monkeypatch.setattr(builders, "PolicyToolMiddleware", FakePolicy, raising=False)
     monkeypatch.setattr(
         builders,
         "build_policy_pre_hook",
@@ -92,11 +87,10 @@ def test_build_agent_wires_policy_pre_hook_into_toolbus(monkeypatch):
 
     agent_config = builders.build_agent()
     middleware = agent_config["middleware"]
+    assert not any(type(item).__name__ == "Policy" "ToolMiddleware" for item in middleware)
     tool_bus_items = [item for item in middleware if isinstance(item, FakeToolBus)]
-    policy_items = [item for item in middleware if isinstance(item, FakePolicy)]
 
     assert len(tool_bus_items) == 1
-    assert policy_items == []
     assert tool_bus_items[0].kwargs["specs"]
     assert "terminal" in tool_bus_items[0].kwargs["specs"]
     hooks = tool_bus_items[0].kwargs["hooks"]
