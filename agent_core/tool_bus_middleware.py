@@ -80,7 +80,8 @@ class ToolBusMiddleware(AgentMiddleware):
             bus_request, call_request = self._prepare_request(request)
             blocked = self._run_pre_hooks(bus_request)
             if blocked is not None:
-                return blocked
+                duration_ms = int((time.monotonic() - started) * 1000)
+                return self._finalize_blocked(bus_request, blocked, duration_ms)
 
             error = None
             try:
@@ -113,7 +114,8 @@ class ToolBusMiddleware(AgentMiddleware):
             bus_request, call_request = self._prepare_request(request)
             blocked = self._run_pre_hooks(bus_request)
             if blocked is not None:
-                return blocked
+                duration_ms = int((time.monotonic() - started) * 1000)
+                return self._finalize_blocked(bus_request, blocked, duration_ms)
 
             error = None
             try:
@@ -172,6 +174,25 @@ class ToolBusMiddleware(AgentMiddleware):
                 return result
         return None
 
+    def _run_post_hooks(self, bus_request: ToolBusRequest, bus_result: ToolBusResult) -> None:
+        for hook in self.hooks.post_tool_call:
+            try:
+                hook(bus_request, bus_result)
+            except Exception:
+                logger.warning("ToolBus post hook failed", exc_info=True)
+
+    def _finalize_blocked(
+        self,
+        bus_request: ToolBusRequest,
+        result: ToolMessage,
+        duration_ms: int,
+    ) -> ToolMessage:
+        self._run_post_hooks(
+            bus_request,
+            ToolBusResult(result=result, duration_ms=duration_ms, error=None),
+        )
+        return result
+
     def _finalize(
         self,
         bus_request: ToolBusRequest,
@@ -180,11 +201,7 @@ class ToolBusMiddleware(AgentMiddleware):
         error: Exception | None,
     ) -> ToolResponse:
         bus_result = ToolBusResult(result=result, duration_ms=duration_ms, error=error)
-        for hook in self.hooks.post_tool_call:
-            try:
-                hook(bus_request, bus_result)
-            except Exception:
-                logger.warning("ToolBus post hook failed", exc_info=True)
+        self._run_post_hooks(bus_request, bus_result)
 
         if not isinstance(result, ToolMessage):
             return result
