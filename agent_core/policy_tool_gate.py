@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from langchain.agents.middleware import ToolCallRequest
 from langchain_core.messages import ToolMessage
@@ -11,6 +11,9 @@ from agent_core.permissions.approvals import consume_approval, make_args_digest
 from agent_core.permissions.tool_grants import ToolPolicyGrant, record_tool_policy_grant
 from agent_core.session_context import RuntimeContext
 from agent_tools.shared.tool_result import tool_failure
+
+if TYPE_CHECKING:
+    from agent_core.tool_bus_middleware import PreToolHook, ToolBusRequest
 
 
 @dataclass(frozen=True)
@@ -118,3 +121,21 @@ def run_policy_tool_gate(
         )
     )
     return None
+
+
+def build_policy_pre_hook(*, policy_tools: set[str]) -> "PreToolHook":
+    configured_policy_tools = set(policy_tools)
+
+    def hook(bus_request: "ToolBusRequest") -> ToolMessage | None:
+        return run_policy_tool_gate(
+            PolicyToolGateRequest(
+                tool_name=bus_request.tool_name,
+                args=bus_request.args,
+                tool_call_id=bus_request.tool_call_id,
+                runtime=bus_request.runtime,
+                request=bus_request.request,
+            ),
+            policy_tools=configured_policy_tools,
+        )
+
+    return hook
