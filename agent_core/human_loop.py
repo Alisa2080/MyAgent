@@ -10,7 +10,7 @@ from agent_core.permissions import tool_policy
 from agent_core.permissions.approvals import ApprovalRecord, make_args_digest, record_approval
 from agent_core.permissions.audit import audit_policy_event
 from agent_core.permissions.profiles import resolve_runtime_profile
-from agent_core.policy_tool_middleware import POLICY_ARG_BUILDERS
+from agent_core.policy_tool_gate import POLICY_ARG_BUILDERS
 from agent_core.session_context import runtime_task_id_from_runtime
 
 
@@ -23,7 +23,8 @@ class FlexibleHumanInTheLoopMiddleware(HumanInTheLoopMiddleware):
     - dynamic selection of policy-controlled tool calls that need human review
     - approval and audit recording after a human approves a policy review
 
-    Policy enforcement (allow/deny/review) at execution time is handled by PolicyToolMiddleware.
+    Policy enforcement (allow/deny/review) at execution time is handled by the
+    ToolBus policy pre-hook.
     """
 
     OFFICIAL_AFTER_MODEL_BLOCKER = (
