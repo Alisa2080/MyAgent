@@ -351,34 +351,29 @@ def test_policy_tool_middleware_async_ignores_unsupported_tool():
     asyncio.run(run())
 
 
-def test_build_agent_registers_policy_tool_middleware(monkeypatch):
-    from agent_core import builders
-    from agent_core.policy_tool_middleware import PolicyToolMiddleware
+def test_policy_tool_middleware_remains_available_as_compatibility_wrapper():
+    middleware = PolicyToolMiddleware(policy_tools={"terminal"})
+    request = _request("read_file", {"path": "README.md"}, tool_call_id="call-compat-read")
+    calls = []
 
-    captured = {}
-
-    class FakeToolRetryMiddleware:
-        def __init__(self, **kwargs):
-            self.kwargs = kwargs
-
-    monkeypatch.setattr(builders, "install_process_signal_handlers", lambda: None)
-    monkeypatch.setattr(builders.memory_store, "load_from_disk", lambda: None)
-    monkeypatch.setattr(builders, "recover_terminal_processes", lambda: None)
-    monkeypatch.setattr(builders.memory_store, "format_for_system_prompt", lambda name: "")
-    monkeypatch.setattr(builders, "load_project_instruction_blocks", lambda workdir: [])
-    monkeypatch.setattr(builders, "build_tool_call_limit_middleware", lambda include_task=True: [])
-    monkeypatch.setattr(builders, "ToolRetryMiddleware", FakeToolRetryMiddleware)
-    monkeypatch.setattr(builders, "create_agent", lambda **kwargs: captured.update(kwargs) or "agent")
-
-    assert builders.build_agent() == "agent"
-
-    middleware = captured["middleware"]
-    policy_index = next(
-        i for i, item in enumerate(middleware) if isinstance(item, PolicyToolMiddleware)
-    )
-    tool_retry_index = next(
-        i for i, item in enumerate(middleware) if isinstance(item, builders.ToolRetryMiddleware)
+    result = middleware.wrap_tool_call(
+        request,
+        lambda received: calls.append(received)
+        or ToolMessage(
+            content="File read.",
+            name="read_file",
+            tool_call_id="call-compat-read",
+            status="success",
+            artifact={
+                "ok": True,
+                "tool": "read_file",
+                "message": "File read.",
+                "data": None,
+                "error": None,
+                "meta": {},
+            },
+        ),
     )
 
-    assert policy_index < tool_retry_index
-    assert middleware[policy_index].policy_tools == builders.POLICY_REVIEW_TOOLS
+    assert result.artifact["ok"] is True
+    assert calls == [request]
