@@ -53,3 +53,30 @@ def test_build_agent_uses_tool_catalog_build_tools(monkeypatch):
     ]
     assert agent_config["tools"] == [fake_tool]
     assert agent_config["checkpointer"] == "cp"
+
+
+def test_build_agent_includes_tool_bus_before_policy(monkeypatch):
+    import agent_core.builders as builders
+
+    class FakeToolBus:
+        pass
+
+    class FakePolicy:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+    monkeypatch.setattr(builders, "ToolBusMiddleware", FakeToolBus)
+    monkeypatch.setattr(builders, "PolicyToolMiddleware", FakePolicy)
+    monkeypatch.setattr(builders.memory_store, "load_from_disk", lambda: None)
+    monkeypatch.setattr(builders.memory_store, "format_for_system_prompt", lambda target: "")
+    monkeypatch.setattr(builders, "install_process_signal_handlers", lambda: None)
+    monkeypatch.setattr(builders, "recover_terminal_processes", lambda: None)
+    monkeypatch.setattr(builders, "load_project_instruction_blocks", lambda workdir: [])
+    monkeypatch.setattr(builders, "create_agent", lambda **kwargs: kwargs)
+
+    agent_config = builders.build_agent()
+    middleware = agent_config["middleware"]
+    tool_bus_index = next(i for i, item in enumerate(middleware) if isinstance(item, FakeToolBus))
+    policy_index = next(i for i, item in enumerate(middleware) if isinstance(item, FakePolicy))
+
+    assert tool_bus_index < policy_index

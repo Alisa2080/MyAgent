@@ -14,6 +14,7 @@ from agent_core.memory import memory_store
 from agent_core.model_config import MAIN_MODEL, SMALL_MODEL
 from agent_core.policy_tool_middleware import PolicyToolMiddleware
 from agent_core.process_lifecycle import install_process_signal_handlers
+from agent_core.tool_bus_middleware import ToolBusMiddleware
 from agent_core.system_prompt import (
     SystemPromptBuilder,
     build_prompt_context,
@@ -102,6 +103,7 @@ def build_agent(*, include_cron_tools: bool = False, checkpointer=None):
                 policy_tools=POLICY_REVIEW_TOOLS,
                 description_prefix="Approval required before tool execution",
             ),
+            ToolBusMiddleware(),
             PolicyToolMiddleware(policy_tools=POLICY_REVIEW_TOOLS),
             # ModelCallLimitMiddleware(
             #     thread_limit=20,
