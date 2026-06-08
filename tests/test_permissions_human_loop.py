@@ -701,7 +701,7 @@ def test_async_behavior_matches_sync(monkeypatch):
     async def test_async():
         return await middleware.aafter_model({"messages": [message]}, _runtime())
 
-    async_result = asyncio.get_event_loop().run_until_complete(test_async())
+    async_result = asyncio.run(test_async())
 
     assert sync_result is not None
     assert async_result is not None
