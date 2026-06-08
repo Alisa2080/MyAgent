@@ -58,13 +58,25 @@ def _success_message(tool_name: str, tool_call_id: str) -> ToolMessage:
     )
 
 
-def _run_nested_policy_toolbus(request, handler, *, post_calls: list | None = None):
-    from agent_core.policy_tool_middleware import PolicyToolMiddleware
+def _run_policy_toolbus(
+    request,
+    handler,
+    *,
+    post_calls: list | None = None,
+    transform_calls: list | None = None,
+    max_result_size_chars: int | None = None,
+):
+    from agent_core.policy_tool_gate import build_policy_pre_hook
     from agent_core.tool_bus_middleware import ToolBusHooks, ToolBusMiddleware
+    from agent_core.tool_catalog import ToolSpec
 
-    policy = PolicyToolMiddleware(policy_tools={"terminal", "process", "write_file", "patch"})
-
-    hooks = ToolBusHooks()
+    hooks = ToolBusHooks(
+        pre_tool_call=[
+            build_policy_pre_hook(
+                policy_tools={"terminal", "process", "write_file", "patch"},
+            )
+        ]
+    )
     if post_calls is not None:
         hooks.post_tool_call.append(
             lambda bus_request, bus_result: post_calls.append(
@@ -77,12 +89,28 @@ def _run_nested_policy_toolbus(request, handler, *, post_calls: list | None = No
                 )
             )
         )
+    if transform_calls is not None:
+        hooks.transform_tool_result.append(
+            lambda bus_request, result: transform_calls.append(result)
+            or _success_message(bus_request.tool_name, bus_request.tool_call_id)
+        )
 
-    bus = ToolBusMiddleware(hooks=hooks)
-    return bus.wrap_tool_call(request, lambda call_request: policy.wrap_tool_call(call_request, handler))
+    specs = None
+    if max_result_size_chars is not None:
+        specs = {
+            request.tool_call["name"]: ToolSpec(
+                name=request.tool_call["name"],
+                toolset="test",
+                tool=request.tool,
+                max_result_size_chars=max_result_size_chars,
+            )
+        }
+
+    bus = ToolBusMiddleware(hooks=hooks, specs=specs)
+    return bus.wrap_tool_call(request, handler)
 
 
-def test_nested_toolbus_policy_allows_handler_and_records_grant():
+def test_toolbus_policy_pre_hook_allows_handler_and_records_grant():
     from agent_core.permissions.approvals import make_args_digest
     from agent_core.permissions.tool_grants import consume_tool_policy_grant
     from agent_core.permissions.tool_policy import canonical_tool_args
@@ -91,7 +119,7 @@ def test_nested_toolbus_policy_allows_handler_and_records_grant():
     calls = []
     post_calls = []
 
-    result = _run_nested_policy_toolbus(
+    result = _run_policy_toolbus(
         request,
         lambda received: calls.append(received) or _success_message("terminal", "call-allow"),
         post_calls=post_calls,
@@ -113,15 +141,18 @@ def test_nested_toolbus_policy_allows_handler_and_records_grant():
     assert grant.risk_tags == ()
 
 
-def test_nested_toolbus_policy_deny_blocks_handler_and_posts_result():
+def test_toolbus_policy_pre_hook_deny_blocks_handler_and_posts_result():
     request = _request("terminal", {"command": "rm -rf /"}, tool_call_id="call-deny")
     calls = []
     post_calls = []
+    transform_calls = []
 
-    result = _run_nested_policy_toolbus(
+    result = _run_policy_toolbus(
         request,
         lambda received: calls.append(received) or _success_message("terminal", "call-deny"),
         post_calls=post_calls,
+        transform_calls=transform_calls,
+        max_result_size_chars=10,
     )
 
     assert calls == []
@@ -130,9 +161,11 @@ def test_nested_toolbus_policy_deny_blocks_handler_and_posts_result():
     assert result.artifact["tool"] == "terminal"
     assert result.artifact["error"]["code"] == "policy_denied"
     assert post_calls == [("terminal", "error", "policy_denied")]
+    assert transform_calls == []
+    assert "truncated" not in result.content
 
 
-def test_nested_toolbus_policy_review_without_approval_blocks_handler():
+def test_toolbus_policy_pre_hook_review_without_approval_blocks_handler():
     request = _request(
         "terminal",
         {"command": "touch approval-required.txt"},
@@ -140,11 +173,14 @@ def test_nested_toolbus_policy_review_without_approval_blocks_handler():
     )
     calls = []
     post_calls = []
+    transform_calls = []
 
-    result = _run_nested_policy_toolbus(
+    result = _run_policy_toolbus(
         request,
         lambda received: calls.append(received) or _success_message("terminal", "call-review-missing"),
         post_calls=post_calls,
+        transform_calls=transform_calls,
+        max_result_size_chars=10,
     )
 
     assert calls == []
@@ -153,9 +189,11 @@ def test_nested_toolbus_policy_review_without_approval_blocks_handler():
     assert result.artifact["tool"] == "terminal"
     assert result.artifact["error"]["code"] == "approval_required"
     assert post_calls == [("terminal", "error", "approval_required")]
+    assert transform_calls == []
+    assert "truncated" not in result.content
 
 
-def test_nested_toolbus_policy_consumes_approval_and_records_grant():
+def test_toolbus_policy_pre_hook_consumes_approval_and_records_grant():
     from agent_core.permissions.approvals import ApprovalRecord, consume_approval, make_args_digest, record_approval
     from agent_core.permissions.tool_grants import consume_tool_policy_grant
     from agent_core.permissions.tool_policy import canonical_tool_args
@@ -183,7 +221,7 @@ def test_nested_toolbus_policy_consumes_approval_and_records_grant():
     )
     calls = []
 
-    result = _run_nested_policy_toolbus(
+    result = _run_policy_toolbus(
         request,
         lambda received: calls.append(received) or _success_message("terminal", tool_call_id),
     )
