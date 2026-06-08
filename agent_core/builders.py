@@ -23,7 +23,10 @@ from agent_core.system_prompt import (
 )
 from agent_core.terminal_lifecycle import recover_terminal_processes
 from agent_core.tool_catalog import build_tools, get_tool_specs
-from agent_core.tool_limits import build_tool_call_limit_middleware
+from agent_core.tool_limits import (
+    ConsecutiveReadOnlyToolLimitMiddleware,
+    build_tool_call_limit_middleware,
+)
 from agent_core.workspace import WORKDIR
 
 
@@ -102,6 +105,7 @@ def build_agent(*, include_cron_tools: bool = False, checkpointer=None):
                 tool_description=TODO_TOOL_DESCRIPTION,
             ),
             *build_tool_call_limit_middleware(include_task=True),
+            ConsecutiveReadOnlyToolLimitMiddleware(specs=tool_specs),
             FlexibleHumanInTheLoopMiddleware(
                 interrupt_on=HUMAN_INTERRUPT_ON,
                 policy_tools=POLICY_REVIEW_TOOLS,

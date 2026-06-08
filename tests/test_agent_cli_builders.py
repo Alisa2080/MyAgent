@@ -83,3 +83,54 @@ def test_build_agent_includes_tool_bus_before_policy(monkeypatch):
     assert tool_bus_index < policy_index
     assert middleware[tool_bus_index].kwargs["specs"]
     assert "terminal" in middleware[tool_bus_index].kwargs["specs"]
+
+
+def test_build_agent_wires_read_only_before_toolbus_and_policy(monkeypatch):
+    import agent_core.builders as builders
+
+    class FakeReadOnlyLimit:
+        def __init__(self, *, specs):
+            self.specs = specs
+
+    class FakeToolBus:
+        def __init__(self, *, specs):
+            self.specs = specs
+
+    class FakePolicy:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+    captured = {}
+
+    def fake_create_agent(**kwargs):
+        captured.update(kwargs)
+        return kwargs
+
+    monkeypatch.setattr(builders, "create_agent", fake_create_agent)
+    monkeypatch.setattr(builders, "ConsecutiveReadOnlyToolLimitMiddleware", FakeReadOnlyLimit)
+    monkeypatch.setattr(builders, "ToolBusMiddleware", FakeToolBus)
+    monkeypatch.setattr(builders, "PolicyToolMiddleware", FakePolicy)
+    monkeypatch.setattr(builders.memory_store, "load_from_disk", lambda: None)
+    monkeypatch.setattr(builders.memory_store, "format_for_system_prompt", lambda target: "")
+    monkeypatch.setattr(builders, "install_process_signal_handlers", lambda: None)
+    monkeypatch.setattr(builders, "recover_terminal_processes", lambda: None)
+    monkeypatch.setattr(builders, "load_project_instruction_blocks", lambda workdir: [])
+
+    builders.build_agent()
+
+    middleware = captured["middleware"]
+    read_only_index = next(
+        index for index, item in enumerate(middleware)
+        if isinstance(item, FakeReadOnlyLimit)
+    )
+    toolbus_index = next(
+        index for index, item in enumerate(middleware)
+        if isinstance(item, FakeToolBus)
+    )
+    policy_index = next(
+        index for index, item in enumerate(middleware)
+        if isinstance(item, FakePolicy)
+    )
+
+    assert read_only_index < toolbus_index < policy_index
+    assert middleware[read_only_index].specs is middleware[toolbus_index].specs
