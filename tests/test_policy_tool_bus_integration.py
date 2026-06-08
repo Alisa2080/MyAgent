@@ -156,7 +156,7 @@ def test_nested_toolbus_policy_review_without_approval_blocks_handler():
 
 
 def test_nested_toolbus_policy_consumes_approval_and_records_grant():
-    from agent_core.permissions.approvals import ApprovalRecord, make_args_digest, record_approval
+    from agent_core.permissions.approvals import ApprovalRecord, consume_approval, make_args_digest, record_approval
     from agent_core.permissions.tool_grants import consume_tool_policy_grant
     from agent_core.permissions.tool_policy import canonical_tool_args
 
@@ -190,6 +190,16 @@ def test_nested_toolbus_policy_consumes_approval_and_records_grant():
 
     assert result.artifact["ok"] is True
     assert calls == [request]
+    assert (
+        consume_approval(
+            task_id=runtime_task_id_from_thread_id(thread_id),
+            tool_call_id=tool_call_id,
+            tool_name="terminal",
+            args=args,
+            required_risk_tags=("network_access",),
+        )
+        is None
+    )
 
     grant = consume_tool_policy_grant(
         task_id=runtime_task_id_from_thread_id(thread_id),
