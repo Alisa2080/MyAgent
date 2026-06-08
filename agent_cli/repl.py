@@ -478,7 +478,8 @@ class AgentCLI:
                 return 0
             except KeyboardInterrupt:
                 print()
-                continue
+                self._stop_active_background_tasks_on_exit()
+                return 130
             if not text:
                 continue
             try:

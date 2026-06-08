@@ -222,6 +222,166 @@ def test_fresh_submit_message_creates_session_after_success_with_runner_thread_i
     assert store.touched == [("s1", {"last_message_preview": "hello"})]
 
 
+def test_run_repl_ctrl_c_exits_instead_of_looping(capsys):
+    class FakePrompt:
+        def __init__(self):
+            self.calls = 0
+
+        def prompt(self, prompt_text):
+            self.calls += 1
+            raise KeyboardInterrupt
+
+    prompt = FakePrompt()
+    cli = AgentCLI(
+        session_store=FakeStore(),
+        checkpointer=None,
+        agent_factory=lambda checkpointer: "agent",
+        runner=lambda agent, input_data, config: {"messages": []},
+        workdir="/repo",
+        model_name=None,
+        prompt_session=prompt,
+        show_banner=False,
+    )
+
+    assert cli.run_repl() == 130
+    assert prompt.calls == 1
+    captured = capsys.readouterr()
+    assert captured.out.endswith("\n\n")
+    assert "Type /help for commands. Ctrl-D exits." in captured.out
+    assert captured.err == ""
+
+
+def test_run_repl_ctrl_c_stops_background_tasks_and_returns_130(capsys):
+    class Registry(FakeBackgroundRegistry):
+        def __init__(self):
+            super().__init__()
+            self.events = []
+
+        def list_tasks(self, active_only=False, limit=20):
+            self.list_active_only_calls.append(active_only)
+            self.list_limit_calls.append(limit)
+            return [
+                SimpleNamespace(
+                    task_id="bg_12345678",
+                    session_id="session-bg",
+                    title="Task",
+                    status="running",
+                    pending_steer_count=0,
+                    last_result_preview=None,
+                    last_error=None,
+                    prompt_preview="Task",
+                    updated_at="now",
+                    created_at="now",
+                    started_at=None,
+                    finished_at=None,
+                    cancel_requested=False,
+                )
+            ]
+
+        def stop(self, task_id):
+            self.events.append(("stop", task_id))
+            self.stopped.append(task_id)
+            return SimpleNamespace(task_id=task_id, status="stopping")
+
+        def join(self, task_id, timeout=None):
+            self.events.append(("join", task_id, timeout))
+            self.joined.append((task_id, timeout))
+
+    class FakePrompt:
+        def prompt(self, prompt_text):
+            raise KeyboardInterrupt
+
+    registry = Registry()
+    cli = AgentCLI(
+        session_store=FakeStore(),
+        checkpointer=None,
+        agent_factory=lambda checkpointer: "agent",
+        runner=lambda agent, input_data, config: {"messages": []},
+        workdir="/repo",
+        model_name=None,
+        prompt_session=FakePrompt(),
+        background_registry=registry,
+        show_banner=False,
+    )
+
+    assert cli.run_repl() == 130
+    captured = capsys.readouterr()
+    assert registry.events == [
+        ("stop", "bg_12345678"),
+        ("join", "bg_12345678", 0.5),
+    ]
+    assert registry.stopped == ["bg_12345678"]
+    assert registry.joined == [("bg_12345678", 0.5)]
+    assert registry.list_limit_calls == [None]
+    assert "Stop requested: bg_12345678" in captured.out
+    assert "Inspect background task history with /tasks all" in captured.out
+
+
+def test_run_repl_ctrl_c_finalizes_stopping_background_tasks(capsys):
+    active_record = SimpleNamespace(
+        task_id="bg_12345678",
+        session_id="session-bg",
+        title="Task",
+        status="stopping",
+        pending_steer_count=0,
+        last_result_preview=None,
+        last_error=None,
+        prompt_preview="Task",
+        updated_at="now",
+        created_at="now",
+        started_at=None,
+        finished_at=None,
+        cancel_requested=False,
+    )
+
+    class Store:
+        def get_task(self, task_id):
+            return active_record
+
+    class Registry(FakeBackgroundRegistry):
+        def __init__(self):
+            super().__init__()
+            self.store = Store()
+            self.finalized = []
+
+        def list_tasks(self, active_only=False, limit=20):
+            return [active_record]
+
+        def stop(self, task_id):
+            self.stopped.append(task_id)
+            return active_record
+
+        def finalize_stopping(self, task_id):
+            self.finalized.append(task_id)
+            active_record.status = "stopped"
+            return active_record
+
+    class FakePrompt:
+        def prompt(self, prompt_text):
+            raise KeyboardInterrupt
+
+    registry = Registry()
+    cli = AgentCLI(
+        session_store=FakeStore(),
+        checkpointer=None,
+        agent_factory=lambda checkpointer: "agent",
+        runner=lambda agent, input_data, config: {"messages": []},
+        workdir="/repo",
+        model_name=None,
+        prompt_session=FakePrompt(),
+        background_registry=registry,
+        show_banner=False,
+    )
+
+    assert cli.run_repl() == 130
+    captured = capsys.readouterr()
+    assert registry.stopped == ["bg_12345678"]
+    assert registry.finalized == ["bg_12345678"]
+    assert active_record.status == "stopped"
+    assert "Stop requested: bg_12345678" in captured.out
+    assert "Stopped after join: bg_12345678" in captured.out
+
+
 def test_run_repl_prints_error_and_continues_after_message_failure(capsys):
     entries = iter(["boom", EOFError])
 
