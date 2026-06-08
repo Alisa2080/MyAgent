@@ -115,13 +115,14 @@ def test_agent_core_uses_public_tool_facades_for_runtime_registration():
 
     delegation_source = Path("agent_core/delegation.py").read_text()
     builders_source = Path("agent_core/builders.py").read_text()
+    catalog_source = Path("agent_core/tool_catalog.py").read_text()
     system_prompt_source = Path("agent_core/system_prompt.py").read_text()
 
     assert "from agent_tools.public.files import" in delegation_source
     assert "from agent_tools.public.terminal import" in delegation_source
     assert "from agent_tools.public.web import" in delegation_source
     assert "from agent_tools.public.skills import" in delegation_source
-    assert "from agent_tools.public.memory import" in builders_source
+    assert "from agent_tools.public.memory import" in catalog_source
     assert "from agent_tools.public.skills import build_skills_system_prompt" in system_prompt_source
 
 

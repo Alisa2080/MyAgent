@@ -23,7 +23,7 @@ def test_agent_tools_has_no_editor_copy_python_files():
 
 def test_agent_core_runtime_imports_preferred_public_facades():
     delegation_source = Path("agent_core/delegation.py").read_text()
-    builders_source = Path("agent_core/builders.py").read_text()
+    catalog_source = Path("agent_core/tool_catalog.py").read_text()
 
     assert "from agent_tools.public." in delegation_source
-    assert "from agent_tools.public.memory import memory_manage" in builders_source
+    assert "from agent_tools.public.memory import memory_manage" in catalog_source
