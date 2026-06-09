@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
+
 
 def test_observer_round_trips_through_config_and_runtime():
     from agent_core.progress import (
@@ -62,5 +64,24 @@ def test_mark_streamed_result_handles_non_dict_values():
 
     result = mark_streamed_output("hello")
 
-    assert result == {"final_response": "hello", "__agent_cli_streamed_output__": True}
+    assert result == {"final_response": "hello", "__agent_streamed_output__": True}
     assert has_streamed_output(result) is True
+
+
+def test_tool_event_args_are_copied_and_immutable():
+    from agent_core.progress import ToolCompleteEvent, ToolErrorEvent, ToolStartEvent
+
+    args = {"command": "rg progress"}
+
+    events = [
+        ToolStartEvent("terminal", args, "call-1"),
+        ToolCompleteEvent("terminal", args, "done", 12, "call-1"),
+        ToolErrorEvent("terminal", args, "failed", 13, "render broke", "call-1"),
+    ]
+
+    args["command"] = "mutated"
+
+    for event in events:
+        assert event.args["command"] == "rg progress"
+        with pytest.raises(TypeError):
+            event.args["command"] = "mutated again"

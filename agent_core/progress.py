@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, replace
-from typing import Any, Literal, Protocol, runtime_checkable
+from types import MappingProxyType
+from typing import Any, Literal, Mapping, Protocol, runtime_checkable
 
 
 logger = logging.getLogger(__name__)
 
 PROGRESS_OBSERVER_CONFIG_KEY = "progress_observer"
-STREAMED_OUTPUT_MARKER = "__agent_cli_streamed_output__"
+STREAMED_OUTPUT_MARKER = "__agent_streamed_output__"
 
 
 @runtime_checkable
@@ -33,16 +34,19 @@ class TokenDeltaEvent:
 @dataclass(frozen=True)
 class ToolStartEvent:
     tool_name: str
-    args: dict[str, Any]
+    args: Mapping[str, Any]
     tool_call_id: str = ""
     thread_id: str | None = None
     kind: Literal["tool_start"] = "tool_start"
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "args", MappingProxyType(dict(self.args)))
 
 
 @dataclass(frozen=True)
 class ToolCompleteEvent:
     tool_name: str
-    args: dict[str, Any]
+    args: Mapping[str, Any]
     result: Any
     duration_ms: int
     tool_call_id: str = ""
@@ -50,17 +54,23 @@ class ToolCompleteEvent:
     blocked: bool = False
     kind: Literal["tool_complete"] = "tool_complete"
 
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "args", MappingProxyType(dict(self.args)))
+
 
 @dataclass(frozen=True)
 class ToolErrorEvent:
     tool_name: str
-    args: dict[str, Any]
+    args: Mapping[str, Any]
     result: Any
     duration_ms: int
     error_message: str
     tool_call_id: str = ""
     thread_id: str | None = None
     kind: Literal["tool_error"] = "tool_error"
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "args", MappingProxyType(dict(self.args)))
 
 
 @dataclass(frozen=True)
