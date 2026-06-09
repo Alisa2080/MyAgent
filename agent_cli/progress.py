@@ -138,7 +138,7 @@ def summarize_tool_result(
     max_chars: int = DEFAULT_MAX_SUMMARY_CHARS,
 ) -> str:
     if tool_name in {"write_file", "patch"}:
-        return _write_summary(args, result, max_chars)
+        return _write_summary(tool_name, args, max_chars)
     if tool_name == "terminal":
         return _terminal_summary(result, max_chars)
     if tool_name == "process":
@@ -148,12 +148,11 @@ def summarize_tool_result(
     return ""
 
 
-def _write_summary(args: Mapping[str, Any], result: Any, max_chars: int) -> str:
+def _write_summary(tool_name: str, args: Mapping[str, Any], max_chars: int) -> str:
     path = _path_arg(args)
     if path:
         return _truncate(f"updated {path}", max_chars)
-    text = _first_informative_line(_result_text(result), max_chars)
-    return text or "updated"
+    return f"{tool_name.removesuffix('_file')} content hidden"
 
 
 def _path_arg(args: Mapping[str, Any]) -> str:

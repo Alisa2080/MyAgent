@@ -110,3 +110,31 @@ def test_terminal_observer_hides_patch_content_on_start():
     output = stream.getvalue()
     assert "secret patch body" not in output
     assert "patch content hidden" in output
+
+
+def test_terminal_observer_hides_patch_result_body_on_complete():
+    from agent_cli.progress import TerminalProgressObserver
+    from agent_core.progress import ToolCompleteEvent
+
+    stream = io.StringIO()
+    observer = TerminalProgressObserver(stream=stream)
+
+    observer.emit(ToolCompleteEvent("patch", {"mode": "patch"}, "SECRET_RESULT_BODY", 1, "call"))
+
+    output = stream.getvalue()
+    assert "SECRET_RESULT_BODY" not in output
+    assert "patch content hidden" in output
+
+
+def test_terminal_observer_hides_write_file_result_body_without_path():
+    from agent_cli.progress import TerminalProgressObserver
+    from agent_core.progress import ToolCompleteEvent
+
+    stream = io.StringIO()
+    observer = TerminalProgressObserver(stream=stream)
+
+    observer.emit(ToolCompleteEvent("write_file", {"mode": "write"}, "SECRET_WRITE_BODY", 1, "call"))
+
+    output = stream.getvalue()
+    assert "SECRET_WRITE_BODY" not in output
+    assert "write content hidden" in output
