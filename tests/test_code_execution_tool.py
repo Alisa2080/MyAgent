@@ -238,3 +238,76 @@ def test_visible_tools_include_web_only_when_requested():
         runtime_profile="dev",
         include_web=True,
     )
+
+
+def test_execute_code_terminal_blocks_background_parameters():
+    from agent_tools.public.code_execution import execute_code_impl
+
+    code = (
+        "from hermes_tools import terminal\n"
+        "result = terminal('python -c \"print(123)\"')\n"
+        "print(result['tool'])\n"
+        "print(result['ok'])\n"
+    )
+    result = execute_code_impl(
+        code=code,
+        runtime=_runtime("code-exec-terminal"),
+        enabled_tools=["terminal"],
+        include_web=False,
+        timeout_seconds=10,
+    )
+
+    assert result.status == "success"
+    assert "terminal" in result.artifact["data"]["stdout"]
+
+
+def test_execute_code_out_of_workspace_write_is_not_silently_allowed():
+    from agent_tools.public.code_execution import execute_code_impl
+
+    code = (
+        "from hermes_tools import write_file\n"
+        "result = write_file('/etc/code-exec-denied.txt', 'x')\n"
+        "print(result['ok'])\n"
+        "print(result['error']['code'])\n"
+    )
+    result = execute_code_impl(
+        code=code,
+        runtime=_runtime("code-exec-denied-write"),
+        enabled_tools=["write_file"],
+        include_web=False,
+        timeout_seconds=10,
+    )
+
+    assert result.status == "success"
+    assert "False" in result.artifact["data"]["stdout"]
+    assert (
+        "policy_denied" in result.artifact["data"]["stdout"]
+        or "approval_required" in result.artifact["data"]["stdout"]
+        or "access_denied" in result.artifact["data"]["stdout"]
+    )
+
+
+def test_execute_code_can_write_workspace_file(tmp_path, monkeypatch):
+    from agent_tools.public.code_execution import execute_code_impl
+
+    target = tmp_path / "code-exec-output.txt"
+    code = (
+        "from hermes_tools import write_file\n"
+        f"result = write_file({str(target)!r}, 'hello')\n"
+        "print(result['ok'])\n"
+        "print(result['error']['code'] if result['error'] else 'no_error')\n"
+    )
+    result = execute_code_impl(
+        code=code,
+        runtime=_runtime("code-exec-workspace-write"),
+        enabled_tools=["write_file"],
+        include_web=False,
+        timeout_seconds=10,
+    )
+
+    assert result.status == "success"
+    stdout = result.artifact["data"]["stdout"]
+    if "True" in stdout:
+        assert target.read_text() == "hello"
+    else:
+        assert "approval_required" in stdout or "policy_denied" in stdout or "access_denied" in stdout
