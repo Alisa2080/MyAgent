@@ -1906,3 +1906,59 @@ def test_cron_notification_fallback_includes_output_path(monkeypatch):
     assert "job_id=job-1" in message
     assert "status=ok" in message
     assert "output_path=/tmp/out.md" in message
+
+
+def test_submit_message_passes_progress_observer_and_suppresses_streamed_output():
+    from agent_core.progress import mark_streamed_output
+
+    store = FakeStore()
+    calls = []
+
+    class Observer:
+        def emit(self, event):
+            pass
+
+    observer = Observer()
+
+    def fake_runner(agent, input_data, config, *, observer=None):
+        calls.append((agent, input_data, config, observer))
+        return mark_streamed_output(
+            {"messages": [{"role": "assistant", "content": "streamed ok"}]}
+        )
+
+    cli = AgentCLI(
+        session_store=store,
+        checkpointer="cp",
+        agent_factory=lambda checkpointer: "agent",
+        runner=fake_runner,
+        workdir="/repo",
+        model_name="model",
+        progress_observer_factory=lambda: observer,
+    )
+
+    output = cli.submit_message("hello")
+
+    assert output == ""
+    assert cli.assistant_replies == ["streamed ok"]
+    assert calls[0][3] is observer
+    assert calls[0][2]["configurable"]["thread_id"] == "s1"
+
+
+def test_submit_message_without_progress_observer_keeps_legacy_runner_signature():
+    calls = []
+
+    def fake_runner(agent, input_data, config):
+        calls.append((agent, input_data, config))
+        return {"messages": [{"role": "assistant", "content": "ok"}]}
+
+    cli = AgentCLI(
+        session_store=FakeStore(),
+        checkpointer="cp",
+        agent_factory=lambda checkpointer: "agent",
+        runner=fake_runner,
+        workdir="/repo",
+        model_name="model",
+    )
+
+    assert cli.submit_message("hello") == "ok"
+    assert len(calls) == 1

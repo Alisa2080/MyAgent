@@ -1022,3 +1022,25 @@ def test_gateway_service_install_accepts_with_cron(monkeypatch, tmp_path, capsys
         "transport": "feishu-ws",
         "force": True,
     }
+
+
+def test_make_cli_configures_progress_observer_factory(monkeypatch, tmp_path):
+    import agent_cli.main as main_mod
+
+    store = main_mod.SessionStore(tmp_path / "cli.sqlite")
+    args = SimpleNamespace(workdir=str(tmp_path), resume=None)
+    settings = SimpleNamespace(
+        model_name="model",
+        default_title="New session",
+        profile=None,
+        cli_home=tmp_path,
+        display_theme="default",
+        display_markdown="render",
+        cron_enabled=False,
+        cron_interval_seconds=60,
+    )
+
+    cli = main_mod.make_cli(args=args, store=store, checkpointer="cp", settings=settings)
+
+    observer = cli.progress_observer_factory()
+    assert observer.__class__.__name__ == "TerminalProgressObserver"

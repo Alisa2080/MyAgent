@@ -295,6 +295,12 @@ def _add_cron_edit_flags(parser: argparse.ArgumentParser) -> None:
     # --workdir is inherited from parent parser
 
 
+def default_progress_observer_factory():
+    from agent_cli.progress import TerminalProgressObserver
+
+    return TerminalProgressObserver()
+
+
 def make_cli(
     *, args: argparse.Namespace, store: SessionStore, checkpointer, settings
 ) -> AgentCLI:
@@ -348,6 +354,7 @@ def make_cli(
         ),
         cron_enabled=settings.cron_enabled,
         cron_interval_seconds=settings.cron_interval_seconds,
+        progress_observer_factory=default_progress_observer_factory,
     )
 
 

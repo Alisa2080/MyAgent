@@ -24,6 +24,7 @@ from agent_cli.text_input import (
     prepare_user_message,
     sanitize_terminal_input,
 )
+from agent_core.progress import has_streamed_output
 from cron.notifications import (
     drain_cron_notifications_for_thread_id,
     format_cron_notification_message,
@@ -31,7 +32,8 @@ from cron.notifications import (
 
 
 AgentFactory = Callable[[Any], Any]
-Runner = Callable[[Any, dict[str, Any] | Any, dict[str, Any]], Any]
+Runner = Callable[..., Any]
+ProgressObserverFactory = Callable[[], Any]
 logger = logging.getLogger(__name__)
 
 
@@ -74,6 +76,7 @@ class AgentCLI:
         show_banner: bool = True,
         cron_enabled: bool = True,
         cron_interval_seconds: int = 60,
+        progress_observer_factory: ProgressObserverFactory | None = None,
     ):
         self.session_store = session_store
         self.checkpointer = checkpointer
@@ -95,6 +98,7 @@ class AgentCLI:
         self.show_banner = show_banner
         self.cron_enabled = cron_enabled
         self.cron_interval_seconds = cron_interval_seconds
+        self.progress_observer_factory = progress_observer_factory
         self.pending_cron_events: list[dict[str, Any]] = []
         self._agent: Any | None = None
         self._last_result: Any = None
@@ -192,11 +196,22 @@ class AgentCLI:
             session_id = self.session_store.new_session_id()
             title = _title_from_message(self.session_store, processed)
         try:
-            result = self.runner(
-                self.agent,
-                {"messages": [{"role": "user", "content": processed}]},
-                {"configurable": {"thread_id": session_id}},
+            observer = (
+                self.progress_observer_factory()
+                if self.progress_observer_factory is not None
+                else None
             )
+            config = {"configurable": {"thread_id": session_id}}
+            input_data = {"messages": [{"role": "user", "content": processed}]}
+            if observer is None:
+                result = self.runner(self.agent, input_data, config)
+            else:
+                result = self.runner(
+                    self.agent,
+                    input_data,
+                    config,
+                    observer=observer,
+                )
         except Exception:
             if cron_events_for_turn:
                 self.pending_cron_events = cron_events_for_turn + self.pending_cron_events
@@ -223,6 +238,8 @@ class AgentCLI:
         output = latest_ai_text(result)
         if output:
             self.assistant_replies.append(output)
+            if has_streamed_output(result):
+                return ""
             return format_assistant_output(output, self.display_markdown)
         return output
 
@@ -519,7 +536,18 @@ def default_agent_factory(checkpointer: Any) -> Any:
     return build_agent(include_cron_tools=True, checkpointer=checkpointer)
 
 
-def default_runner(agent: Any, input_data: dict[str, Any], config: dict[str, Any]) -> Any:
+def default_runner(
+    agent: Any,
+    input_data: dict[str, Any],
+    config: dict[str, Any],
+    *,
+    observer: Any = None,
+) -> Any:
     from agent_core.agent_runner import invoke_agent_with_terminal_notifications
 
-    return invoke_agent_with_terminal_notifications(agent, input_data, config)
+    return invoke_agent_with_terminal_notifications(
+        agent,
+        input_data,
+        config,
+        observer=observer,
+    )
