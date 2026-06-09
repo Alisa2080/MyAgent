@@ -12,6 +12,16 @@ PROGRESS_OBSERVER_CONFIG_KEY = "progress_observer"
 STREAMED_OUTPUT_MARKER = "__agent_streamed_output__"
 
 
+def _freeze_progress_value(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return MappingProxyType({key: _freeze_progress_value(item) for key, item in value.items()})
+    if isinstance(value, (list, tuple)):
+        return tuple(_freeze_progress_value(item) for item in value)
+    if isinstance(value, set):
+        return frozenset(_freeze_progress_value(item) for item in value)
+    return value
+
+
 @runtime_checkable
 class ProgressObserver(Protocol):
     def emit(self, event: "ProgressEvent") -> None:
@@ -40,7 +50,7 @@ class ToolStartEvent:
     kind: Literal["tool_start"] = "tool_start"
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "args", MappingProxyType(dict(self.args)))
+        object.__setattr__(self, "args", _freeze_progress_value(self.args))
 
 
 @dataclass(frozen=True)
@@ -55,7 +65,7 @@ class ToolCompleteEvent:
     kind: Literal["tool_complete"] = "tool_complete"
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "args", MappingProxyType(dict(self.args)))
+        object.__setattr__(self, "args", _freeze_progress_value(self.args))
 
 
 @dataclass(frozen=True)
@@ -70,7 +80,7 @@ class ToolErrorEvent:
     kind: Literal["tool_error"] = "tool_error"
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "args", MappingProxyType(dict(self.args)))
+        object.__setattr__(self, "args", _freeze_progress_value(self.args))
 
 
 @dataclass(frozen=True)

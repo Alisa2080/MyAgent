@@ -71,7 +71,13 @@ def test_mark_streamed_result_handles_non_dict_values():
 def test_tool_event_args_are_copied_and_immutable():
     from agent_core.progress import ToolCompleteEvent, ToolErrorEvent, ToolStartEvent
 
-    args = {"command": "rg progress"}
+    args = {
+        "command": "rg progress",
+        "options": {"limit": 10},
+        "paths": ["agent_core", "tests"],
+        "flags": ("-n", {"context": 2}),
+        "tags": {"read", "search"},
+    }
 
     events = [
         ToolStartEvent("terminal", args, "call-1"),
@@ -80,8 +86,25 @@ def test_tool_event_args_are_copied_and_immutable():
     ]
 
     args["command"] = "mutated"
+    args["options"]["limit"] = 99
+    args["paths"].append("mutated")
+    args["flags"][1]["context"] = 99
+    args["tags"].add("mutated")
 
     for event in events:
         assert event.args["command"] == "rg progress"
+        assert event.args["options"]["limit"] == 10
+        assert event.args["paths"] == ("agent_core", "tests")
+        assert event.args["flags"] == ("-n", {"context": 2})
+        assert event.args["tags"] == frozenset({"read", "search"})
+
         with pytest.raises(TypeError):
             event.args["command"] = "mutated again"
+        with pytest.raises(TypeError):
+            event.args["options"]["limit"] = 100
+        with pytest.raises(AttributeError):
+            event.args["paths"].append("observer mutation")
+        with pytest.raises(TypeError):
+            event.args["flags"][1]["context"] = 100
+        with pytest.raises(AttributeError):
+            event.args["tags"].add("observer mutation")
