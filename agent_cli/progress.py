@@ -37,6 +37,7 @@ class TerminalProgressObserver:
         self.hidden_notice_printed = False
         self.streamed_output = False
         self._token_started = False
+        self._token_at_line_start = True
 
     def emit(self, event: ProgressEvent) -> None:
         if isinstance(event, ModelStartEvent):
@@ -86,9 +87,11 @@ class TerminalProgressObserver:
             self.streamed_output = True
             self._raw_write("\n")
         self._raw_write(text)
+        self._token_at_line_start = text.endswith("\n")
         self.flush()
 
     def _write_progress(self, line: str) -> None:
+        self._separate_from_partial_token()
         if self.progress_lines >= self.max_progress_lines:
             self.hidden_count += 1
             if not self.hidden_notice_printed:
@@ -102,6 +105,11 @@ class TerminalProgressObserver:
     def _raw_write(self, text: str) -> None:
         self.stream.write(text)
 
+    def _separate_from_partial_token(self) -> None:
+        if self._token_started and not self._token_at_line_start:
+            self._raw_write("\n")
+            self._token_at_line_start = True
+
 
 def format_tool_args(
     tool_name: str,
@@ -110,14 +118,15 @@ def format_tool_args(
 ) -> str:
     if not isinstance(args, Mapping):
         return ""
+    if tool_name in {"write_file", "patch"}:
+        path = _path_arg(args)
+        if path:
+            return _truncate(path, max_chars)
+        return f"{tool_name.removesuffix('_file')} content hidden"
     for key in ("command", "path", "query", "pattern", "session_id"):
         value = args.get(key)
         if value:
             return _truncate(str(value), max_chars)
-    if tool_name in {"write_file", "patch"}:
-        path = args.get("path") or args.get("file") or args.get("filename")
-        if path:
-            return _truncate(str(path), max_chars)
     compact = json.dumps(dict(args), ensure_ascii=False, sort_keys=True, default=str)
     return _truncate(compact, max_chars)
 
@@ -140,11 +149,23 @@ def summarize_tool_result(
 
 
 def _write_summary(args: Mapping[str, Any], result: Any, max_chars: int) -> str:
-    path = args.get("path") or args.get("file") or args.get("filename")
+    path = _path_arg(args)
     if path:
         return _truncate(f"updated {path}", max_chars)
     text = _first_informative_line(_result_text(result), max_chars)
     return text or "updated"
+
+
+def _path_arg(args: Mapping[str, Any]) -> str:
+    value = args.get("path") or args.get("file") or args.get("filename")
+    if value:
+        return str(value)
+    paths = args.get("paths")
+    if isinstance(paths, (list, tuple)) and paths:
+        return ", ".join(str(path) for path in paths)
+    if paths:
+        return str(paths)
+    return ""
 
 
 def _terminal_summary(result: Any, max_chars: int) -> str:

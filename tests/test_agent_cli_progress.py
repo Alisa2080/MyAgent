@@ -81,3 +81,32 @@ def test_terminal_observer_caps_progress_lines():
     assert "> terminal: two" in output
     assert "... more progress hidden" in output
     assert "four" not in output
+
+
+def test_terminal_observer_separates_progress_after_partial_token():
+    from agent_cli.progress import TerminalProgressObserver
+    from agent_core.progress import TokenDeltaEvent, ToolStartEvent
+
+    stream = io.StringIO()
+    observer = TerminalProgressObserver(stream=stream)
+
+    observer.emit(TokenDeltaEvent("partial"))
+    observer.emit(ToolStartEvent("terminal", {"command": "pwd"}, "call"))
+
+    output = stream.getvalue()
+    assert "partial\n> terminal: pwd" in output
+    assert "partial> terminal" not in output
+
+
+def test_terminal_observer_hides_patch_content_on_start():
+    from agent_cli.progress import TerminalProgressObserver
+    from agent_core.progress import ToolStartEvent
+
+    stream = io.StringIO()
+    observer = TerminalProgressObserver(stream=stream)
+
+    observer.emit(ToolStartEvent("patch", {"mode": "patch", "patch": "secret patch body"}, "call"))
+
+    output = stream.getvalue()
+    assert "secret patch body" not in output
+    assert "patch content hidden" in output
