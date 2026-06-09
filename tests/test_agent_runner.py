@@ -572,3 +572,90 @@ def test_runner_stops_auto_resume_loop_after_process_shutdown(monkeypatch):
     assert result == {"messages": ["turn-2"]}
     assert len(calls) == 2
     assert len(drain_calls) == 1
+
+
+def test_runner_streams_message_chunks_when_observer_present(monkeypatch):
+    import agent_core.agent_runner as runner
+    from agent_core.progress import TokenDeltaEvent, has_streamed_output
+
+    events = []
+
+    class Observer:
+        def emit(self, event):
+            events.append(event)
+
+    class FakeAgent:
+        def stream(self, input_data, config=None, stream_mode=None):
+            assert input_data == {"messages": [{"role": "user", "content": "start"}]}
+            yield {"messages": [{"type": "AIMessageChunk", "content": "hello"}]}
+            yield {"messages": [{"role": "assistant", "content": "hello"}]}
+
+        def invoke(self, input_data, config=None):
+            raise AssertionError("invoke should not be used")
+
+    monkeypatch.setattr(runner, "drain_terminal_notifications_for_thread_id", lambda thread_id: [])
+
+    result = runner.invoke_agent_with_terminal_notifications(
+        FakeAgent(),
+        {"messages": [{"role": "user", "content": "start"}]},
+        {"configurable": {"thread_id": "thread-1"}},
+        observer=Observer(),
+    )
+
+    assert result["messages"][-1]["content"] == "hello"
+    assert has_streamed_output(result) is True
+    token_events = [event for event in events if isinstance(event, TokenDeltaEvent)]
+    assert [event.text for event in token_events] == ["hello"]
+
+
+def test_runner_falls_back_to_invoke_when_stream_missing(monkeypatch):
+    import agent_core.agent_runner as runner
+    from agent_core.progress import FallbackEvent, has_streamed_output
+
+    events = []
+
+    class Observer:
+        def emit(self, event):
+            events.append(event)
+
+    class FakeAgent:
+        def invoke(self, input_data, config=None):
+            return {"messages": [{"role": "assistant", "content": "ok"}]}
+
+    monkeypatch.setattr(runner, "drain_terminal_notifications_for_thread_id", lambda thread_id: [])
+
+    result = runner.invoke_agent_with_terminal_notifications(
+        FakeAgent(),
+        {"messages": [{"role": "user", "content": "start"}]},
+        {"configurable": {"thread_id": "thread-1"}},
+        observer=Observer(),
+    )
+
+    assert result == {"messages": [{"role": "assistant", "content": "ok"}]}
+    assert has_streamed_output(result) is False
+    assert any(isinstance(event, FallbackEvent) for event in events)
+
+
+def test_runner_streaming_exception_propagates(monkeypatch):
+    import pytest
+
+    import agent_core.agent_runner as runner
+
+    class Observer:
+        def emit(self, event):
+            pass
+
+    class FakeAgent:
+        def stream(self, input_data, config=None, stream_mode=None):
+            yield {"messages": [{"role": "assistant", "content": "partial"}]}
+            raise RuntimeError("model failed")
+
+    monkeypatch.setattr(runner, "drain_terminal_notifications_for_thread_id", lambda thread_id: [])
+
+    with pytest.raises(RuntimeError, match="model failed"):
+        runner.invoke_agent_with_terminal_notifications(
+            FakeAgent(),
+            {"messages": [{"role": "user", "content": "start"}]},
+            {"configurable": {"thread_id": "thread-1"}},
+            observer=Observer(),
+        )
