@@ -475,3 +475,83 @@ def test_async_wrapper_matches_sync_behavior():
     result = asyncio.run(run())
 
     assert result.content == "async done"
+
+
+def test_tool_bus_emits_progress_events_from_runtime_observer():
+    from agent_core.progress import ToolCompleteEvent, ToolStartEvent, set_progress_observer
+    from agent_core.tool_bus_middleware import ToolBusMiddleware
+
+    events = []
+    observer = SimpleNamespace(emit=lambda event: events.append(event))
+    request = _request("terminal", args={"command": "pwd"}, tool_call_id="call-1")
+    request.runtime = SimpleNamespace(
+        config=set_progress_observer(
+            {"configurable": {"thread_id": "thread-1"}},
+            observer,
+        )
+    )
+
+    result = ToolBusMiddleware().wrap_tool_call(
+        request,
+        lambda req: _message(tool="terminal", content="ok"),
+    )
+
+    assert result.content == "ok"
+    assert isinstance(events[0], ToolStartEvent)
+    assert events[0].tool_name == "terminal"
+    assert events[0].args == {"command": "pwd"}
+    assert events[0].thread_id == "thread-1"
+    assert isinstance(events[1], ToolCompleteEvent)
+    assert events[1].result.content == "ok"
+    assert events[1].duration_ms >= 0
+
+
+def test_tool_bus_emits_error_event_for_handler_exception():
+    from agent_core.progress import ToolErrorEvent, set_progress_observer
+    from agent_core.tool_bus_middleware import ToolBusMiddleware
+
+    events = []
+    observer = SimpleNamespace(emit=lambda event: events.append(event))
+    request = _request("terminal", args={"command": "bad"}, tool_call_id="call-1")
+    request.runtime = SimpleNamespace(
+        config=set_progress_observer(
+            {"configurable": {"thread_id": "thread-1"}},
+            observer,
+        )
+    )
+
+    def handler(_request):
+        raise RuntimeError("boom")
+
+    result = ToolBusMiddleware().wrap_tool_call(request, handler)
+
+    assert result.status == "error"
+    assert any(isinstance(event, ToolErrorEvent) for event in events)
+    error_event = [event for event in events if isinstance(event, ToolErrorEvent)][0]
+    assert error_event.tool_name == "terminal"
+    assert "boom" in error_event.error_message
+
+
+def test_tool_bus_marks_pre_hook_blocked_as_blocked_complete_event():
+    from agent_core.progress import ToolCompleteEvent, set_progress_observer
+    from agent_core.tool_bus_middleware import ToolBusHooks, ToolBusMiddleware
+
+    events = []
+    observer = SimpleNamespace(emit=lambda event: events.append(event))
+    request = _request("terminal", args={"command": "pwd"}, tool_call_id="call-1")
+    request.runtime = SimpleNamespace(
+        config=set_progress_observer(
+            {"configurable": {"thread_id": "thread-1"}},
+            observer,
+        )
+    )
+    blocked = _message(tool="terminal", content="blocked", status="error")
+
+    result = ToolBusMiddleware(
+        hooks=ToolBusHooks(pre_tool_call=[lambda req: blocked])
+    ).wrap_tool_call(request, lambda req: _message(tool="terminal", content="should not run"))
+
+    assert result is blocked
+    complete_events = [event for event in events if isinstance(event, ToolCompleteEvent)]
+    assert len(complete_events) == 1
+    assert complete_events[0].blocked is True

@@ -22,6 +22,14 @@ except ImportError:  # pragma: no cover - exercised by subprocess smoke tests wi
 
 from agent_core.tool_arg_coercion import ToolArgCoercionError, normalize_tool_args
 from agent_core.tool_catalog import ToolSpec
+from agent_core.progress import (
+    ToolCompleteEvent,
+    ToolErrorEvent,
+    ToolStartEvent,
+    emit_progress,
+    get_progress_observer_from_runtime,
+)
+from agent_core.session_context import RuntimeContext
 from agent_tools.shared.tool_result import tool_failure
 
 
@@ -78,10 +86,27 @@ class ToolBusMiddleware(AgentMiddleware):
         started = time.monotonic()
         try:
             bus_request, call_request = self._prepare_request(request)
+            observer = get_progress_observer_from_runtime(bus_request.runtime)
+            thread_id = RuntimeContext.from_runtime(bus_request.runtime).thread_id
+            emit_progress(
+                observer,
+                ToolStartEvent(
+                    tool_name=bus_request.tool_name,
+                    args=bus_request.args,
+                    tool_call_id=bus_request.tool_call_id,
+                    thread_id=thread_id,
+                ),
+            )
             blocked = self._run_pre_hooks(bus_request)
             if blocked is not None:
                 duration_ms = int((time.monotonic() - started) * 1000)
-                return self._finalize_blocked(bus_request, blocked, duration_ms)
+                return self._finalize_blocked(
+                    bus_request,
+                    blocked,
+                    duration_ms,
+                    observer=observer,
+                    thread_id=thread_id,
+                )
 
             error = None
             try:
@@ -96,7 +121,14 @@ class ToolBusMiddleware(AgentMiddleware):
                     runtime=_runtime_with_tool_call_id(request.runtime, bus_request.tool_call_id),
                 )
             duration_ms = int((time.monotonic() - started) * 1000)
-            return self._finalize(bus_request, result, duration_ms, error)
+            return self._finalize(
+                bus_request,
+                result,
+                duration_ms,
+                error,
+                observer=observer,
+                thread_id=thread_id,
+            )
         except ToolArgCoercionError as exc:
             logger.info("Tool %s received invalid input", _request_tool_name(request), exc_info=True)
             return _invalid_input_message(request, exc)
@@ -112,10 +144,27 @@ class ToolBusMiddleware(AgentMiddleware):
         started = time.monotonic()
         try:
             bus_request, call_request = self._prepare_request(request)
+            observer = get_progress_observer_from_runtime(bus_request.runtime)
+            thread_id = RuntimeContext.from_runtime(bus_request.runtime).thread_id
+            emit_progress(
+                observer,
+                ToolStartEvent(
+                    tool_name=bus_request.tool_name,
+                    args=bus_request.args,
+                    tool_call_id=bus_request.tool_call_id,
+                    thread_id=thread_id,
+                ),
+            )
             blocked = self._run_pre_hooks(bus_request)
             if blocked is not None:
                 duration_ms = int((time.monotonic() - started) * 1000)
-                return self._finalize_blocked(bus_request, blocked, duration_ms)
+                return self._finalize_blocked(
+                    bus_request,
+                    blocked,
+                    duration_ms,
+                    observer=observer,
+                    thread_id=thread_id,
+                )
 
             error = None
             try:
@@ -130,7 +179,14 @@ class ToolBusMiddleware(AgentMiddleware):
                     runtime=_runtime_with_tool_call_id(request.runtime, bus_request.tool_call_id),
                 )
             duration_ms = int((time.monotonic() - started) * 1000)
-            return self._finalize(bus_request, result, duration_ms, error)
+            return self._finalize(
+                bus_request,
+                result,
+                duration_ms,
+                error,
+                observer=observer,
+                thread_id=thread_id,
+            )
         except ToolArgCoercionError as exc:
             logger.info("Tool %s received invalid input", _request_tool_name(request), exc_info=True)
             return _invalid_input_message(request, exc)
@@ -186,7 +242,22 @@ class ToolBusMiddleware(AgentMiddleware):
         bus_request: ToolBusRequest,
         result: ToolMessage,
         duration_ms: int,
+        *,
+        observer: Any = None,
+        thread_id: str | None = None,
     ) -> ToolMessage:
+        emit_progress(
+            observer,
+            ToolCompleteEvent(
+                tool_name=bus_request.tool_name,
+                args=bus_request.args,
+                result=result,
+                duration_ms=duration_ms,
+                tool_call_id=bus_request.tool_call_id,
+                thread_id=thread_id,
+                blocked=True,
+            ),
+        )
         self._run_post_hooks(
             bus_request,
             ToolBusResult(result=result, duration_ms=duration_ms, error=None),
@@ -199,16 +270,44 @@ class ToolBusMiddleware(AgentMiddleware):
         result: ToolResponse,
         duration_ms: int,
         error: Exception | None,
+        *,
+        observer: Any = None,
+        thread_id: str | None = None,
     ) -> ToolResponse:
         bus_result = ToolBusResult(result=result, duration_ms=duration_ms, error=error)
         self._run_post_hooks(bus_request, bus_result)
 
-        if not isinstance(result, ToolMessage):
-            return result
+        visible_result = result
+        if isinstance(result, ToolMessage):
+            transformed = self._run_transform_hooks(bus_request, result)
+            visible_result = self._limit_result(bus_request.spec, transformed)
 
-        transformed = self._run_transform_hooks(bus_request, result)
-        limited = self._limit_result(bus_request.spec, transformed)
-        return limited
+        if error is None:
+            emit_progress(
+                observer,
+                ToolCompleteEvent(
+                    tool_name=bus_request.tool_name,
+                    args=bus_request.args,
+                    result=visible_result,
+                    duration_ms=duration_ms,
+                    tool_call_id=bus_request.tool_call_id,
+                    thread_id=thread_id,
+                ),
+            )
+        else:
+            emit_progress(
+                observer,
+                ToolErrorEvent(
+                    tool_name=bus_request.tool_name,
+                    args=bus_request.args,
+                    result=visible_result,
+                    duration_ms=duration_ms,
+                    error_message=f"{type(error).__name__}: {error}",
+                    tool_call_id=bus_request.tool_call_id,
+                    thread_id=thread_id,
+                ),
+            )
+        return visible_result
 
     def _run_transform_hooks(self, bus_request: ToolBusRequest, result: ToolMessage) -> ToolMessage:
         for hook in self.hooks.transform_tool_result:
