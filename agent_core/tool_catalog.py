@@ -5,7 +5,12 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from agent_tools.public.code_execution import execute_code
+from agent_tools.public.code_execution import (
+    build_execute_code_description,
+    execute_code,
+    execute_code_impl,
+    resolve_visible_tools_for_profile,
+)
 from agent_tools.public.memory import memory_manage
 
 
@@ -87,6 +92,72 @@ def _is_code_execution_default_allowed(runtime_profile: str | None) -> bool:
     return profile in {"", "dev", "test"}
 
 
+def _enabled_tool_names_for_toolsets(enabled_toolsets: set[str] | None) -> set[str]:
+    enabled_tools: set[str] = set()
+    if enabled_toolsets is None or "file_read" in enabled_toolsets:
+        enabled_tools.update({"read_file", "search_files"})
+    if enabled_toolsets is None or "file_write" in enabled_toolsets:
+        enabled_tools.update({"write_file", "patch"})
+    if enabled_toolsets is None or "terminal" in enabled_toolsets:
+        enabled_tools.add("terminal")
+    if enabled_toolsets is None or "web" in enabled_toolsets:
+        enabled_tools.update({"web_search", "web_extract"})
+    return enabled_tools
+
+
+def _visible_tools_for_enabled_toolsets(
+    enabled_toolsets: set[str] | None,
+    *,
+    runtime_profile: str | None,
+    include_web: bool,
+) -> tuple[str, ...]:
+    enabled_tools = _enabled_tool_names_for_toolsets(enabled_toolsets)
+    return resolve_visible_tools_for_profile(
+        enabled_tools=enabled_tools,
+        runtime_profile=runtime_profile,
+        include_web=include_web,
+    )
+
+
+def _configured_execute_code_tool(
+    *,
+    enabled_toolsets: set[str] | None,
+    runtime_profile: str | None,
+):
+    default_visible = _visible_tools_for_enabled_toolsets(
+        enabled_toolsets,
+        runtime_profile=runtime_profile,
+        include_web=False,
+    )
+    web_visible = _visible_tools_for_enabled_toolsets(
+        enabled_toolsets,
+        runtime_profile=runtime_profile,
+        include_web=True,
+    )
+    has_web_tools = bool(web_visible) and web_visible != default_visible
+
+    def _wrapped_execute_code(code: str, runtime: Any, include_web: bool = False) -> object:
+        visible_tools = _visible_tools_for_enabled_toolsets(
+            enabled_toolsets,
+            runtime_profile=runtime_profile,
+            include_web=bool(include_web),
+        )
+        return execute_code_impl(
+            code=code,
+            runtime=runtime,
+            enabled_tools=list(visible_tools),
+            include_web=bool(include_web),
+        )
+
+    desc = build_execute_code_description(default_visible, has_web_tools=has_web_tools)
+    return execute_code.model_copy(
+        update={
+            "description": desc,
+            "func": _wrapped_execute_code,
+        }
+    )
+
+
 def default_tool_specs(*, include_cron_tools: bool = False) -> list[ToolSpec]:
     from agent_tools.public.files import (
         file_info,
@@ -164,6 +235,14 @@ def build_tools_from_specs(
             if not _is_code_execution_default_allowed(runtime_profile):
                 continue
         if not _passes_check(spec, runtime_profile=runtime_profile):
+            continue
+        if spec.name == "execute_code":
+            tools.append(
+                _configured_execute_code_tool(
+                    enabled_toolsets=enabled,
+                    runtime_profile=runtime_profile,
+                )
+            )
             continue
         tools.append(spec.tool)
     return tools

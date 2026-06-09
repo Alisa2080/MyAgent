@@ -162,3 +162,32 @@ def test_code_execution_can_be_explicitly_enabled_for_prod():
 
     names = _tool_names(build_tools(enabled_toolsets=["code_execution"], runtime_profile="prod"))
     assert names == ["execute_code"]
+
+
+def test_code_execution_description_reflects_current_enabled_tools():
+    from agent_core.tool_catalog import build_tools
+
+    tool = build_tools(enabled_toolsets=["file_read", "web", "code_execution"], runtime_profile="dev")[-1]
+
+    assert tool.name == "execute_code"
+    assert "Available sandbox tools: read_file, search_files." in tool.description
+    assert "include_web=True" in tool.description
+    assert "write_file" not in tool.description
+    assert "patch" not in tool.description
+
+
+def test_code_execution_explicit_toolset_does_not_grant_parent_terminal_or_write_tools(monkeypatch):
+    from agent_core.tool_catalog import build_tools
+
+    tool = build_tools(enabled_toolsets=["code_execution"], runtime_profile="dev")[0]
+    seen = {}
+
+    def fake_execute_code_impl(**kwargs):
+        seen.update(kwargs)
+        return SimpleNamespace(status="success", artifact={"ok": True, "data": {}}, content="ok")
+
+    monkeypatch.setattr("agent_core.tool_catalog.execute_code_impl", fake_execute_code_impl)
+
+    tool.func(code='print("x")', runtime=SimpleNamespace(tool_call_id="call", config={"configurable": {"thread_id": "thread"}}))
+
+    assert seen["enabled_tools"] == []

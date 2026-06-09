@@ -17,6 +17,9 @@ from pydantic import BaseModel, Field
 
 from langchain_core.messages import ToolMessage
 
+from agent_core.session_context import RuntimeContext
+from agent_tools.file_toolkit.backend_paths import get_backend_path_context
+from agent_tools.file_toolkit.redact import redact_sensitive_text
 from agent_tools.shared.tool_result import tool_failure
 
 STAGE_ONE_ALLOWED_TOOLS = frozenset({
@@ -44,6 +47,111 @@ DEFAULT_TIMEOUT_SECONDS = 300
 DEFAULT_MAX_TOOL_CALLS = 50
 DEFAULT_STDOUT_LIMIT_CHARS = 50_000
 DEFAULT_STDERR_LIMIT_CHARS = 10_000
+MAX_RPC_FRAME_BYTES = 1_000_000
+RPC_SOCKET_TIMEOUT_SECONDS = 2.0
+
+_CHILD_POLICY_SITE_CUSTOMIZE = r'''
+from __future__ import annotations
+
+import builtins
+import os
+import socket
+import sys
+import sysconfig
+
+_SANDBOX_ROOT = os.path.realpath(os.environ.get("CODE_EXECUTION_SANDBOX_ROOT", ""))
+_RPC_SOCKET = os.environ.get("CODE_EXECUTION_RPC_SOCKET", "")
+
+
+def _roots_from_env(name):
+    roots = []
+    for raw in os.environ.get(name, "").split(os.pathsep):
+        if raw:
+            roots.append(os.path.realpath(raw))
+    return roots
+
+
+_READ_ROOTS = _roots_from_env("CODE_EXECUTION_ALLOWED_READ_ROOTS")
+for _path in (
+    sys.prefix,
+    getattr(sys, "base_prefix", ""),
+    sysconfig.get_path("stdlib") or "",
+    sysconfig.get_path("platstdlib") or "",
+    sysconfig.get_path("purelib") or "",
+    sysconfig.get_path("platlib") or "",
+):
+    if _path:
+        _READ_ROOTS.append(os.path.realpath(_path))
+
+
+def _under(path, roots):
+    real = os.path.realpath(path)
+    for root in roots:
+        if real == root or real.startswith(root + os.sep):
+            return True
+    return False
+
+
+def _deny(action):
+    raise PermissionError(
+        f"execute_code policy denied {action}; use hermes_tools RPC wrappers for project files, terminal, and web access."
+    )
+
+
+def _is_write_open(mode, flags):
+    mode_text = str(mode or "")
+    if any(marker in mode_text for marker in ("w", "a", "x", "+")):
+        return True
+    if isinstance(flags, int):
+        return bool(flags & (os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_TRUNC | os.O_APPEND))
+    return False
+
+
+def _guard_open(path, mode="r", flags=0):
+    if isinstance(path, int):
+        return
+    if not isinstance(path, (str, bytes, os.PathLike)):
+        return
+    path_text = os.fsdecode(path)
+    if not path_text:
+        return
+    if not os.path.isabs(path_text):
+        path_text = os.path.join(os.getcwd(), path_text)
+    if _is_write_open(mode, flags):
+        if _SANDBOX_ROOT and _under(path_text, (_SANDBOX_ROOT,)):
+            return
+        _deny(f"direct file write to {path_text}")
+    if _under(path_text, _READ_ROOTS):
+        return
+    _deny(f"direct file read from {path_text}")
+
+
+_original_open = builtins.open
+
+
+def _policy_open(file, mode="r", buffering=-1, encoding=None, errors=None, newline=None, closefd=True, opener=None):
+    _guard_open(file, mode=mode)
+    return _original_open(file, mode, buffering, encoding, errors, newline, closefd, opener)
+
+
+builtins.open = _policy_open
+
+
+def _audit(event, args):
+    if event == "open":
+        path, mode, flags = (args + (None, None, 0))[:3]
+        _guard_open(path, mode=mode, flags=flags)
+    elif event in {"subprocess.Popen", "os.system", "os.posix_spawn", "os.posix_spawnp", "pty.spawn"}:
+        _deny(event)
+    elif event == "socket.connect":
+        sock, address = args
+        if getattr(sock, "family", None) == socket.AF_UNIX and address == _RPC_SOCKET:
+            return
+        _deny("direct socket connect")
+
+
+sys.addaudithook(_audit)
+'''
 
 
 def visible_sandbox_tools(
@@ -54,7 +162,7 @@ def visible_sandbox_tools(
     allowed = set(STAGE_ONE_ALLOWED_TOOLS)
     if include_web:
         allowed.update(WEB_ALLOWED_TOOLS)
-    enabled = set(enabled_tools or allowed)
+    enabled = allowed if enabled_tools is None else set(enabled_tools)
     return tuple(name for name in TOOL_ORDER if name in allowed and name in enabled)
 
 
@@ -64,9 +172,6 @@ def resolve_visible_tools_for_profile(
     runtime_profile: str | None,
     include_web: bool,
 ) -> tuple[str, ...]:
-    profile = (runtime_profile or "").strip().lower()
-    if profile in {"hosted", "prod"}:
-        return visible_sandbox_tools(enabled_tools, include_web=include_web)
     return visible_sandbox_tools(enabled_tools, include_web=include_web)
 
 
@@ -166,38 +271,43 @@ def generate_hermes_tools_module(
     return "".join(chunks)
 
 
-def build_execute_code_description(visible_tools: tuple[str, ...]) -> str:
+def build_execute_code_description(visible_tools: tuple[str, ...], *, has_web_tools: bool = False) -> str:
     tool_list = ", ".join(visible_tools) if visible_tools else "no sandbox tools"
+    web_note = " Set include_web=True to expose web_search and web_extract." if has_web_tools else ""
     return (
         "Execute a short Python script locally with constrained access to project tools. "
         "Use this for 3 or more tool calls, loops, filtering, batching, retries, or compressing large intermediate results. "
         "Use direct tools for a single simple operation. "
         "Interactive terminal sessions and background services are not supported. "
         f"Available sandbox tools: {tool_list}."
+        f"{web_note}"
     )
 
 
 class ExecuteCodeInput(BaseModel):
     code: str = Field(description="Python code to execute with constrained project tool access.")
-    include_web: bool = Field(default=False, description="Expose web_search and web_extract in addition to local file development tools.")
+    include_web: bool = Field(default=False, description="Expose web_search and web_extract in addition to local file development tools when the caller explicitly allows web access.")
+
+
+def _default_public_execute_code_result(*, runtime: ToolRuntime) -> object:
+    return tool_failure(
+        "execute_code",
+        "execute_code must be configured by tool_catalog before use so visible tool access matches the current runtime.",
+        code="misconfigured_tool",
+        runtime=runtime,
+    )
 
 
 @tool("execute_code", args_schema=ExecuteCodeInput)
 def execute_code(code: str, runtime: ToolRuntime, include_web: bool = False) -> object:
     """Execute Python code locally with constrained access to selected project tools."""
-    return execute_code_impl(
-        code=code,
-        runtime=runtime,
-        enabled_tools=list(SANDBOX_ALLOWED_TOOLS if include_web else STAGE_ONE_ALLOWED_TOOLS),
-        include_web=include_web,
-    )
+    return _default_public_execute_code_result(runtime=runtime)
 
 
 SAFE_ENV_EXACT = {"PATH", "HOME", "USER", "LANG", "TERM", "TMPDIR", "TMP", "TEMP", "SHELL", "LOGNAME", "VIRTUAL_ENV", "CONDA_PREFIX"}
 SAFE_ENV_PREFIXES = ("LC_", "XDG_", "CONDA_")
 SECRET_SUBSTRINGS = ("KEY", "TOKEN", "SECRET", "PASSWORD", "CREDENTIAL", "PASSWD", "AUTH")
 ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
-SECRET_VALUE_RE = re.compile(r"(sk-[A-Za-z0-9_-]{8,}|[A-Za-z0-9_]*token[A-Za-z0-9_]*=[^\s]+)", re.IGNORECASE)
 
 
 def _is_safe_env_name(name: str) -> bool:
@@ -215,10 +325,32 @@ def safe_child_env(extra: dict[str, str] | None = None) -> dict[str, str]:
 
 def sanitize_output(text: str, *, limit: int) -> tuple[str, bool]:
     cleaned = ANSI_RE.sub("", str(text or ""))
-    cleaned = SECRET_VALUE_RE.sub("[REDACTED]", cleaned)
+    cleaned = redact_sensitive_text(cleaned)
     if len(cleaned) <= limit:
         return cleaned, False
     return cleaned[:limit] + "\n[truncated]", True
+
+
+def _backend_for_runtime(runtime: object) -> tuple[str, str]:
+    runtime_context = RuntimeContext.from_runtime(runtime)
+    task_id = runtime_context.task_id or "default"
+    backend = get_backend_path_context(task_id)
+    return str(backend.env_type or "local"), task_id
+
+
+def _nested_tool_runtime(runtime: object, *, tool_call_id: str):
+    if not tool_call_id:
+        return runtime
+
+    class _RuntimeProxy:
+        def __init__(self, base_runtime: object, nested_tool_call_id: str) -> None:
+            self._base_runtime = base_runtime
+            self.tool_call_id = nested_tool_call_id
+
+        def __getattr__(self, name: str):
+            return getattr(self._base_runtime, name)
+
+    return _RuntimeProxy(runtime, nested_tool_call_id=tool_call_id)
 
 
 def normalize_rpc_args(tool_name: str, args: dict) -> dict:
@@ -267,14 +399,12 @@ def tool_message_to_rpc_payload(tool_name: str, value: object) -> dict:
             "error": value.get("error"),
             "meta": dict(value.get("meta") or {}),
         }
-    return {
-        "ok": True,
-        "tool": tool_name,
-        "message": "Tool returned a non-standard response.",
-        "data": {"value": str(value)},
-        "error": None,
-        "meta": {},
-    }
+    return _failure_payload(
+        tool_name,
+        "Tool returned a non-standard response.",
+        code="invalid_response",
+        data={"value": str(value)},
+    )
 
 
 class CodeExecutionDispatcher:
@@ -283,6 +413,8 @@ class CodeExecutionDispatcher:
         self.visible_tools = set(visible_tools)
         self.max_tool_calls = int(max_tool_calls)
         self.tool_calls = 0
+        runtime_context = RuntimeContext.from_runtime(runtime)
+        self.outer_tool_call_id = str(runtime_context.tool_call_id or "")
 
     def dispatch(self, tool_name: str, args: dict) -> dict:
         if tool_name not in self.visible_tools:
@@ -290,27 +422,37 @@ class CodeExecutionDispatcher:
         self.tool_calls += 1
         if self.tool_calls > self.max_tool_calls:
             return _failure_payload(tool_name, "execute_code tool call limit exceeded.", code="tool_call_limit_exceeded")
+        nested_tool_call_id = self._nested_tool_call_id(tool_name)
         try:
-            result = self._call_tool(tool_name, normalize_rpc_args(tool_name, args))
+            result = self._call_tool(
+                tool_name,
+                normalize_rpc_args(tool_name, args),
+                nested_tool_call_id=nested_tool_call_id,
+            )
         except Exception as exc:
             return _failure_payload(tool_name, f"RPC tool dispatch failed: {type(exc).__name__}: {exc}", code="dispatch_error")
         return tool_message_to_rpc_payload(tool_name, result)
 
-    def _call_tool(self, tool_name: str, args: dict) -> object:
+    def _nested_tool_call_id(self, tool_name: str) -> str:
+        prefix = self.outer_tool_call_id or "execute_code"
+        return f"{prefix}:rpc:{self.tool_calls}:{tool_name}"
+
+    def _call_tool(self, tool_name: str, args: dict, *, nested_tool_call_id: str) -> object:
+        nested_runtime = _nested_tool_runtime(self.runtime, tool_call_id=nested_tool_call_id)
         if tool_name in {"read_file", "search_files", "write_file", "patch"}:
             from agent_tools.public import files
             tool_obj = getattr(files, tool_name)
             func = getattr(tool_obj, "func", tool_obj)
-            return func(runtime=self.runtime, **args)
+            return func(runtime=nested_runtime, **args)
         if tool_name == "terminal":
             from agent_tools.public.terminal import terminal
             func = getattr(terminal, "func", terminal)
-            return func(runtime=self.runtime, **args)
+            return func(runtime=nested_runtime, **args)
         if tool_name in {"web_search", "web_extract"}:
             from agent_tools.public import web
             tool_obj = getattr(web, tool_name)
             func = getattr(tool_obj, "func", tool_obj)
-            return func(runtime=self.runtime, **args)
+            return func(runtime=nested_runtime, **args)
         return _failure_payload(tool_name, f"Tool is not implemented in execute_code: {tool_name}", code="tool_not_implemented")
 
 
@@ -355,19 +497,28 @@ class CodeExecutionRpcServer:
             except OSError:
                 return
             with conn:
+                conn.settimeout(RPC_SOCKET_TIMEOUT_SECONDS)
                 response = self._handle_connection(conn)
                 data = json.dumps(response, ensure_ascii=False).encode("utf-8")
                 conn.sendall(len(data).to_bytes(8, "big") + data)
 
     def _handle_connection(self, conn: socket.socket) -> dict:
-        header = conn.recv(8)
+        try:
+            header = conn.recv(8)
+        except socket.timeout:
+            return _failure_payload("unknown", "RPC request timed out.", code="rpc_protocol_error")
         if len(header) != 8:
             return _failure_payload("unknown", "Invalid RPC request header.", code="rpc_protocol_error")
         size = int.from_bytes(header, "big")
+        if size > MAX_RPC_FRAME_BYTES:
+            return _failure_payload("unknown", "RPC request exceeds maximum frame size.", code="rpc_payload_too_large")
         chunks = []
         remaining = size
         while remaining > 0:
-            chunk = conn.recv(min(65536, remaining))
+            try:
+                chunk = conn.recv(min(65536, remaining))
+            except socket.timeout:
+                return _failure_payload("unknown", "RPC request timed out.", code="rpc_protocol_error")
             if not chunk:
                 break
             chunks.append(chunk)
@@ -407,6 +558,16 @@ def execute_code_impl(
     if platform.system() == "Windows":
         return tool_failure("execute_code", "execute_code is not available on Windows.", code="unsupported_platform", runtime=runtime)
 
+    backend_env_type, runtime_task_id = _backend_for_runtime(runtime)
+    if backend_env_type != "local":
+        return tool_failure(
+            "execute_code",
+            f"execute_code only supports the local terminal backend; current backend is {backend_env_type}.",
+            code="unsupported_backend",
+            runtime=runtime,
+            data={"env_type": backend_env_type},
+        )
+
     visible_tools = visible_sandbox_tools(enabled_tools, include_web=include_web)
     temp_dir = Path(tempfile.mkdtemp(prefix="code-execution-"))
     server: CodeExecutionRpcServer | None = None
@@ -414,16 +575,23 @@ def execute_code_impl(
     try:
         script_path = temp_dir / "script.py"
         stub_path = temp_dir / "hermes_tools.py"
+        policy_path = temp_dir / "sitecustomize.py"
         socket_path = str(temp_dir / "rpc.sock")
 
         script_path.write_text(code, encoding="utf-8")
         stub_path.write_text(generate_hermes_tools_module(visible_tools, include_web=include_web), encoding="utf-8")
+        policy_path.write_text(_CHILD_POLICY_SITE_CUSTOMIZE, encoding="utf-8")
 
         dispatcher = CodeExecutionDispatcher(runtime=runtime, visible_tools=visible_tools, max_tool_calls=max_tool_calls)
         server = CodeExecutionRpcServer(socket_path=socket_path, dispatcher=dispatcher)
         server.start()
 
-        env = safe_child_env({"CODE_EXECUTION_RPC_SOCKET": socket_path, "PYTHONPATH": str(temp_dir)})
+        env = safe_child_env({
+            "CODE_EXECUTION_RPC_SOCKET": socket_path,
+            "CODE_EXECUTION_SANDBOX_ROOT": str(temp_dir),
+            "CODE_EXECUTION_ALLOWED_READ_ROOTS": str(temp_dir),
+            "PYTHONPATH": str(temp_dir),
+        })
 
         proc = subprocess.Popen(
             [sys.executable, str(script_path)],

@@ -48,14 +48,15 @@ def test_visible_sandbox_tools_intersects_whitelist_and_enabled_tools():
 def test_schema_description_lists_only_visible_tools():
     from agent_tools.public.code_execution import build_execute_code_description
 
-    description = build_execute_code_description(("read_file", "terminal"))
+    description = build_execute_code_description(("read_file", "terminal"), has_web_tools=True)
 
     assert "3 or more tool calls" in description
     assert "read_file" in description
     assert "terminal" in description
-    assert "web_search" not in description
+    assert "web_search" in description
     assert "single simple operation" in description
     assert "background services are not supported" in description
+    assert "include_web=True" in description
 
 
 def test_safe_child_env_removes_secret_like_variables(monkeypatch):
@@ -75,14 +76,20 @@ def test_safe_child_env_removes_secret_like_variables(monkeypatch):
     assert "MY_TOKEN" not in env
 
 
-def test_sanitize_output_strips_ansi_redacts_and_truncates():
+def test_sanitize_output_strips_ansi_and_truncates(monkeypatch):
     from agent_tools.public.code_execution import sanitize_output
+
+    monkeypatch.setattr(
+        "agent_tools.public.code_execution.redact_sensitive_text",
+        lambda text: text.replace("sk-testsecret1234567890", "SECRET_REDACTED_VALUE"),
+    )
 
     text = "\x1b[31mred\x1b[0m sk-testsecret1234567890 more"
     sanitized, truncated = sanitize_output(text, limit=18)
 
     assert "\x1b" not in sanitized
     assert "sk-testsecret" not in sanitized
+    assert "SECRET_REDACTED_VALUE" not in sanitized
     assert len(sanitized) <= 18 + len("\n[truncated]")
     assert truncated is True
 
@@ -213,7 +220,7 @@ def test_execute_code_impl_can_call_read_file():
     assert "read_file" in result.artifact["data"]["stdout"]
 
 
-def test_public_execute_code_uses_local_executor():
+def test_public_execute_code_requires_catalog_configuration():
     from agent_tools.public.code_execution import execute_code
 
     result = execute_code.func(
@@ -221,8 +228,85 @@ def test_public_execute_code_uses_local_executor():
         runtime=_runtime(thread_id="code-exec-public"),
     )
 
+    assert result.status == "error"
+    assert result.artifact["error"]["code"] == "misconfigured_tool"
+
+
+def test_execute_code_child_policy_blocks_direct_subprocess():
+    from agent_tools.public.code_execution import execute_code_impl
+
+    result = execute_code_impl(
+        code=(
+            "import subprocess\n"
+            "try:\n"
+            "    subprocess.run(['echo', 'bypass'], capture_output=True, text=True)\n"
+            "except PermissionError as exc:\n"
+            "    print(type(exc).__name__)\n"
+            "    print('direct process blocked')\n"
+        ),
+        runtime=_runtime("code-exec-subprocess-policy"),
+        enabled_tools=[],
+        include_web=False,
+        timeout_seconds=5,
+    )
+
     assert result.status == "success"
-    assert "public wrapper" in result.artifact["data"]["stdout"]
+    stdout = result.artifact["data"]["stdout"]
+    assert "PermissionError" in stdout
+    assert "direct process blocked" in stdout
+    assert "bypass" not in stdout
+
+
+def test_execute_code_child_policy_blocks_direct_project_file_read():
+    from agent_tools.public.code_execution import execute_code_impl
+
+    result = execute_code_impl(
+        code=(
+            "try:\n"
+            "    open('README.md', encoding='utf-8').read()\n"
+            "except PermissionError as exc:\n"
+            "    print(type(exc).__name__)\n"
+            "    print('direct read blocked')\n"
+        ),
+        runtime=_runtime("code-exec-read-policy"),
+        enabled_tools=[],
+        include_web=False,
+        timeout_seconds=5,
+    )
+
+    assert result.status == "success"
+    stdout = result.artifact["data"]["stdout"]
+    assert "PermissionError" in stdout
+    assert "direct read blocked" in stdout
+
+
+def test_execute_code_child_policy_blocks_direct_project_file_write():
+    from agent_tools.public.code_execution import execute_code_impl
+    from pathlib import Path
+
+    target = Path("tests/.tmp-code-exec-direct-write.txt")
+    try:
+        result = execute_code_impl(
+            code=(
+                "try:\n"
+                "    open('tests/.tmp-code-exec-direct-write.txt', 'w', encoding='utf-8').write('bypass')\n"
+                "except PermissionError as exc:\n"
+                "    print(type(exc).__name__)\n"
+                "    print('direct write blocked')\n"
+            ),
+            runtime=_runtime("code-exec-write-policy"),
+            enabled_tools=[],
+            include_web=False,
+            timeout_seconds=5,
+        )
+
+        assert result.status == "success"
+        stdout = result.artifact["data"]["stdout"]
+        assert "PermissionError" in stdout
+        assert "direct write blocked" in stdout
+        assert not target.exists()
+    finally:
+        target.unlink(missing_ok=True)
 
 
 def test_visible_tools_include_web_only_when_requested():
@@ -280,6 +364,7 @@ def test_execute_code_out_of_workspace_write_is_not_silently_allowed():
 
     assert result.status == "success"
     assert "False" in result.artifact["data"]["stdout"]
+    assert "dispatch_error" not in result.artifact["data"]["stdout"]
     assert (
         "policy_denied" in result.artifact["data"]["stdout"]
         or "approval_required" in result.artifact["data"]["stdout"]
@@ -287,30 +372,34 @@ def test_execute_code_out_of_workspace_write_is_not_silently_allowed():
     )
 
 
-def test_execute_code_can_write_workspace_file(tmp_path, monkeypatch):
+def test_execute_code_can_write_workspace_file():
     from agent_tools.public.code_execution import execute_code_impl
+    from pathlib import Path
 
-    target = tmp_path / "code-exec-output.txt"
+    target = Path("tests/.tmp-code-exec-write.txt")
     code = (
         "from hermes_tools import write_file\n"
-        f"result = write_file({str(target)!r}, 'hello')\n"
+        "result = write_file('tests/.tmp-code-exec-write.txt', 'hello')\n"
         "print(result['ok'])\n"
         "print(result['error']['code'] if result['error'] else 'no_error')\n"
     )
-    result = execute_code_impl(
-        code=code,
-        runtime=_runtime("code-exec-workspace-write"),
-        enabled_tools=["write_file"],
-        include_web=False,
-        timeout_seconds=10,
-    )
+    try:
+        result = execute_code_impl(
+            code=code,
+            runtime=_runtime("code-exec-workspace-write"),
+            enabled_tools=["write_file"],
+            include_web=False,
+            timeout_seconds=10,
+        )
 
-    assert result.status == "success"
-    stdout = result.artifact["data"]["stdout"]
-    if "True" in stdout:
-        assert target.read_text() == "hello"
-    else:
-        assert "approval_required" in stdout or "policy_denied" in stdout or "access_denied" in stdout
+        assert result.status == "success"
+        stdout = result.artifact["data"]["stdout"]
+        assert "dispatch_error" not in stdout
+        assert "True" in stdout
+        assert "no_error" in stdout
+        assert target.read_text(encoding="utf-8") == "hello"
+    finally:
+        target.unlink(missing_ok=True)
 
 
 def test_web_tools_are_dispatchable_when_visible(monkeypatch):
@@ -328,3 +417,173 @@ def test_web_tools_are_dispatchable_when_visible(monkeypatch):
     assert payload["ok"] is True
     assert payload["tool"] == "web_search"
     assert payload["data"]["query"] == "langchain"
+
+
+def test_execute_code_impl_rejects_non_local_backend(monkeypatch):
+    from agent_tools.public.code_execution import execute_code_impl
+
+    monkeypatch.setattr(
+        "agent_tools.public.code_execution.get_backend_path_context",
+        lambda task_id: SimpleNamespace(env_type="docker"),
+    )
+
+    result = execute_code_impl(
+        code='print("backend")',
+        runtime=_runtime("code-exec-docker"),
+        enabled_tools=["read_file"],
+        include_web=False,
+        timeout_seconds=5,
+    )
+
+    assert result.status == "error"
+    assert result.artifact["error"]["code"] == "unsupported_backend"
+    assert result.artifact["data"]["env_type"] == "docker"
+
+
+def test_nested_dispatch_uses_deterministic_tool_call_id(monkeypatch):
+    from agent_tools.public import code_execution as ce
+    from agent_tools.shared.tool_result import tool_success
+
+    seen = {}
+
+    def fake_read_file(path, offset=1, limit=500, runtime=None):
+        seen["tool_call_id"] = getattr(runtime, "tool_call_id", None)
+        return tool_success("read_file", message="File read.", data={"path": path}, runtime=runtime)
+
+    monkeypatch.setattr("agent_tools.public.files.read_file", fake_read_file)
+
+    dispatcher = ce.CodeExecutionDispatcher(runtime=_runtime(tool_call_id="outer-call"), visible_tools=("read_file",))
+    payload = dispatcher.dispatch("read_file", {"path": "README.md", "offset": 1, "limit": 1})
+
+    assert payload["ok"] is True
+    assert seen["tool_call_id"] == "outer-call:rpc:1:read_file"
+
+
+def test_tool_message_to_rpc_payload_fails_closed_for_nonstandard_result():
+    from agent_tools.public.code_execution import tool_message_to_rpc_payload
+
+    payload = tool_message_to_rpc_payload("read_file", object())
+
+    assert payload["ok"] is False
+    assert payload["error"]["code"] == "invalid_response"
+    assert payload["tool"] == "read_file"
+
+
+def test_execute_code_impl_can_call_search_files():
+    from agent_tools.public.code_execution import execute_code_impl
+
+    result = execute_code_impl(
+        code='from hermes_tools import search_files\nresult = search_files("execute_code", path="tests/test_code_execution_tool.py")\nprint(result["ok"])\nprint(result["tool"])',
+        runtime=_runtime("code-exec-search"),
+        enabled_tools=["read_file", "search_files"],
+        include_web=False,
+        timeout_seconds=10,
+    )
+
+    assert result.status == "success"
+    assert "True" in result.artifact["data"]["stdout"]
+    assert "search_files" in result.artifact["data"]["stdout"]
+
+
+def test_execute_code_impl_can_call_patch():
+    from agent_tools.public.code_execution import execute_code_impl
+    from pathlib import Path
+
+    target = Path("tests/.tmp-code-exec-patch.txt")
+    target.write_text("hello world\nold line\nfoo bar\n", encoding="utf-8")
+
+    try:
+        result = execute_code_impl(
+            code='from hermes_tools import patch\nresult = patch(mode="replace", path="tests/.tmp-code-exec-patch.txt", old_string="old line", new_string="new line", replace_all=False)\nprint(result["ok"])\nprint(result["tool"])',
+            runtime=_runtime("code-exec-patch"),
+            enabled_tools=["read_file", "write_file", "patch"],
+            include_web=False,
+            timeout_seconds=10,
+        )
+
+        assert result.status == "success"
+        assert "True" in result.artifact["data"]["stdout"]
+        assert "patch" in result.artifact["data"]["stdout"]
+        assert "new line" in target.read_text(encoding="utf-8")
+    finally:
+        target.unlink(missing_ok=True)
+
+
+def test_execute_code_normalize_rpc_args_strips_dangerous_terminal_params(monkeypatch):
+    from agent_tools.public.code_execution import normalize_rpc_args
+
+    result = normalize_rpc_args(
+        "terminal",
+        {
+            "command": "echo hello",
+            "background": True,
+            "pty": True,
+            "notify_on_complete": True,
+            "watch_patterns": ["READY"],
+        },
+    )
+
+    assert result["command"] == "echo hello"
+    assert result["background"] is False
+    assert result["pty"] is False
+    assert result["notify_on_complete"] is False
+    assert result["watch_patterns"] is None
+
+
+def test_web_extract_dispatchable_when_visible(monkeypatch):
+    from agent_tools.public import code_execution as ce
+    from agent_tools.shared.tool_result import tool_success
+
+    def fake_web_extract(urls, format="markdown", use_llm_processing=True, model=None, min_length=2000, max_chars_per_url=20000, runtime=None):
+        return tool_success("web_extract", message="Extraction completed.", data={"urls": urls, "total": 1}, runtime=runtime)
+
+    monkeypatch.setattr("agent_tools.public.web.web_extract", fake_web_extract)
+
+    dispatcher = ce.CodeExecutionDispatcher(runtime=_runtime("code-exec-extract"), visible_tools=("web_search", "web_extract"))
+    payload = dispatcher.dispatch("web_extract", {"urls": ["https://example.com"], "format": "markdown"})
+
+    assert payload["ok"] is True
+    assert payload["tool"] == "web_extract"
+
+
+def test_rpc_server_connection_timeout_returns_error():
+    from agent_tools.public.code_execution import CodeExecutionDispatcher, CodeExecutionRpcServer
+    import socket
+
+    class FakeConn:
+        def recv(self, _size):
+            raise socket.timeout()
+
+    dispatcher = CodeExecutionDispatcher(runtime=_runtime(), visible_tools=("read_file",))
+    server = CodeExecutionRpcServer(socket_path="/tmp/unused.sock", dispatcher=dispatcher)
+
+    payload = server._handle_connection(FakeConn())
+
+    assert payload["ok"] is False
+    assert payload["error"]["code"] == "rpc_protocol_error"
+
+
+def test_execute_code_impl_dangerous_terminal_command_is_blocked():
+    from agent_tools.public.code_execution import execute_code_impl
+
+    code = (
+        "from hermes_tools import terminal\n"
+        "result = terminal('touch approval-required.txt')\n"
+        "print(result['ok'])\n"
+        "print(result['tool'])\n"
+        "print(result['error']['code'])\n"
+    )
+    result = execute_code_impl(
+        code=code,
+        runtime=_runtime("code-exec-terminal-policy"),
+        enabled_tools=["terminal"],
+        include_web=False,
+        timeout_seconds=10,
+    )
+
+    assert result.status == "success"
+    stdout = result.artifact["data"]["stdout"]
+    assert "False" in stdout
+    assert "terminal" in stdout
+    assert "dispatch_error" not in stdout
+    assert "approval_required" in stdout or "policy_denied" in stdout
