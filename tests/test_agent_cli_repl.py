@@ -1964,6 +1964,45 @@ def test_submit_message_without_progress_observer_keeps_legacy_runner_signature(
     assert len(calls) == 1
 
 
+def test_submit_message_passes_progress_observer_to_interrupt_resumes(monkeypatch):
+    import agent_cli.repl as repl
+    from agent_core.progress import mark_streamed_output
+
+    calls = []
+
+    class Observer:
+        def emit(self, event):
+            pass
+
+    observer = Observer()
+
+    def fake_runner(agent, input_data, config, *, observer=None):
+        calls.append((input_data, config, observer))
+        if len(calls) == 1:
+            return {"__interrupt__": [{"value": {"action": "approve"}}]}
+        return mark_streamed_output(
+            {"messages": [{"role": "assistant", "content": "resumed ok"}]}
+        )
+
+    monkeypatch.setattr(repl, "collect_approval_decisions", lambda requests: {"approved": True})
+    monkeypatch.setattr(repl, "extract_interrupt_review_requests", lambda result: result["__interrupt__"])
+
+    cli = AgentCLI(
+        session_store=FakeStore(),
+        checkpointer="cp",
+        agent_factory=lambda checkpointer: "agent",
+        runner=fake_runner,
+        workdir="/repo",
+        model_name="model",
+        progress_observer_factory=lambda: observer,
+    )
+
+    assert cli.submit_message("hello") == ""
+    assert len(calls) == 2
+    assert calls[0][2] is observer
+    assert calls[1][2] is observer
+
+
 def test_run_repl_does_not_print_duplicate_streamed_output(capsys):
     from agent_core.progress import mark_streamed_output
 

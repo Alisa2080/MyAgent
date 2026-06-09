@@ -26,10 +26,12 @@ class TerminalProgressObserver:
         self,
         *,
         stream: TextIO | None = None,
+        token_stream: TextIO | None = None,
         max_summary_chars: int = DEFAULT_MAX_SUMMARY_CHARS,
         max_progress_lines: int = DEFAULT_MAX_PROGRESS_LINES,
     ) -> None:
         self.stream = stream or sys.stderr
+        self.token_stream = token_stream or stream or sys.stdout
         self.max_summary_chars = max_summary_chars
         self.max_progress_lines = max_progress_lines
         self.progress_lines = 0
@@ -67,6 +69,9 @@ class TerminalProgressObserver:
         elif isinstance(event, TurnCompleteEvent):
             if event.streamed_output:
                 self.streamed_output = True
+                if self._token_started and not self._token_at_line_start:
+                    self._raw_token_write("\n")
+                    self._token_at_line_start = True
             self.flush()
         elif isinstance(event, FallbackEvent):
             self._write_progress(f"waiting for model... ({event.reason})")
@@ -78,6 +83,11 @@ class TerminalProgressObserver:
             self.stream.flush()
         except Exception:
             pass
+        if self.token_stream is not self.stream:
+            try:
+                self.token_stream.flush()
+            except Exception:
+                pass
 
     def _write_token(self, text: str) -> None:
         if not text:
@@ -85,8 +95,9 @@ class TerminalProgressObserver:
         if not self._token_started:
             self._token_started = True
             self.streamed_output = True
-            self._raw_write("\n")
-        self._raw_write(text)
+            if self.token_stream is self.stream:
+                self._raw_token_write("\n")
+        self._raw_token_write(text)
         self._token_at_line_start = text.endswith("\n")
         self.flush()
 
@@ -105,9 +116,12 @@ class TerminalProgressObserver:
     def _raw_write(self, text: str) -> None:
         self.stream.write(text)
 
+    def _raw_token_write(self, text: str) -> None:
+        self.token_stream.write(text)
+
     def _separate_from_partial_token(self) -> None:
         if self._token_started and not self._token_at_line_start:
-            self._raw_write("\n")
+            self._raw_token_write("\n")
             self._token_at_line_start = True
 
 

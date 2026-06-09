@@ -28,6 +28,7 @@ from agent_core.terminal_notifications import (
 DEFAULT_MAX_AUTO_RESUMES = 3
 MAX_AUTO_RESUMES_ENV = "TERMINAL_MAX_AUTO_RESUMES"
 PER_TURN_CLEANUP_ENV = "TERMINAL_PER_TURN_CLEANUP"
+STREAM_PROGRESS_MODES = ["messages", "values"]
 logger = logging.getLogger(__name__)
 
 
@@ -90,21 +91,73 @@ def _invoke_or_stream_agent(
 
     emit_progress(observer, ModelStartEvent(thread_id=thread_id))
     streamed_text = False
+    streamed_parts: list[str] = []
     final_result: Any = None
     stream_config = set_progress_observer(config, observer)
 
-    for chunk in stream(input_data, stream_config):
-        final_result = chunk
-        for text in _extract_token_deltas(chunk):
-            if not text:
+    try:
+        chunks = stream(input_data, stream_config, stream_mode=STREAM_PROGRESS_MODES)
+        for chunk in chunks:
+            raw_handled = False
+            for mode, data in _stream_parts(chunk):
+                raw_handled = True
+                if mode == "messages":
+                    for text in _extract_message_stream_deltas(data):
+                        streamed_text = True
+                        streamed_parts.append(text)
+                        emit_progress(observer, TokenDeltaEvent(text=text, thread_id=thread_id))
+                elif mode == "values":
+                    final_result = data
+                elif mode == "updates":
+                    final_result = _merge_update_chunk(final_result, data)
+            if raw_handled:
                 continue
-            streamed_text = True
-            emit_progress(observer, TokenDeltaEvent(text=text, thread_id=thread_id))
+
+            final_result = chunk
+            for text in _extract_token_deltas(chunk):
+                if not text:
+                    continue
+                streamed_text = True
+                streamed_parts.append(text)
+                emit_progress(observer, TokenDeltaEvent(text=text, thread_id=thread_id))
+    except (TypeError, NotImplementedError) as exc:
+        if streamed_text:
+            raise
+        emit_progress(observer, FallbackEvent(f"stream failed: {exc}", thread_id=thread_id))
+        return agent.invoke(input_data, config)
 
     emit_progress(observer, TurnCompleteEvent(thread_id=thread_id, streamed_output=streamed_text))
     if final_result is None:
+        if streamed_parts:
+            return mark_streamed_output({"final_response": "".join(streamed_parts)})
         return mark_streamed_output({"messages": []}) if streamed_text else {"messages": []}
     return mark_streamed_output(final_result) if streamed_text else final_result
+
+
+def _stream_parts(chunk: Any) -> list[tuple[str, Any]]:
+    if isinstance(chunk, tuple) and len(chunk) == 2 and isinstance(chunk[0], str):
+        return [(chunk[0], chunk[1])]
+    if isinstance(chunk, dict) and isinstance(chunk.get("type"), str) and "data" in chunk:
+        return [(str(chunk["type"]), chunk["data"])]
+    return []
+
+
+def _extract_message_stream_deltas(data: Any) -> list[str]:
+    message = data[0] if isinstance(data, tuple) and data else data
+    if _is_ai_chunk(message):
+        text = _message_content(message)
+        return [text] if text else []
+    return _extract_token_deltas(message)
+
+
+def _merge_update_chunk(current: Any, update: Any) -> Any:
+    if not isinstance(update, dict):
+        return current
+    merged = dict(current) if isinstance(current, dict) else {}
+    for value in update.values():
+        if isinstance(value, dict):
+            merged.update(value)
+    return merged or current
 
 
 def _extract_token_deltas(chunk: Any) -> list[str]:

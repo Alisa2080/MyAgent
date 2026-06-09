@@ -195,6 +195,7 @@ class AgentCLI:
         else:
             session_id = self.session_store.new_session_id()
             title = _title_from_message(self.session_store, processed)
+        observer = None
         try:
             observer = (
                 self.progress_observer_factory()
@@ -218,7 +219,7 @@ class AgentCLI:
             raise
         finally:
             self.last_call_elapsed_seconds = time.perf_counter() - started_at
-        result = self._handle_interrupts(result, session_id=session_id)
+        result = self._handle_interrupts(result, session_id=session_id, observer=observer)
         if not existing_session:
             self.session_store.create_session(
                 workdir=self.workdir,
@@ -304,16 +305,27 @@ class AgentCLI:
         if isinstance(metadata, dict):
             self.last_usage_metadata = metadata
 
-    def _handle_interrupts(self, result: Any, *, session_id: str | None = None) -> Any:
+    def _handle_interrupts(
+        self,
+        result: Any,
+        *,
+        session_id: str | None = None,
+        observer: Any = None,
+    ) -> Any:
         thread_id = session_id or self.session_id
         while has_interrupt(result):
             requests = extract_interrupt_review_requests(result)
             resume_value = collect_approval_decisions(requests)
-            result = self.runner(
-                self.agent,
-                Command(resume=resume_value),
-                {"configurable": {"thread_id": thread_id}},
-            )
+            config = {"configurable": {"thread_id": thread_id}}
+            if observer is None:
+                result = self.runner(self.agent, Command(resume=resume_value), config)
+            else:
+                result = self.runner(
+                    self.agent,
+                    Command(resume=resume_value),
+                    config,
+                    observer=observer,
+                )
         return result
 
     def handle_command(self, raw: str) -> str | None:

@@ -131,7 +131,10 @@ class ToolBusMiddleware(AgentMiddleware):
             )
         except ToolArgCoercionError as exc:
             logger.info("Tool %s received invalid input", _request_tool_name(request), exc_info=True)
-            return _invalid_input_message(request, exc)
+            result = _invalid_input_message(request, exc)
+            duration_ms = int((time.monotonic() - started) * 1000)
+            _emit_invalid_input_progress(request, result, duration_ms, exc)
+            return result
         except Exception as exc:
             logger.exception("Tool %s failed during ToolBusMiddleware request preparation", _request_tool_name(request))
             return _tool_exception_message(request, exc)
@@ -189,7 +192,10 @@ class ToolBusMiddleware(AgentMiddleware):
             )
         except ToolArgCoercionError as exc:
             logger.info("Tool %s received invalid input", _request_tool_name(request), exc_info=True)
-            return _invalid_input_message(request, exc)
+            result = _invalid_input_message(request, exc)
+            duration_ms = int((time.monotonic() - started) * 1000)
+            _emit_invalid_input_progress(request, result, duration_ms, exc)
+            return result
         except Exception as exc:
             logger.exception(
                 "Tool %s failed during ToolBusMiddleware request preparation",
@@ -408,6 +414,38 @@ def _request_tool_call_id(request: ToolCallRequest) -> str:
     except Exception:
         pass
     return ""
+
+
+def _request_tool_args(request: ToolCallRequest) -> dict[str, Any]:
+    try:
+        tool_call = getattr(request, "tool_call", None) or {}
+        raw_args = tool_call.get("args") if isinstance(tool_call, dict) else None
+        return raw_args if isinstance(raw_args, dict) else {}
+    except Exception:
+        return {}
+
+
+def _emit_invalid_input_progress(
+    request: ToolCallRequest,
+    result: ToolMessage,
+    duration_ms: int,
+    exc: ToolArgCoercionError,
+) -> None:
+    runtime = getattr(request, "runtime", None)
+    observer = get_progress_observer_from_runtime(runtime)
+    thread_id = RuntimeContext.from_runtime(runtime).thread_id
+    emit_progress(
+        observer,
+        ToolErrorEvent(
+            tool_name=_request_tool_name(request),
+            args=_request_tool_args(request),
+            result=result,
+            duration_ms=duration_ms,
+            error_message=str(exc),
+            tool_call_id=_request_tool_call_id(request),
+            thread_id=thread_id,
+        ),
+    )
 
 
 def _tool_exception_message(request: ToolCallRequest, exc: Exception) -> ToolMessage:

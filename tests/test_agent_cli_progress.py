@@ -98,6 +98,26 @@ def test_terminal_observer_defaults_to_stderr(monkeypatch):
     assert "waiting for model..." in stderr.getvalue()
 
 
+def test_terminal_observer_defaults_tokens_to_stdout_and_progress_to_stderr(monkeypatch):
+    import sys
+
+    from agent_cli.progress import TerminalProgressObserver
+    from agent_core.progress import ModelStartEvent, TokenDeltaEvent, TurnCompleteEvent
+
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+    monkeypatch.setattr(sys, "stdout", stdout)
+    monkeypatch.setattr(sys, "stderr", stderr)
+
+    observer = TerminalProgressObserver()
+    observer.emit(ModelStartEvent(thread_id="thread-1"))
+    observer.emit(TokenDeltaEvent("answer", thread_id="thread-1"))
+    observer.emit(TurnCompleteEvent(thread_id="thread-1", streamed_output=True))
+
+    assert stderr.getvalue() == "waiting for model...\n"
+    assert stdout.getvalue() == "answer\n"
+
+
 def test_terminal_observer_separates_progress_after_partial_token():
     from agent_cli.progress import TerminalProgressObserver
     from agent_core.progress import TokenDeltaEvent, ToolStartEvent

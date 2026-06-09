@@ -532,6 +532,35 @@ def test_tool_bus_emits_error_event_for_handler_exception():
     assert "boom" in error_event.error_message
 
 
+def test_tool_bus_emits_error_event_for_invalid_input():
+    from agent_core.progress import ToolErrorEvent, set_progress_observer
+    from agent_core.tool_bus_middleware import ToolBusMiddleware
+
+    events = []
+    observer = SimpleNamespace(emit=lambda event: events.append(event))
+    request = _request("terminal", args={"count": "abc"}, tool_call_id="call-1")
+    request.tool = SimpleNamespace(name="terminal", args={"count": {"type": "integer"}})
+    request.runtime = SimpleNamespace(
+        config=set_progress_observer(
+            {"configurable": {"thread_id": "thread-1"}},
+            observer,
+        )
+    )
+
+    result = ToolBusMiddleware().wrap_tool_call(
+        request,
+        lambda req: _message(tool="terminal", content="should not run"),
+    )
+
+    assert result.status == "error"
+    error_events = [event for event in events if isinstance(event, ToolErrorEvent)]
+    assert len(error_events) == 1
+    assert error_events[0].tool_name == "terminal"
+    assert error_events[0].args == {"count": "abc"}
+    assert error_events[0].thread_id == "thread-1"
+    assert "Invalid input" in error_events[0].error_message
+
+
 def test_tool_bus_marks_pre_hook_blocked_as_blocked_complete_event():
     from agent_core.progress import ToolCompleteEvent, set_progress_observer
     from agent_core.tool_bus_middleware import ToolBusHooks, ToolBusMiddleware

@@ -659,3 +659,112 @@ def test_runner_streaming_exception_propagates(monkeypatch):
             {"configurable": {"thread_id": "thread-1"}},
             observer=Observer(),
         )
+
+
+def test_runner_uses_langgraph_message_and_value_stream_modes(monkeypatch):
+    import agent_core.agent_runner as runner
+    from agent_core.progress import TokenDeltaEvent, has_streamed_output
+
+    events = []
+
+    class Observer:
+        def emit(self, event):
+            events.append(event)
+
+    class FakeAgent:
+        def stream(self, input_data, config=None, stream_mode=None):
+            assert stream_mode == ["messages", "values"]
+            yield ("messages", ({"type": "AIMessageChunk", "content": "hello"}, {"node": "model"}))
+            yield ("messages", ({"type": "AIMessageChunk", "content": " world"}, {"node": "model"}))
+            yield ("values", {"messages": [{"role": "assistant", "content": "hello world"}]})
+
+        def invoke(self, input_data, config=None):
+            raise AssertionError("invoke should not be used")
+
+    monkeypatch.setattr(runner, "drain_terminal_notifications_for_thread_id", lambda thread_id: [])
+
+    result = runner.invoke_agent_with_terminal_notifications(
+        FakeAgent(),
+        {"messages": [{"role": "user", "content": "start"}]},
+        {"configurable": {"thread_id": "thread-1"}},
+        observer=Observer(),
+    )
+
+    assert result["messages"][-1]["content"] == "hello world"
+    assert has_streamed_output(result) is True
+    token_events = [event for event in events if isinstance(event, TokenDeltaEvent)]
+    assert [event.text for event in token_events] == ["hello", " world"]
+
+
+def test_runner_preserves_final_state_from_v2_stream_parts(monkeypatch):
+    import agent_core.agent_runner as runner
+    from agent_core.progress import TokenDeltaEvent, has_streamed_output
+
+    events = []
+
+    class Observer:
+        def emit(self, event):
+            events.append(event)
+
+    class FakeAgent:
+        def stream(self, input_data, config=None, stream_mode=None):
+            assert stream_mode == ["messages", "values"]
+            yield {
+                "type": "messages",
+                "data": ({"type": "AIMessageChunk", "content": "v2"}, {"node": "model"}),
+            }
+            yield {
+                "type": "values",
+                "data": {"messages": [{"role": "assistant", "content": "v2 final"}]},
+            }
+
+        def invoke(self, input_data, config=None):
+            raise AssertionError("invoke should not be used")
+
+    monkeypatch.setattr(runner, "drain_terminal_notifications_for_thread_id", lambda thread_id: [])
+
+    result = runner.invoke_agent_with_terminal_notifications(
+        FakeAgent(),
+        {"messages": [{"role": "user", "content": "start"}]},
+        {"configurable": {"thread_id": "thread-1"}},
+        observer=Observer(),
+    )
+
+    assert result["messages"][-1]["content"] == "v2 final"
+    assert has_streamed_output(result) is True
+    token_events = [event for event in events if isinstance(event, TokenDeltaEvent)]
+    assert [event.text for event in token_events] == ["v2"]
+
+
+def test_runner_falls_back_to_invoke_when_stream_mode_is_unsupported(monkeypatch):
+    import agent_core.agent_runner as runner
+    from agent_core.progress import FallbackEvent, has_streamed_output
+
+    events = []
+
+    class Observer:
+        def emit(self, event):
+            events.append(event)
+
+    class FakeAgent:
+        def stream(self, input_data, config=None, stream_mode=None):
+            raise TypeError("stream_mode unsupported")
+            yield
+
+        def invoke(self, input_data, config=None):
+            return {"messages": [{"role": "assistant", "content": "fallback ok"}]}
+
+    monkeypatch.setattr(runner, "drain_terminal_notifications_for_thread_id", lambda thread_id: [])
+
+    result = runner.invoke_agent_with_terminal_notifications(
+        FakeAgent(),
+        {"messages": [{"role": "user", "content": "start"}]},
+        {"configurable": {"thread_id": "thread-1"}},
+        observer=Observer(),
+    )
+
+    assert result == {"messages": [{"role": "assistant", "content": "fallback ok"}]}
+    assert has_streamed_output(result) is False
+    fallback_events = [event for event in events if isinstance(event, FallbackEvent)]
+    assert fallback_events
+    assert "stream failed" in fallback_events[-1].reason
