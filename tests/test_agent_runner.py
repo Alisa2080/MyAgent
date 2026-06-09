@@ -661,6 +661,39 @@ def test_runner_streaming_exception_propagates(monkeypatch):
         )
 
 
+def test_runner_finalizes_partial_stream_before_propagating_exception(monkeypatch):
+    import pytest
+
+    import agent_core.agent_runner as runner
+    from agent_core.progress import TokenDeltaEvent, TurnCompleteEvent
+
+    events = []
+
+    class Observer:
+        def emit(self, event):
+            events.append(event)
+
+    class FakeAgent:
+        def stream(self, input_data, config=None, stream_mode=None):
+            yield ("messages", ({"type": "AIMessageChunk", "content": "partial"}, {"node": "model"}))
+            raise RuntimeError("model failed")
+
+    monkeypatch.setattr(runner, "drain_terminal_notifications_for_thread_id", lambda thread_id: [])
+
+    with pytest.raises(RuntimeError, match="model failed"):
+        runner.invoke_agent_with_terminal_notifications(
+            FakeAgent(),
+            {"messages": [{"role": "user", "content": "start"}]},
+            {"configurable": {"thread_id": "thread-1"}},
+            observer=Observer(),
+        )
+
+    assert [event.text for event in events if isinstance(event, TokenDeltaEvent)] == ["partial"]
+    complete_events = [event for event in events if isinstance(event, TurnCompleteEvent)]
+    assert len(complete_events) == 1
+    assert complete_events[0].streamed_output is True
+
+
 def test_runner_uses_langgraph_message_and_value_stream_modes(monkeypatch):
     import agent_core.agent_runner as runner
     from agent_core.progress import TokenDeltaEvent, has_streamed_output
@@ -768,3 +801,43 @@ def test_runner_falls_back_to_invoke_when_stream_mode_is_unsupported(monkeypatch
     fallback_events = [event for event in events if isinstance(event, FallbackEvent)]
     assert fallback_events
     assert "stream failed" in fallback_events[-1].reason
+
+
+def test_runner_extracts_real_ai_message_chunk_objects(monkeypatch):
+    import pytest
+
+    import agent_core.agent_runner as runner
+    from agent_core.progress import TokenDeltaEvent, has_streamed_output
+
+    messages_module = pytest.importorskip("langchain_core.messages")
+    AIMessageChunk = getattr(messages_module, "AIMessageChunk", None)
+    if AIMessageChunk is None:
+        pytest.skip("langchain_core.messages.AIMessageChunk is unavailable")
+
+    events = []
+
+    class Observer:
+        def emit(self, event):
+            events.append(event)
+
+    class FakeAgent:
+        def stream(self, input_data, config=None, stream_mode=None):
+            yield ("messages", (AIMessageChunk(content="real"), {"node": "model"}))
+            yield ("values", {"messages": [{"role": "assistant", "content": "real final"}]})
+
+        def invoke(self, input_data, config=None):
+            raise AssertionError("invoke should not be used")
+
+    monkeypatch.setattr(runner, "drain_terminal_notifications_for_thread_id", lambda thread_id: [])
+
+    result = runner.invoke_agent_with_terminal_notifications(
+        FakeAgent(),
+        {"messages": [{"role": "user", "content": "start"}]},
+        {"configurable": {"thread_id": "thread-1"}},
+        observer=Observer(),
+    )
+
+    assert result["messages"][-1]["content"] == "real final"
+    assert has_streamed_output(result) is True
+    token_events = [event for event in events if isinstance(event, TokenDeltaEvent)]
+    assert [event.text for event in token_events] == ["real"]

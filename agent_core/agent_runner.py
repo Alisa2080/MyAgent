@@ -122,9 +122,14 @@ def _invoke_or_stream_agent(
                 emit_progress(observer, TokenDeltaEvent(text=text, thread_id=thread_id))
     except (TypeError, NotImplementedError) as exc:
         if streamed_text:
+            emit_progress(observer, TurnCompleteEvent(thread_id=thread_id, streamed_output=True))
             raise
         emit_progress(observer, FallbackEvent(f"stream failed: {exc}", thread_id=thread_id))
         return agent.invoke(input_data, config)
+    except Exception:
+        if streamed_text:
+            emit_progress(observer, TurnCompleteEvent(thread_id=thread_id, streamed_output=True))
+        raise
 
     emit_progress(observer, TurnCompleteEvent(thread_id=thread_id, streamed_output=streamed_text))
     if final_result is None:
