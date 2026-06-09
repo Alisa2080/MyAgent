@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import os
+import re
+
 from langchain.tools import ToolRuntime, tool
 from pydantic import BaseModel, Field
 
@@ -159,3 +162,46 @@ def execute_code(code: str, runtime: ToolRuntime) -> object:
         code="not_implemented",
         runtime=runtime,
     )
+
+
+SAFE_ENV_EXACT = {"PATH", "HOME", "USER", "LANG", "TERM", "TMPDIR", "TMP", "TEMP", "SHELL", "LOGNAME", "VIRTUAL_ENV", "CONDA_PREFIX"}
+SAFE_ENV_PREFIXES = ("LC_", "XDG_", "CONDA_")
+SECRET_SUBSTRINGS = ("KEY", "TOKEN", "SECRET", "PASSWORD", "CREDENTIAL", "PASSWD", "AUTH")
+ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
+SECRET_VALUE_RE = re.compile(r"(sk-[A-Za-z0-9_-]{8,}|[A-Za-z0-9_]*token[A-Za-z0-9_]*=[^\s]+)", re.IGNORECASE)
+
+
+def _is_safe_env_name(name: str) -> bool:
+    upper = name.upper()
+    if any(marker in upper for marker in SECRET_SUBSTRINGS):
+        return False
+    return name in SAFE_ENV_EXACT or any(name.startswith(prefix) for prefix in SAFE_ENV_PREFIXES)
+
+
+def safe_child_env(extra: dict[str, str] | None = None) -> dict[str, str]:
+    env = {name: value for name, value in os.environ.items() if _is_safe_env_name(name)}
+    env.update(extra or {})
+    return env
+
+
+def sanitize_output(text: str, *, limit: int) -> tuple[str, bool]:
+    cleaned = ANSI_RE.sub("", str(text or ""))
+    cleaned = SECRET_VALUE_RE.sub("[REDACTED]", cleaned)
+    if len(cleaned) <= limit:
+        return cleaned, False
+    return cleaned[:limit] + "\n[truncated]", True
+
+
+def normalize_rpc_args(tool_name: str, args: dict) -> dict:
+    normalized = dict(args or {})
+    if tool_name == "terminal":
+        return {
+            "command": str(normalized.get("command") or ""),
+            "background": False,
+            "timeout": normalized.get("timeout"),
+            "workdir": normalized.get("workdir"),
+            "pty": False,
+            "notify_on_complete": False,
+            "watch_patterns": None,
+        }
+    return normalized

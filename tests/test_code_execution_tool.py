@@ -56,3 +56,57 @@ def test_schema_description_lists_only_visible_tools():
     assert "web_search" not in description
     assert "single simple operation" in description
     assert "background services are not supported" in description
+
+
+def test_safe_child_env_removes_secret_like_variables(monkeypatch):
+    from agent_tools.public.code_execution import safe_child_env
+
+    monkeypatch.setenv("PATH", "/usr/bin")
+    monkeypatch.setenv("OPENAI_API_KEY", "secret")
+    monkeypatch.setenv("MY_TOKEN", "secret")
+    monkeypatch.setenv("LANG", "C.UTF-8")
+
+    env = safe_child_env({"CODE_EXECUTION_RPC_SOCKET": "/tmp/rpc.sock"})
+
+    assert env["PATH"] == "/usr/bin"
+    assert env["LANG"] == "C.UTF-8"
+    assert env["CODE_EXECUTION_RPC_SOCKET"] == "/tmp/rpc.sock"
+    assert "OPENAI_API_KEY" not in env
+    assert "MY_TOKEN" not in env
+
+
+def test_sanitize_output_strips_ansi_redacts_and_truncates():
+    from agent_tools.public.code_execution import sanitize_output
+
+    text = "\x1b[31mred\x1b[0m sk-testsecret1234567890 more"
+    sanitized, truncated = sanitize_output(text, limit=18)
+
+    assert "\x1b" not in sanitized
+    assert "sk-testsecret" not in sanitized
+    assert len(sanitized) <= 18 + len("\n[truncated]")
+    assert truncated is True
+
+
+def test_terminal_args_are_forced_foreground():
+    from agent_tools.public.code_execution import normalize_rpc_args
+
+    args = normalize_rpc_args(
+        "terminal",
+        {
+            "command": "pytest",
+            "background": True,
+            "pty": True,
+            "notify_on_complete": True,
+            "watch_patterns": ["ready"],
+        },
+    )
+
+    assert args == {
+        "command": "pytest",
+        "background": False,
+        "timeout": None,
+        "workdir": None,
+        "pty": False,
+        "notify_on_complete": False,
+        "watch_patterns": None,
+    }
