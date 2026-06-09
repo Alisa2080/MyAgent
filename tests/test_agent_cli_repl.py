@@ -1962,3 +1962,42 @@ def test_submit_message_without_progress_observer_keeps_legacy_runner_signature(
 
     assert cli.submit_message("hello") == "ok"
     assert len(calls) == 1
+
+
+def test_run_repl_does_not_print_duplicate_streamed_output(capsys):
+    from agent_core.progress import mark_streamed_output
+
+    class Prompt:
+        def __init__(self):
+            self.calls = 0
+
+        def prompt(self, prompt_text):
+            self.calls += 1
+            if self.calls == 1:
+                return "hello"
+            raise EOFError
+
+    def fake_runner(agent, input_data, config, *, observer=None):
+        return mark_streamed_output(
+            {"messages": [{"role": "assistant", "content": "already streamed"}]}
+        )
+
+    class Observer:
+        def emit(self, event):
+            pass
+
+    cli = AgentCLI(
+        session_store=FakeStore(),
+        checkpointer="cp",
+        agent_factory=lambda checkpointer: "agent",
+        runner=fake_runner,
+        workdir="/repo",
+        model_name="model",
+        prompt_session=Prompt(),
+        show_banner=False,
+        progress_observer_factory=Observer,
+    )
+
+    assert cli.run_repl() == 0
+    captured = capsys.readouterr()
+    assert "already streamed" not in captured.out

@@ -83,6 +83,21 @@ def test_terminal_observer_caps_progress_lines():
     assert "four" not in output
 
 
+def test_terminal_observer_defaults_to_stderr(monkeypatch):
+    import sys
+
+    from agent_cli.progress import TerminalProgressObserver
+    from agent_core.progress import ModelStartEvent
+
+    stderr = io.StringIO()
+    monkeypatch.setattr(sys, "stderr", stderr)
+
+    observer = TerminalProgressObserver()
+    observer.emit(ModelStartEvent(thread_id="thread-1"))
+
+    assert "waiting for model..." in stderr.getvalue()
+
+
 def test_terminal_observer_separates_progress_after_partial_token():
     from agent_cli.progress import TerminalProgressObserver
     from agent_core.progress import TokenDeltaEvent, ToolStartEvent
