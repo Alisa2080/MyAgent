@@ -206,9 +206,23 @@ def check_background_tasks(db_path: Path) -> HealthCheck:
     return ok("Background Tasks", "metadata readable")
 
 
-def check_feishu_gateway_config(env: dict[str, str] | None = None, *, transport: str | None = None) -> list[str]:
-    values = env or os.environ
-    gateway_service_env = read_gateway_service_env()
+def _gateway_service_env_path(cli_home: Path) -> Path:
+    return cli_home / "gateway" / "service.env"
+
+
+def _read_gateway_service_env(cli_home: Path | None = None) -> dict[str, str]:
+    path = _gateway_service_env_path(cli_home) if cli_home is not None else None
+    return read_gateway_service_env(path=path)
+
+
+def check_feishu_gateway_config(
+    env: dict[str, str] | None = None,
+    *,
+    transport: str | None = None,
+    cli_home: Path | None = None,
+) -> list[str]:
+    values = os.environ if env is None else env
+    gateway_service_env = _read_gateway_service_env(cli_home) if env is None or cli_home is not None else {}
     required = ["FEISHU_APP_ID", "FEISHU_APP_SECRET"]
     if transport in {None, "http", "feishu-http", "callback-http"}:
         required.append("FEISHU_CALLBACK_TOKEN")
@@ -225,16 +239,16 @@ def check_feishu_gateway_config(env: dict[str, str] | None = None, *, transport:
 def check_feishu_gateway(cli_home: Path) -> HealthCheck:
     gateway_status = read_gateway_status(cli_home)
     transport = gateway_status_transport(gateway_status)
-    errors = check_feishu_gateway_config(transport=transport)
+    errors = check_feishu_gateway_config(transport=transport, cli_home=cli_home)
     if errors:
         return warn("Feishu Gateway", "; ".join(errors))
     return ok("Feishu Gateway", "configured")
 
 
-def check_feishu_ws_gateway_config() -> HealthCheck:
+def check_feishu_ws_gateway_config(cli_home: Path | None = None) -> HealthCheck:
     import os as _os
 
-    gateway_service_env = read_gateway_service_env()
+    gateway_service_env = _read_gateway_service_env(cli_home)
     missing = [
         key
         for key in ("FEISHU_APP_ID", "FEISHU_APP_SECRET")
@@ -249,8 +263,8 @@ def check_feishu_ws_gateway_config() -> HealthCheck:
     return ok("Feishu WebSocket", "configured")
 
 
-def check_feishu_ws_gateway() -> HealthCheck:
-    errors = check_feishu_ws_gateway_config()
+def check_feishu_ws_gateway(cli_home: Path | None = None) -> HealthCheck:
+    errors = check_feishu_ws_gateway_config(cli_home)
     if errors.status == "WARN":
         return errors
     return ok("Feishu WebSocket", "configured")
@@ -311,8 +325,8 @@ def check_cron_service() -> HealthCheck:
     return ok("Cron Service", f"running; {detail_text}")
 
 
-def check_feishu_token() -> HealthCheck:
-    gateway_service_env = read_gateway_service_env()
+def check_feishu_token(cli_home: Path | None = None) -> HealthCheck:
+    gateway_service_env = _read_gateway_service_env(cli_home)
     missing = [
         k
         for k in ("FEISHU_APP_ID", "FEISHU_APP_SECRET")
@@ -439,10 +453,10 @@ def run_health_checks(workdir: str, cli_home: Path | None = None) -> list[Health
         check_openai_api_key(),
         check_background_tasks(db_path),
         check_feishu_gateway(cli_home),
-        check_feishu_ws_gateway(),
+        check_feishu_ws_gateway(cli_home),
         check_gateway_service(),
         cron_service,
-        check_feishu_token(),
+        check_feishu_token(cli_home),
         check_cron_feishu_delivery(),
         check_gateway_inbox(cli_home),
         check_cron_delivery_queue(cron_service_healthy=cron_service.status == "OK"),
