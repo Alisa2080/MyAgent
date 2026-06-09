@@ -311,3 +311,20 @@ def test_execute_code_can_write_workspace_file(tmp_path, monkeypatch):
         assert target.read_text() == "hello"
     else:
         assert "approval_required" in stdout or "policy_denied" in stdout or "access_denied" in stdout
+
+
+def test_web_tools_are_dispatchable_when_visible(monkeypatch):
+    from agent_tools.public import code_execution as ce
+    from agent_tools.shared.tool_result import tool_success
+
+    def fake_web_search(query, limit=5, runtime=None):
+        return tool_success("web_search", message="Search completed.", data={"query": query, "results": []}, runtime=runtime)
+
+    monkeypatch.setattr("agent_tools.public.web.web_search", fake_web_search)
+
+    dispatcher = ce.CodeExecutionDispatcher(runtime=_runtime("code-exec-web"), visible_tools=("web_search",))
+    payload = dispatcher.dispatch("web_search", {"query": "langchain", "limit": 1})
+
+    assert payload["ok"] is True
+    assert payload["tool"] == "web_search"
+    assert payload["data"]["query"] == "langchain"

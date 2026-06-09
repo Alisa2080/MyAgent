@@ -179,16 +179,17 @@ def build_execute_code_description(visible_tools: tuple[str, ...]) -> str:
 
 class ExecuteCodeInput(BaseModel):
     code: str = Field(description="Python code to execute with constrained project tool access.")
+    include_web: bool = Field(default=False, description="Expose web_search and web_extract in addition to local file development tools.")
 
 
 @tool("execute_code", args_schema=ExecuteCodeInput)
-def execute_code(code: str, runtime: ToolRuntime) -> object:
+def execute_code(code: str, runtime: ToolRuntime, include_web: bool = False) -> object:
     """Execute Python code locally with constrained access to selected project tools."""
     return execute_code_impl(
         code=code,
         runtime=runtime,
-        enabled_tools=list(STAGE_ONE_ALLOWED_TOOLS),
-        include_web=False,
+        enabled_tools=list(SANDBOX_ALLOWED_TOOLS if include_web else STAGE_ONE_ALLOWED_TOOLS),
+        include_web=include_web,
     )
 
 

@@ -31,6 +31,16 @@
 - Keep workspace path policy in `agent_tools/file_policy.py`; low-level toolkit modules should not know about project-specific workspace rules.
 - Avoid adding new behavior to `agent_tools/general.py`; it exists only as a compatibility export layer.
 
+### Code Execution Tool
+
+`execute_code` lets the agent run a short local Python script that can call a constrained set of project tools through generated `hermes_tools.py` stubs. Use it when a task needs 3 or more tool calls, loops, filtering, batching, retries, or large intermediate results that should be compressed before returning to the model.
+
+For a single simple operation, direct tools such as `read_file`, `search_files`, `terminal`, or `web_search` are preferred.
+
+Stages 1-3 are local-only. Windows and non-local terminal backends return an unsupported-backend error. Script-side terminal calls are foreground-only: background processes, PTY interaction, completion notifications, and watch patterns are disabled.
+
+`code_execution` is enabled by default for `dev` and `test` runtime profiles. It is not enabled by default for `hosted` or `prod`, but it can be explicitly enabled through the `code_execution` toolset.
+
 ## terminal toolkit Terminal Session Contract
 
 The project exposes two shell-related tools:
