@@ -211,3 +211,30 @@ def test_execute_code_impl_can_call_read_file():
     assert result.status == "success"
     assert "True" in result.artifact["data"]["stdout"]
     assert "read_file" in result.artifact["data"]["stdout"]
+
+
+def test_public_execute_code_uses_local_executor():
+    from agent_tools.public.code_execution import execute_code
+
+    result = execute_code.func(
+        code='print("public wrapper")',
+        runtime=_runtime(thread_id="code-exec-public"),
+    )
+
+    assert result.status == "success"
+    assert "public wrapper" in result.artifact["data"]["stdout"]
+
+
+def test_visible_tools_include_web_only_when_requested():
+    from agent_tools.public.code_execution import resolve_visible_tools_for_profile
+
+    assert "web_search" not in resolve_visible_tools_for_profile(
+        enabled_tools=["read_file", "web_search"],
+        runtime_profile="dev",
+        include_web=False,
+    )
+    assert "web_search" in resolve_visible_tools_for_profile(
+        enabled_tools=["read_file", "web_search"],
+        runtime_profile="dev",
+        include_web=True,
+    )

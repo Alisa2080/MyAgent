@@ -58,6 +58,18 @@ def visible_sandbox_tools(
     return tuple(name for name in TOOL_ORDER if name in allowed and name in enabled)
 
 
+def resolve_visible_tools_for_profile(
+    *,
+    enabled_tools: list[str] | tuple[str, ...] | set[str] | None,
+    runtime_profile: str | None,
+    include_web: bool,
+) -> tuple[str, ...]:
+    profile = (runtime_profile or "").strip().lower()
+    if profile in {"hosted", "prod"}:
+        return visible_sandbox_tools(enabled_tools, include_web=include_web)
+    return visible_sandbox_tools(enabled_tools, include_web=include_web)
+
+
 _TOOL_STUBS = {
     "read_file": (
         "read_file",
@@ -172,11 +184,11 @@ class ExecuteCodeInput(BaseModel):
 @tool("execute_code", args_schema=ExecuteCodeInput)
 def execute_code(code: str, runtime: ToolRuntime) -> object:
     """Execute Python code locally with constrained access to selected project tools."""
-    return tool_failure(
-        "execute_code",
-        "execute_code is registered but the local executor is not implemented yet.",
-        code="not_implemented",
+    return execute_code_impl(
+        code=code,
         runtime=runtime,
+        enabled_tools=list(STAGE_ONE_ALLOWED_TOOLS),
+        include_web=False,
     )
 
 
