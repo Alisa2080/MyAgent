@@ -6,6 +6,8 @@ import re
 from langchain.tools import ToolRuntime, tool
 from pydantic import BaseModel, Field
 
+from langchain_core.messages import ToolMessage
+
 from agent_tools.shared.tool_result import tool_failure
 
 STAGE_ONE_ALLOWED_TOOLS = frozenset({
@@ -205,3 +207,78 @@ def normalize_rpc_args(tool_name: str, args: dict) -> dict:
             "watch_patterns": None,
         }
     return normalized
+
+
+def _failure_payload(tool_name: str, message: str, *, code: str, data=None, meta=None) -> dict:
+    return {
+        "ok": False,
+        "tool": tool_name,
+        "message": message,
+        "data": data,
+        "error": {"code": code, "message": message},
+        "meta": meta or {},
+    }
+
+
+def tool_message_to_rpc_payload(tool_name: str, value: object) -> dict:
+    if isinstance(value, ToolMessage) and isinstance(value.artifact, dict):
+        artifact = dict(value.artifact)
+        return {
+            "ok": bool(artifact.get("ok", value.status != "error")),
+            "tool": str(artifact.get("tool") or tool_name),
+            "message": str(artifact.get("message") or value.content or ""),
+            "data": artifact.get("data"),
+            "error": artifact.get("error"),
+            "meta": dict(artifact.get("meta") or {}),
+        }
+    if isinstance(value, dict):
+        return {
+            "ok": bool(value.get("ok", True)),
+            "tool": str(value.get("tool") or tool_name),
+            "message": str(value.get("message") or ""),
+            "data": value.get("data"),
+            "error": value.get("error"),
+            "meta": dict(value.get("meta") or {}),
+        }
+    return {
+        "ok": True,
+        "tool": tool_name,
+        "message": "Tool returned a non-standard response.",
+        "data": {"value": str(value)},
+        "error": None,
+        "meta": {},
+    }
+
+
+class CodeExecutionDispatcher:
+    def __init__(self, *, runtime: object, visible_tools: tuple[str, ...], max_tool_calls: int = 50) -> None:
+        self.runtime = runtime
+        self.visible_tools = set(visible_tools)
+        self.max_tool_calls = int(max_tool_calls)
+        self.tool_calls = 0
+
+    def dispatch(self, tool_name: str, args: dict) -> dict:
+        if tool_name not in self.visible_tools:
+            return _failure_payload(tool_name, f"Tool is not available in execute_code: {tool_name}", code="tool_not_available")
+        self.tool_calls += 1
+        if self.tool_calls > self.max_tool_calls:
+            return _failure_payload(tool_name, "execute_code tool call limit exceeded.", code="tool_call_limit_exceeded")
+        try:
+            result = self._call_tool(tool_name, normalize_rpc_args(tool_name, args))
+        except Exception as exc:
+            return _failure_payload(tool_name, f"RPC tool dispatch failed: {type(exc).__name__}: {exc}", code="dispatch_error")
+        return tool_message_to_rpc_payload(tool_name, result)
+
+    def _call_tool(self, tool_name: str, args: dict) -> object:
+        if tool_name in {"read_file", "search_files", "write_file", "patch"}:
+            from agent_tools.public import files
+            func = getattr(files, tool_name)
+            return func(runtime=self.runtime, **args)
+        if tool_name == "terminal":
+            from agent_tools.public.terminal import terminal
+            return terminal(runtime=self.runtime, **args)
+        if tool_name in {"web_search", "web_extract"}:
+            from agent_tools.public import web
+            func = getattr(web, tool_name)
+            return func(runtime=self.runtime, **args)
+        return _failure_payload(tool_name, f"Tool is not implemented in execute_code: {tool_name}", code="tool_not_implemented")

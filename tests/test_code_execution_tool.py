@@ -110,3 +110,55 @@ def test_terminal_args_are_forced_foreground():
         "notify_on_complete": False,
         "watch_patterns": None,
     }
+
+
+def _runtime(thread_id="code-exec-thread", tool_call_id="call-execute"):
+    return SimpleNamespace(
+        config={"configurable": {"thread_id": thread_id}},
+        tool_call_id=tool_call_id,
+    )
+
+
+def test_tool_message_artifact_is_normalized_to_script_dict():
+    from agent_tools.public.code_execution import tool_message_to_rpc_payload
+    from agent_tools.shared.tool_result import tool_success
+
+    message = tool_success(
+        "read_file",
+        message="File read.",
+        data={"path": "README.md"},
+        meta={"truncated": False},
+        runtime=_runtime(),
+    )
+
+    payload = tool_message_to_rpc_payload("read_file", message)
+
+    assert payload == {
+        "ok": True,
+        "tool": "read_file",
+        "message": "File read.",
+        "data": {"path": "README.md"},
+        "error": None,
+        "meta": {"truncated": False},
+    }
+
+
+def test_rpc_dispatch_rejects_unavailable_tool():
+    from agent_tools.public.code_execution import CodeExecutionDispatcher
+
+    dispatcher = CodeExecutionDispatcher(runtime=_runtime(), visible_tools=("read_file",))
+    payload = dispatcher.dispatch("terminal", {"command": "pwd"})
+
+    assert payload["ok"] is False
+    assert payload["error"]["code"] == "tool_not_available"
+
+
+def test_rpc_dispatch_enforces_tool_call_limit():
+    from agent_tools.public.code_execution import CodeExecutionDispatcher
+
+    dispatcher = CodeExecutionDispatcher(runtime=_runtime(), visible_tools=("read_file",), max_tool_calls=1)
+    dispatcher.dispatch("read_file", {"path": "README.md", "offset": 1, "limit": 1})
+    payload = dispatcher.dispatch("read_file", {"path": "README.md", "offset": 1, "limit": 1})
+
+    assert payload["ok"] is False
+    assert payload["error"]["code"] == "tool_call_limit_exceeded"
