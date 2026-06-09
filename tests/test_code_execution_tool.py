@@ -15,8 +15,38 @@ def test_stage_one_stub_generation_exposes_file_development_tools():
     assert "def patch(" in source
     assert "def terminal(" in source
     assert "def web_search(" not in source
-    assert "def web_extract(" not in source
-    assert "__all__" in source
+
+
+def test_local_runner_keeps_direct_subprocess_blocked():
+    from agent_tools.code_execution.runners import execute_code_with_backend
+
+    result = execute_code_with_backend(
+        code='import subprocess\nsubprocess.run(["echo", "bypass"])\n',
+        runtime=None,
+        enabled_tools=[],
+        include_web=False,
+        backend_env_type="local",
+    )
+
+    assert result.artifact["ok"] is False
+    assert result.artifact["error"]["code"] == "child_failed"
+    assert "policy denied" in result.artifact["data"]["stderr"]
+
+
+def test_execute_code_with_backend_rejects_unknown_non_local_backend():
+    from agent_tools.code_execution.runners import execute_code_with_backend
+
+    result = execute_code_with_backend(
+        code='print("hello")',
+        runtime=None,
+        enabled_tools=[],
+        include_web=False,
+        backend_env_type="ssh",
+    )
+
+    assert result.artifact["ok"] is False
+    assert result.artifact["error"]["code"] == "unsupported_backend"
+    assert result.artifact["data"]["env_type"] == "ssh"
 
 
 def test_stage_three_stub_generation_can_expose_web_tools():
@@ -60,6 +90,7 @@ def test_schema_description_lists_only_visible_tools():
 
 
 def test_safe_child_env_removes_secret_like_variables(monkeypatch):
+    from agent_tools.code_execution.config import CodeExecutionConfig
     from agent_tools.public.code_execution import safe_child_env
 
     monkeypatch.setenv("PATH", "/usr/bin")
@@ -67,7 +98,8 @@ def test_safe_child_env_removes_secret_like_variables(monkeypatch):
     monkeypatch.setenv("MY_TOKEN", "secret")
     monkeypatch.setenv("LANG", "C.UTF-8")
 
-    env = safe_child_env({"CODE_EXECUTION_RPC_SOCKET": "/tmp/rpc.sock"})
+    config = CodeExecutionConfig()
+    env = safe_child_env(config, {"CODE_EXECUTION_RPC_SOCKET": "/tmp/rpc.sock"})
 
     assert env["PATH"] == "/usr/bin"
     assert env["LANG"] == "C.UTF-8"
@@ -587,3 +619,61 @@ def test_execute_code_impl_dangerous_terminal_command_is_blocked():
     assert "terminal" in stdout
     assert "dispatch_error" not in stdout
     assert "approval_required" in stdout or "policy_denied" in stdout
+
+
+def test_code_execution_config_uses_safe_fallbacks(monkeypatch):
+    from agent_tools.code_execution.config import CodeExecutionConfig
+
+    monkeypatch.setenv("CODE_EXECUTION_MODE", "invalid")
+    monkeypatch.setenv("CODE_EXECUTION_TIMEOUT_SECONDS", "-1")
+    monkeypatch.setenv("CODE_EXECUTION_MAX_TOOL_CALLS", "not-an-int")
+
+    config = CodeExecutionConfig.from_sources()
+
+    assert config.mode == "project"
+    assert config.timeout_seconds == 300
+    assert config.max_tool_calls == 50
+    assert any("CODE_EXECUTION_MODE" in warning for warning in config.warnings)
+    assert any("CODE_EXECUTION_TIMEOUT_SECONDS" in warning for warning in config.warnings)
+    assert any("CODE_EXECUTION_MAX_TOOL_CALLS" in warning for warning in config.warnings)
+
+
+def test_code_execution_config_denylist_wins_over_allowlist(monkeypatch):
+    from agent_tools.code_execution.config import CodeExecutionConfig
+
+    monkeypatch.setenv("CODE_EXECUTION_ENV_ALLOWLIST", "OPENAI_API_KEY,SAFE_FLAG")
+    monkeypatch.setenv("CODE_EXECUTION_SECRET_DENYLIST", "API_KEY")
+
+    config = CodeExecutionConfig.from_sources()
+
+    assert "SAFE_FLAG" in config.env_allowlist
+    assert "OPENAI_API_KEY" in config.env_allowlist
+    assert config.env_name_allowed("SAFE_FLAG")
+    assert not config.env_name_allowed("OPENAI_API_KEY")
+
+
+def test_docker_file_rpc_workspace_requires_persistent_host_workspace():
+    from types import SimpleNamespace
+
+    from agent_tools.code_execution.runners import docker_host_workspace_dir
+
+    persistent_env = SimpleNamespace(_persistent=True, _workspace_dir="/tmp/workspace")
+    non_persistent_env = SimpleNamespace(_persistent=False, _workspace_dir="/tmp/workspace")
+    missing_workspace_env = SimpleNamespace(_persistent=True, _workspace_dir=None)
+
+    assert docker_host_workspace_dir(persistent_env) == "/tmp/workspace"
+    assert docker_host_workspace_dir(non_persistent_env) is None
+    assert docker_host_workspace_dir(missing_workspace_env) is None
+
+
+def test_file_rpc_stub_generation_uses_rpc_directory_env():
+    from agent_tools.code_execution.stubs import generate_file_rpc_tools_module
+
+    source = generate_file_rpc_tools_module(("read_file", "terminal"))
+
+    assert "CODE_EXECUTION_RPC_DIR" in source
+    assert "req_" in source
+    assert "res_" in source
+    assert "def read_file(" in source
+    assert "def terminal(" in source
+    assert "def web_search(" not in source

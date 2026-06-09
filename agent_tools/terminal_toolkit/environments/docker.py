@@ -470,6 +470,16 @@ class DockerEnvironment(BaseEnvironment):
         # Initialize session snapshot inside the container
         self.init_session()
 
+    @property
+    def host_workspace_dir(self) -> str | None:
+        """Host-side directory bind-mounted to /workspace for persistent Docker envs."""
+        return self._workspace_dir if self._persistent else None
+
+    @property
+    def container_workspace_dir(self) -> str:
+        """Container-side workspace path used by code execution file-RPC."""
+        return "/workspace"
+
     def _build_init_env_args(self) -> list[str]:
         """Build -e KEY=VALUE args for injecting host env vars into init_session.
 
