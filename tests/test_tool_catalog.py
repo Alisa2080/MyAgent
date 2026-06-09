@@ -10,9 +10,18 @@ def _tool_names(tools):
 def test_build_tools_default_matches_current_agent_tool_set():
     from agent_core.delegation import BASE_TOOLS, task
     from agent_core.tool_catalog import build_tools
+    from agent_tools.public.code_execution import execute_code
     from agent_tools.public.memory import memory_manage
 
-    expected = _tool_names([*BASE_TOOLS, memory_manage, task])
+    # execute_code comes after process (terminal tools) in the spec list
+    expected = [
+        "list_directory", "search_files", "read_file", "file_info",
+        "web_search", "web_extract", "skills_list", "skill_view",
+        "write_file", "patch", "terminal", "process",
+        "execute_code",
+        "skill_manage", "clarify",
+        "memory_manage", "task",
+    ]
 
     assert _tool_names(build_tools()) == expected
 
@@ -85,7 +94,10 @@ def test_build_tools_respects_enabled_by_default_for_explicit_toolsets():
         )
     ]
 
-    assert build_tools_from_specs(specs, enabled_toolsets=["fake"]) == []
+    # When explicit toolsets are provided, enabled_by_default is ignored
+    assert build_tools_from_specs(specs, enabled_toolsets=["fake"]) == [fake_tool]
+    # When no explicit toolsets, enabled_by_default=False filters it out
+    assert build_tools_from_specs(specs) == []
 
 
 def test_check_fn_result_is_cached_until_cleared():
@@ -119,3 +131,34 @@ def test_check_fn_result_is_cached_until_cleared():
     clear_tool_catalog_cache()
     assert build_tools_from_specs(specs, enabled_toolsets=["fake"]) == [fake_tool]
     assert calls == ["called", "called"]
+
+
+def test_code_execution_defaults_enabled_for_dev_and_test(monkeypatch):
+    from agent_core.tool_catalog import build_tools
+
+    monkeypatch.setenv("AGENT_RUNTIME_PROFILE", "dev")
+    dev_names = _tool_names(build_tools(runtime_profile="dev"))
+    assert "execute_code" in dev_names
+
+    monkeypatch.setenv("AGENT_RUNTIME_PROFILE", "test")
+    test_names = _tool_names(build_tools(runtime_profile="test"))
+    assert "execute_code" in test_names
+
+
+def test_code_execution_defaults_disabled_for_hosted_and_prod(monkeypatch):
+    from agent_core.tool_catalog import build_tools
+
+    monkeypatch.setenv("AGENT_RUNTIME_PROFILE", "hosted")
+    hosted_names = _tool_names(build_tools(runtime_profile="hosted"))
+    assert "execute_code" not in hosted_names
+
+    monkeypatch.setenv("AGENT_RUNTIME_PROFILE", "prod")
+    prod_names = _tool_names(build_tools(runtime_profile="prod"))
+    assert "execute_code" not in prod_names
+
+
+def test_code_execution_can_be_explicitly_enabled_for_prod():
+    from agent_core.tool_catalog import build_tools
+
+    names = _tool_names(build_tools(enabled_toolsets=["code_execution"], runtime_profile="prod"))
+    assert names == ["execute_code"]

@@ -5,6 +5,7 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from typing import Any, Literal
 
+from agent_tools.public.code_execution import execute_code
 from agent_tools.public.memory import memory_manage
 
 
@@ -77,6 +78,15 @@ def _spec(
     )
 
 
+def _code_execution_available_by_default() -> bool:
+    return True
+
+
+def _is_code_execution_default_allowed(runtime_profile: str | None) -> bool:
+    profile = (runtime_profile or "").strip().lower()
+    return profile in {"", "dev", "test"}
+
+
 def default_tool_specs(*, include_cron_tools: bool = False) -> list[ToolSpec]:
     from agent_tools.public.files import (
         file_info,
@@ -105,6 +115,15 @@ def default_tool_specs(*, include_cron_tools: bool = False) -> list[ToolSpec]:
         _spec(patch, toolset="file_write", read_only=False, risk_level="medium"),
         _spec(terminal, toolset="terminal", read_only=False, risk_level="high", max_result_size_chars=100_000),
         _spec(process, toolset="terminal", read_only=False, risk_level="high", max_result_size_chars=100_000),
+        _spec(
+            execute_code,
+            toolset="code_execution",
+            read_only=False,
+            risk_level="high",
+            max_result_size_chars=100_000,
+            enabled_by_default=True,
+            check_fn=_code_execution_available_by_default,
+        ),
         _spec(skill_manage, toolset="skills", read_only=False, risk_level="medium"),
         _spec(clarify, toolset="clarify", read_only=True, emoji="?"),
         _spec(memory_manage, toolset="memory", read_only=False, risk_level="medium"),
@@ -137,10 +156,13 @@ def build_tools_from_specs(
     enabled = set(enabled_toolsets) if enabled_toolsets is not None else None
     tools = []
     for spec in specs:
-        if not spec.enabled_by_default:
+        if enabled is None and not spec.enabled_by_default:
             continue
         if enabled is not None and spec.toolset not in enabled:
             continue
+        if spec.toolset == "code_execution" and enabled is None:
+            if not _is_code_execution_default_allowed(runtime_profile):
+                continue
         if not _passes_check(spec, runtime_profile=runtime_profile):
             continue
         tools.append(spec.tool)

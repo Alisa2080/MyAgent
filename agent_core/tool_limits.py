@@ -31,6 +31,8 @@ PROCESS_RUN_LIMIT = 12
 PROCESS_THREAD_LIMIT = 32
 TASK_RUN_LIMIT = 5
 TASK_THREAD_LIMIT = 10
+EXECUTE_CODE_RUN_LIMIT = 4
+EXECUTE_CODE_THREAD_LIMIT = 8
 
 
 def build_tool_call_limit_middleware(
@@ -63,6 +65,11 @@ def build_tool_call_limit_middleware(
             tool_name="process",
             run_limit=PROCESS_RUN_LIMIT,
             thread_limit=PROCESS_THREAD_LIMIT,
+        ),
+        ToolCallLimitMiddleware(
+            tool_name="execute_code",
+            run_limit=EXECUTE_CODE_RUN_LIMIT,
+            thread_limit=EXECUTE_CODE_THREAD_LIMIT,
         ),
     ]
     if include_task:
