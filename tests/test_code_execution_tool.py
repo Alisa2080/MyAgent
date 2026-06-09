@@ -162,3 +162,52 @@ def test_rpc_dispatch_enforces_tool_call_limit():
 
     assert payload["ok"] is False
     assert payload["error"]["code"] == "tool_call_limit_exceeded"
+
+
+def test_execute_code_impl_returns_stdout_for_simple_script():
+    from agent_tools.public.code_execution import execute_code_impl
+
+    result = execute_code_impl(
+        code='print("hello from code")',
+        runtime=_runtime(),
+        enabled_tools=[],
+        include_web=False,
+        timeout_seconds=5,
+    )
+
+    assert result.status == "success"
+    assert result.artifact["ok"] is True
+    assert result.artifact["data"]["stdout"] == "hello from code\n"
+    assert result.artifact["data"]["returncode"] == 0
+
+
+def test_execute_code_impl_reports_nonzero_exit():
+    from agent_tools.public.code_execution import execute_code_impl
+
+    result = execute_code_impl(
+        code='import sys\nprint("bad")\nsys.exit(7)',
+        runtime=_runtime(),
+        enabled_tools=[],
+        include_web=False,
+        timeout_seconds=5,
+    )
+
+    assert result.status == "error"
+    assert result.artifact["error"]["code"] == "child_failed"
+    assert result.artifact["data"]["returncode"] == 7
+
+
+def test_execute_code_impl_can_call_read_file():
+    from agent_tools.public.code_execution import execute_code_impl
+
+    result = execute_code_impl(
+        code='from hermes_tools import read_file\nresult = read_file("README.md", limit=1)\nprint(result["ok"])\nprint(result["tool"])',
+        runtime=_runtime(),
+        enabled_tools=["read_file"],
+        include_web=False,
+        timeout_seconds=10,
+    )
+
+    assert result.status == "success"
+    assert "True" in result.artifact["data"]["stdout"]
+    assert "read_file" in result.artifact["data"]["stdout"]

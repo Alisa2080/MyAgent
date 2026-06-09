@@ -1,7 +1,16 @@
 from __future__ import annotations
 
+import json
 import os
+import platform
 import re
+import shutil
+import socket
+import subprocess
+import sys
+import tempfile
+import threading
+from pathlib import Path
 
 from langchain.tools import ToolRuntime, tool
 from pydantic import BaseModel, Field
@@ -30,6 +39,11 @@ TOOL_ORDER = (
     "web_search",
     "web_extract",
 )
+
+DEFAULT_TIMEOUT_SECONDS = 300
+DEFAULT_MAX_TOOL_CALLS = 50
+DEFAULT_STDOUT_LIMIT_CHARS = 50_000
+DEFAULT_STDERR_LIMIT_CHARS = 10_000
 
 
 def visible_sandbox_tools(
@@ -272,13 +286,170 @@ class CodeExecutionDispatcher:
     def _call_tool(self, tool_name: str, args: dict) -> object:
         if tool_name in {"read_file", "search_files", "write_file", "patch"}:
             from agent_tools.public import files
-            func = getattr(files, tool_name)
+            tool_obj = getattr(files, tool_name)
+            func = getattr(tool_obj, "func", tool_obj)
             return func(runtime=self.runtime, **args)
         if tool_name == "terminal":
             from agent_tools.public.terminal import terminal
-            return terminal(runtime=self.runtime, **args)
+            func = getattr(terminal, "func", terminal)
+            return func(runtime=self.runtime, **args)
         if tool_name in {"web_search", "web_extract"}:
             from agent_tools.public import web
-            func = getattr(web, tool_name)
+            tool_obj = getattr(web, tool_name)
+            func = getattr(tool_obj, "func", tool_obj)
             return func(runtime=self.runtime, **args)
         return _failure_payload(tool_name, f"Tool is not implemented in execute_code: {tool_name}", code="tool_not_implemented")
+
+
+class CodeExecutionRpcServer:
+    def __init__(self, *, socket_path: str, dispatcher: CodeExecutionDispatcher) -> None:
+        self.socket_path = socket_path
+        self.dispatcher = dispatcher
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+        self._sock: socket.socket | None = None
+
+    def start(self) -> None:
+        try:
+            os.unlink(self.socket_path)
+        except FileNotFoundError:
+            pass
+        self._sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self._sock.bind(self.socket_path)
+        self._sock.listen(16)
+        self._thread = threading.Thread(target=self._serve, name="code-execution-rpc", daemon=True)
+        self._thread.start()
+
+    def close(self) -> None:
+        self._stop.set()
+        if self._sock is not None:
+            try:
+                self._sock.close()
+            except OSError:
+                pass
+        if self._thread is not None:
+            self._thread.join(timeout=1)
+        try:
+            os.unlink(self.socket_path)
+        except FileNotFoundError:
+            pass
+
+    def _serve(self) -> None:
+        assert self._sock is not None
+        while not self._stop.is_set():
+            try:
+                conn, _ = self._sock.accept()
+            except OSError:
+                return
+            with conn:
+                response = self._handle_connection(conn)
+                data = json.dumps(response, ensure_ascii=False).encode("utf-8")
+                conn.sendall(len(data).to_bytes(8, "big") + data)
+
+    def _handle_connection(self, conn: socket.socket) -> dict:
+        header = conn.recv(8)
+        if len(header) != 8:
+            return _failure_payload("unknown", "Invalid RPC request header.", code="rpc_protocol_error")
+        size = int.from_bytes(header, "big")
+        chunks = []
+        remaining = size
+        while remaining > 0:
+            chunk = conn.recv(min(65536, remaining))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        try:
+            request = json.loads(b"".join(chunks).decode("utf-8"))
+        except json.JSONDecodeError:
+            return _failure_payload("unknown", "Invalid RPC JSON request.", code="rpc_json_error")
+        tool_name = str(request.get("tool") or "")
+        args = request.get("args") if isinstance(request.get("args"), dict) else {}
+        return self.dispatcher.dispatch(tool_name, args)
+
+
+def _result_data(stdout: str, stderr: str, returncode: int, *, stdout_truncated: bool, stderr_truncated: bool) -> dict:
+    return {
+        "stdout": stdout,
+        "stderr": stderr,
+        "returncode": returncode,
+        "stdout_truncated": stdout_truncated,
+        "stderr_truncated": stderr_truncated,
+    }
+
+
+def execute_code_impl(
+    *,
+    code: str,
+    runtime: object,
+    enabled_tools: list[str] | tuple[str, ...] | set[str] | None,
+    include_web: bool,
+    timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS,
+    max_tool_calls: int = DEFAULT_MAX_TOOL_CALLS,
+    stdout_limit_chars: int = DEFAULT_STDOUT_LIMIT_CHARS,
+    stderr_limit_chars: int = DEFAULT_STDERR_LIMIT_CHARS,
+) -> object:
+    from agent_tools.shared.tool_result import tool_success
+
+    if platform.system() == "Windows":
+        return tool_failure("execute_code", "execute_code is not available on Windows.", code="unsupported_platform", runtime=runtime)
+
+    visible_tools = visible_sandbox_tools(enabled_tools, include_web=include_web)
+    temp_dir = Path(tempfile.mkdtemp(prefix="code-execution-"))
+    server: CodeExecutionRpcServer | None = None
+
+    try:
+        script_path = temp_dir / "script.py"
+        stub_path = temp_dir / "hermes_tools.py"
+        socket_path = str(temp_dir / "rpc.sock")
+
+        script_path.write_text(code, encoding="utf-8")
+        stub_path.write_text(generate_hermes_tools_module(visible_tools, include_web=include_web), encoding="utf-8")
+
+        dispatcher = CodeExecutionDispatcher(runtime=runtime, visible_tools=visible_tools, max_tool_calls=max_tool_calls)
+        server = CodeExecutionRpcServer(socket_path=socket_path, dispatcher=dispatcher)
+        server.start()
+
+        env = safe_child_env({"CODE_EXECUTION_RPC_SOCKET": socket_path, "PYTHONPATH": str(temp_dir)})
+
+        proc = subprocess.Popen(
+            [sys.executable, str(script_path)],
+            cwd=os.getcwd(),
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            start_new_session=True,
+        )
+
+        try:
+            stdout_raw, stderr_raw = proc.communicate(timeout=timeout_seconds)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(proc.pid, 9)
+            except OSError:
+                proc.kill()
+            stdout_raw, stderr_raw = proc.communicate(timeout=1)
+            stdout, stdout_truncated = sanitize_output(stdout_raw, limit=stdout_limit_chars)
+            stderr, stderr_truncated = sanitize_output(stderr_raw, limit=stderr_limit_chars)
+            return tool_failure(
+                "execute_code",
+                f"execute_code timed out after {timeout_seconds} seconds.",
+                code="timeout",
+                data=_result_data(stdout, stderr, -1, stdout_truncated=stdout_truncated, stderr_truncated=stderr_truncated),
+                runtime=runtime,
+            )
+
+        stdout, stdout_truncated = sanitize_output(stdout_raw, limit=stdout_limit_chars)
+        stderr, stderr_truncated = sanitize_output(stderr_raw, limit=stderr_limit_chars)
+        data = _result_data(stdout, stderr, int(proc.returncode or 0), stdout_truncated=stdout_truncated, stderr_truncated=stderr_truncated)
+
+        if proc.returncode:
+            return tool_failure("execute_code", f"Python script exited with code {proc.returncode}.", code="child_failed", data=data, runtime=runtime)
+
+        return tool_success("execute_code", message="Code executed.", data=data, runtime=runtime, content=stdout or "Code executed.")
+
+    finally:
+        if server is not None:
+            server.close()
+        shutil.rmtree(temp_dir, ignore_errors=True)
