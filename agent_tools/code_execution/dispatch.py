@@ -3,6 +3,7 @@ from __future__ import annotations
 from langchain_core.messages import ToolMessage
 
 from agent_core.session_context import RuntimeContext
+from agent_tools.code_execution.safety import redact_code_execution_text, redact_code_execution_value
 
 
 def _nested_tool_runtime(runtime: object, *, tool_call_id: str):
@@ -20,14 +21,17 @@ def _nested_tool_runtime(runtime: object, *, tool_call_id: str):
     return _RuntimeProxy(runtime, nested_tool_call_id=tool_call_id)
 
 
-def normalize_rpc_args(tool_name: str, args: dict) -> dict:
+def normalize_rpc_args(tool_name: str, args: dict, *, default_workdir: str | None = None) -> dict:
     normalized = dict(args or {})
     if tool_name == "terminal":
+        workdir = normalized.get("workdir")
+        if workdir is None and default_workdir:
+            workdir = default_workdir
         return {
             "command": str(normalized.get("command") or ""),
             "background": False,
             "timeout": normalized.get("timeout"),
-            "workdir": normalized.get("workdir"),
+            "workdir": workdir,
             "pty": False,
             "notify_on_complete": False,
             "watch_patterns": None,
@@ -49,38 +53,47 @@ def failure_payload(tool_name: str, message: str, *, code: str, data=None, meta=
 def tool_message_to_rpc_payload(tool_name: str, value: object) -> dict:
     if isinstance(value, ToolMessage) and isinstance(value.artifact, dict):
         artifact = dict(value.artifact)
-        return {
+        return redact_code_execution_value({
             "ok": bool(artifact.get("ok", value.status != "error")),
             "tool": str(artifact.get("tool") or tool_name),
             "message": str(artifact.get("message") or value.content or ""),
             "data": artifact.get("data"),
             "error": artifact.get("error"),
             "meta": dict(artifact.get("meta") or {}),
-        }
+        })
     if isinstance(value, dict):
-        return {
+        return redact_code_execution_value({
             "ok": bool(value.get("ok", True)),
             "tool": str(value.get("tool") or tool_name),
             "message": str(value.get("message") or ""),
             "data": value.get("data"),
             "error": value.get("error"),
             "meta": dict(value.get("meta") or {}),
-        }
+        })
     return failure_payload(
         tool_name,
         "Tool returned a non-standard response.",
         code="invalid_response",
-        data={"value": str(value)},
+        data={"value": redact_code_execution_text(str(value))},
     )
 
 
 class CodeExecutionDispatcher:
-    def __init__(self, *, runtime: object, visible_tools: tuple[str, ...], max_tool_calls: int = 50) -> None:
+    def __init__(
+        self,
+        *,
+        runtime: object,
+        visible_tools: tuple[str, ...],
+        max_tool_calls: int = 50,
+        terminal_default_workdir: str | None = None,
+    ) -> None:
         self.runtime = runtime
         self.visible_tools = set(visible_tools)
         self.max_tool_calls = int(max_tool_calls)
+        self.terminal_default_workdir = terminal_default_workdir
         self.tool_calls = 0
         runtime_context = RuntimeContext.from_runtime(runtime)
+        self.task_id = runtime_context.task_id or "default"
         self.outer_tool_call_id = str(runtime_context.tool_call_id or "")
 
     def dispatch(self, tool_name: str, args: dict) -> dict:
@@ -93,16 +106,34 @@ class CodeExecutionDispatcher:
         try:
             result = self._call_tool(
                 tool_name,
-                normalize_rpc_args(tool_name, args),
+                normalize_rpc_args(
+                    tool_name,
+                    args,
+                    default_workdir=self._default_terminal_workdir() if tool_name == "terminal" else None,
+                ),
                 nested_tool_call_id=nested_tool_call_id,
             )
         except Exception as exc:
-            return failure_payload(tool_name, f"RPC tool dispatch failed: {type(exc).__name__}: {exc}", code="dispatch_error")
+            return failure_payload(
+                tool_name,
+                redact_code_execution_text(f"RPC tool dispatch failed: {type(exc).__name__}: {exc}"),
+                code="dispatch_error",
+            )
         return tool_message_to_rpc_payload(tool_name, result)
 
     def _nested_tool_call_id(self, tool_name: str) -> str:
         prefix = self.outer_tool_call_id or "execute_code"
         return f"{prefix}:rpc:{self.tool_calls}:{tool_name}"
+
+    def _default_terminal_workdir(self) -> str | None:
+        if self.terminal_default_workdir is not None:
+            return self.terminal_default_workdir
+        try:
+            from agent_tools.file_toolkit.backend_paths import get_backend_path_context
+
+            return get_backend_path_context(self.task_id).cwd
+        except Exception:
+            return None
 
     def _call_tool(self, tool_name: str, args: dict, *, nested_tool_call_id: str) -> object:
         nested_runtime = _nested_tool_runtime(self.runtime, tool_call_id=nested_tool_call_id)

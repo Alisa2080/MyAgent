@@ -33,13 +33,56 @@
 
 ### Code Execution Tool
 
-`execute_code` lets the agent run a short local Python script that can call a constrained set of project tools through generated `hermes_tools.py` stubs. Use it when a task needs 3 or more tool calls, loops, filtering, batching, retries, or large intermediate results that should be compressed before returning to the model.
+`execute_code` runs short Python scripts that can call a constrained set of
+project tools through `hermes_tools.py`. It is intended for 3+ tool calls,
+loops, filtering, batching, retries, and compressing large intermediate
+results. Use direct tools for a single simple operation.
 
-For a single simple operation, direct tools such as `read_file`, `search_files`, `terminal`, or `web_search` are preferred.
+Backend behavior:
 
-Stages 1-3 are local-only. Windows and non-local terminal backends return an unsupported-backend error. Script-side terminal calls are foreground-only: background processes, PTY interaction, completion notifications, and watch patterns are disabled.
+- `local`: runs a child Python process and uses Unix domain socket RPC.
+- `docker`: reuses the active terminal toolkit Docker environment and uses
+  file-based RPC under `/workspace/.code_execution/<run_id>/`.
+- Other non-local terminal backends currently return `unsupported_backend`.
 
-`code_execution` is enabled by default for `dev` and `test` runtime profiles. It is not enabled by default for `hosted` or `prod`, but it can be explicitly enabled through the `code_execution` toolset.
+Docker requirements:
+
+- `TERMINAL_CONTAINER_PERSISTENT=true`
+- terminal toolkit must own a persistent host-visible `/workspace` sandbox
+- hosted/prod default terminal environment resolves to Docker, but
+  `code_execution` must still be explicitly enabled in hosted/prod
+
+Execution modes:
+
+- `project` is the default and uses the session working directory/environment.
+- `strict` uses an isolated run directory and accesses project files only
+  through RPC tools.
+
+Configuration:
+
+- `CODE_EXECUTION_MODE=project|strict`
+- `CODE_EXECUTION_TIMEOUT_SECONDS`
+- `CODE_EXECUTION_MAX_TOOL_CALLS`
+- `CODE_EXECUTION_STDOUT_LIMIT_CHARS`
+- `CODE_EXECUTION_STDERR_LIMIT_CHARS`
+- `CODE_EXECUTION_OUTPUT_LIMIT_CHARS`
+- `CODE_EXECUTION_ENV_ALLOWLIST`
+- `CODE_EXECUTION_SECRET_DENYLIST`
+
+Runtime configuration takes precedence over environment variables. Invalid
+mode or limit values fall back to safe defaults, overly large limits are
+capped, and fallback warnings are returned in tool result metadata.
+
+Scripts do not directly inherit API key, token, password, credential, auth, or
+similar secret environment variables. Script-side terminal calls are
+foreground-only; background processes, PTY interaction, completion
+notifications, and watch patterns are disabled.
+
+Default enablement:
+
+- `dev` and `test`: enabled by default
+- `hosted` and `prod`: disabled by default, explicit `code_execution` toolset
+  opt-in required
 
 ## terminal toolkit Terminal Session Contract
 

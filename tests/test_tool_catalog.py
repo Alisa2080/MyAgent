@@ -191,3 +191,15 @@ def test_code_execution_explicit_toolset_does_not_grant_parent_terminal_or_write
     tool.func(code='print("x")', runtime=SimpleNamespace(tool_call_id="call", config={"configurable": {"thread_id": "thread"}}))
 
     assert seen["enabled_tools"] == []
+
+
+def test_code_execution_hosted_prod_still_require_explicit_toolset(monkeypatch):
+    from agent_core.tool_catalog import build_tools
+
+    monkeypatch.setenv("AGENT_RUNTIME_PROFILE", "hosted")
+    assert "execute_code" not in _tool_names(build_tools(runtime_profile="hosted"))
+    assert "execute_code" in _tool_names(build_tools(enabled_toolsets=["code_execution"], runtime_profile="hosted"))
+
+    monkeypatch.setenv("AGENT_RUNTIME_PROFILE", "prod")
+    assert "execute_code" not in _tool_names(build_tools(runtime_profile="prod"))
+    assert "execute_code" in _tool_names(build_tools(enabled_toolsets=["code_execution"], runtime_profile="prod"))

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import dataclass, field
 
@@ -35,6 +36,8 @@ DEFAULT_SECRET_DENYLIST = (
     "PASSWD",
     "AUTH",
 )
+
+logger = logging.getLogger(__name__)
 
 
 def _split_csv(raw: str | None) -> tuple[str, ...]:
@@ -132,10 +135,11 @@ class CodeExecutionConfig:
             if isinstance(explicit_allowlist_raw, (list, tuple, set))
             else ()
         )
-        env_allowlist = tuple(dict.fromkeys([
-            *_split_csv(os.getenv("CODE_EXECUTION_ENV_ALLOWLIST")),
-            *explicit_allowlist,
-        ]))
+        env_allowlist = (
+            tuple(dict.fromkeys(explicit_allowlist))
+            if "env_allowlist" in explicit
+            else _split_csv(os.getenv("CODE_EXECUTION_ENV_ALLOWLIST"))
+        )
 
         explicit_denylist_raw = explicit.get("secret_denylist", ())
         explicit_denylist = (
@@ -148,6 +152,9 @@ class CodeExecutionConfig:
             *_split_csv(os.getenv("CODE_EXECUTION_SECRET_DENYLIST")),
             *explicit_denylist,
         ]))
+
+        for warning in warnings:
+            logger.warning("code_execution config fallback: %s", warning)
 
         return cls(
             mode=mode,

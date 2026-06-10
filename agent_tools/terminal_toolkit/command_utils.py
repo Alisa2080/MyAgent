@@ -184,7 +184,7 @@ def _rewrite_real_sudo_invocations(command: str) -> tuple[str, bool]:
             out.append(command[i:comment_end])
             i = comment_end
             continue
-        if ch in ";|&(":
+        if ch in ";|&()":
             out.append(ch)
             command_start = True
             i += 1

@@ -343,6 +343,7 @@ class DockerEnvironment(BaseEnvironment):
         # User-configured volume mounts (from config.yaml docker_volumes)
         volume_args = []
         workspace_explicitly_mounted = False
+        workspace_mount_source: str | None = None
         for vol in (volumes or []):
             if not isinstance(vol, str):
                 logger.warning(f"Docker volume entry is not a string: {vol!r}")
@@ -354,6 +355,7 @@ class DockerEnvironment(BaseEnvironment):
                 volume_args.extend(["-v", vol])
                 if ":/workspace" in vol:
                     workspace_explicitly_mounted = True
+                    workspace_mount_source = vol.split(":/workspace", 1)[0]
             else:
                 logger.warning(f"Docker volume '{vol}' missing colon, skipping")
 
@@ -395,8 +397,14 @@ class DockerEnvironment(BaseEnvironment):
 
         if bind_host_cwd:
             logger.info(f"Mounting configured host cwd to /workspace: {host_cwd_abs}")
+            if self._persistent:
+                self._workspace_dir = host_cwd_abs
             volume_args = ["-v", f"{host_cwd_abs}:/workspace", *volume_args]
         elif workspace_explicitly_mounted:
+            if self._persistent and workspace_mount_source:
+                expanded_workspace = os.path.abspath(os.path.expanduser(workspace_mount_source))
+                if os.path.isdir(expanded_workspace):
+                    self._workspace_dir = expanded_workspace
             logger.debug("Skipping docker cwd mount: /workspace already mounted by user config")
 
         # Explicit environment variables (docker_env config) — set at container

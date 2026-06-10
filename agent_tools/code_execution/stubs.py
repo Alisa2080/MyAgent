@@ -101,11 +101,13 @@ import time
 import uuid
 from pathlib import Path
 
-_RPC_DIR = Path(os.environ.get("CODE_EXECUTION_RPC_DIR", ""))
+_RPC_DIR_RAW = os.environ.get("CODE_EXECUTION_RPC_DIR", "")
+_RPC_DIR = Path(_RPC_DIR_RAW) if _RPC_DIR_RAW else None
 _RPC_TIMEOUT = float(os.environ.get("CODE_EXECUTION_RPC_TIMEOUT_SECONDS", "30"))
+_RPC_MAX_RESPONSE_BYTES = int(os.environ.get("CODE_EXECUTION_RPC_MAX_RESPONSE_BYTES", "1000000"))
 
 def _call(tool_name, args):
-    if not str(_RPC_DIR):
+    if _RPC_DIR is None:
         return {"ok": False, "tool": tool_name, "message": "RPC directory is not configured.", "error": {"code": "rpc_unavailable", "message": "RPC directory is not configured."}, "data": None, "meta": {}}
     request_id = uuid.uuid4().hex
     req_path = _RPC_DIR / f"req_{request_id}.json"
@@ -117,6 +119,12 @@ def _call(tool_name, args):
     deadline = time.monotonic() + _RPC_TIMEOUT
     while time.monotonic() < deadline:
         if res_path.exists():
+            if res_path.stat().st_size > _RPC_MAX_RESPONSE_BYTES:
+                try:
+                    res_path.unlink()
+                except OSError:
+                    pass
+                return {"ok": False, "tool": tool_name, "message": "RPC response exceeds maximum file size.", "error": {"code": "rpc_response_too_large", "message": "RPC response exceeds maximum file size."}, "data": None, "meta": {}}
             raw = res_path.read_text(encoding="utf-8")
             try:
                 res_path.unlink()
@@ -124,6 +132,10 @@ def _call(tool_name, args):
                 pass
             return json.loads(raw)
         time.sleep(0.05)
+    try:
+        req_path.unlink()
+    except OSError:
+        pass
     return {"ok": False, "tool": tool_name, "message": "RPC response timed out.", "error": {"code": "rpc_timeout", "message": "RPC response timed out."}, "data": None, "meta": {}}
 
 '''
