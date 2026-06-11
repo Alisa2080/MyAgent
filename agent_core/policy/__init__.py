@@ -1,4 +1,4 @@
-"""Compatibility facade for tool policy gate helpers."""
+"""Policy integration helpers for tool dispatch."""
 
 from agent_core.policy.args import (
     POLICY_ARG_BUILDERS,
@@ -7,19 +7,11 @@ from agent_core.policy.args import (
     terminal_policy_args,
     write_file_policy_args,
 )
-from agent_core.policy.gate import (
-    PolicyToolGateRequest,
-    build_policy_pre_hook,
-    run_policy_tool_gate,
-)
 
 __all__ = [
     "POLICY_ARG_BUILDERS",
-    "PolicyToolGateRequest",
-    "build_policy_pre_hook",
     "patch_policy_args",
     "process_policy_args",
-    "run_policy_tool_gate",
     "terminal_policy_args",
     "write_file_policy_args",
 ]

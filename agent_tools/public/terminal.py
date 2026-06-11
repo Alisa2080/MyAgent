@@ -3,12 +3,12 @@ from typing import Literal
 
 from langchain.tools import ToolRuntime, tool
 from langchain_core.messages import ToolMessage
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from agent_core.permissions import tool_policy
 from agent_core.permissions.approvals import consume_approval
 from agent_core.permissions.tool_grants import consume_tool_policy_grant
-from agent_core.policy_tool_gate import process_policy_args, terminal_policy_args
+from agent_core.policy.args import process_policy_args, terminal_policy_args
 from agent_core.session_context import RuntimeContext
 from agent_core.terminal_process_policy import background_quota_available, background_quota_guard
 from agent_core.workspace import WORKDIR
@@ -28,6 +28,27 @@ class TerminalInput(BaseModel):
         default=None,
         description="Output patterns that should trigger background process notifications.",
     )
+
+    @field_validator("watch_patterns", mode="before")
+    @classmethod
+    def _normalize_watch_patterns(cls, value):
+        if value is None:
+            return None
+        if isinstance(value, str):
+            return [value]
+        if not isinstance(value, list):
+            value = [value]
+        normalized = []
+        for item in value:
+            if item is None:
+                continue
+            if isinstance(item, str):
+                normalized.append(item)
+            elif isinstance(item, (dict, list)):
+                normalized.append(json.dumps(item, ensure_ascii=False))
+            else:
+                normalized.append(str(item))
+        return normalized
 
 
 class ProcessInput(BaseModel):

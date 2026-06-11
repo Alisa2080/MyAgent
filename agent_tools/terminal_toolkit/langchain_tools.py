@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import importlib
+import json
 from types import SimpleNamespace
 from typing import List, Literal, Optional
 
@@ -15,10 +17,10 @@ def _require_langchain():
     if tool is None:
         raise ImportError("Install langchain to use terminal_toolkit.langchain_tools")
     try:
-        from pydantic import BaseModel, Field
+        from pydantic import BaseModel, Field, field_validator
     except ImportError as exc:
         raise ImportError("Install pydantic to use terminal_toolkit.langchain_tools") from exc
-    return BaseModel, Field
+    return BaseModel, Field, field_validator
 
 
 def _runtime_for_task_id(task_id: str):
@@ -26,13 +28,33 @@ def _runtime_for_task_id(task_id: str):
 
 
 def _load_wrappers():
-    from agent_tools.public import terminal as public_terminal
+    public_terminal = importlib.import_module("agent_tools.public.terminal")
     return public_terminal._process_impl, public_terminal._terminal_impl
+
+
+def _coerce_watch_patterns(value):
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return [value]
+    if not isinstance(value, list):
+        value = [value]
+    coerced = []
+    for item in value:
+        if item is None:
+            continue
+        if isinstance(item, str):
+            coerced.append(item)
+        elif isinstance(item, (dict, list)):
+            coerced.append(json.dumps(item, ensure_ascii=False))
+        else:
+            coerced.append(str(item))
+    return coerced
 
 
 def build_langchain_tools(default_task_id: str = "default", expose_task_id: bool = False):
     """Return LangChain tools for terminal/process."""
-    BaseModel, Field = _require_langchain()
+    BaseModel, Field, field_validator = _require_langchain()
     process_impl, terminal_impl = _load_wrappers()
 
     if expose_task_id:
@@ -48,6 +70,8 @@ def build_langchain_tools(default_task_id: str = "default", expose_task_id: bool
                 description="Rare one-shot output markers to watch in background mode",
             )
             task_id: str = Field(default=default_task_id, description="Toolkit task/session id for environment reuse")
+
+            _normalize_watch_patterns = field_validator("watch_patterns", mode="before")(_coerce_watch_patterns)
 
         class ProcessInput(BaseModel):
             action: Literal["list", "poll", "log", "wait", "kill", "write", "submit", "close"] = Field(
@@ -71,6 +95,8 @@ def build_langchain_tools(default_task_id: str = "default", expose_task_id: bool
                 default=None,
                 description="Rare one-shot output markers to watch in background mode",
             )
+
+            _normalize_watch_patterns = field_validator("watch_patterns", mode="before")(_coerce_watch_patterns)
 
         class ProcessInput(BaseModel):
             action: Literal["list", "poll", "log", "wait", "kill", "write", "submit", "close"] = Field(

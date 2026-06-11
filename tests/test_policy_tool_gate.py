@@ -73,6 +73,20 @@ def test_policy_tool_gate_allows_and_records_grant():
     assert grant.risk_tags == ()
 
 
+def test_terminal_canonical_args_coerce_watch_patterns_for_approval_digest():
+    from agent_core.permissions.tool_policy import canonical_tool_args
+
+    args = canonical_tool_args(
+        "terminal",
+        {
+            "command": "echo ready",
+            "watch_patterns": [{"pattern": "READY"}],
+        },
+    )
+
+    assert args["watch_patterns"] == ['{"pattern": "READY"}']
+
+
 def test_policy_pre_hook_denies_toolbus_request():
     from agent_core.policy_tool_gate import build_policy_pre_hook
 

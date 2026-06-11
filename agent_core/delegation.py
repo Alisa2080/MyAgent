@@ -23,6 +23,7 @@ from agent_tools.public.web import web_extract, web_search
 from agent_tools.shared.tool_result import tool_failure, tool_success
 
 logger = logging.getLogger(__name__)
+_TASK_RECURSION_LIMIT = 90
 
 READ_ONLY_TOOLS = [
     list_directory,
@@ -54,7 +55,11 @@ def build_task_subagent():
     )
     return create_agent(
         model=SMALL_MODEL,
-        system_prompt=SystemPromptBuilder().build_subagent(prompt_context),
+        system_prompt=(
+            SystemPromptBuilder().build_subagent(prompt_context)
+            + "\n\nWhen enough evidence is gathered, stop exploring and return a concise plain-text summary immediately. "
+            + "Avoid repeated searches or re-reading the same source unless it yields materially new information."
+        ),
         middleware=build_tool_call_limit_middleware(),
         tools=READ_ONLY_TOOLS,
     )
@@ -84,7 +89,7 @@ def task(
                     }
                 ]
             },
-            {"recursion_limit": 40},
+            {"recursion_limit": _TASK_RECURSION_LIMIT},
         )
         summary = extract_text_from_agent_response(response)
         if not summary:

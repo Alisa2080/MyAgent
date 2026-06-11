@@ -41,109 +41,30 @@ import time
 import uuid
 
 _IS_WINDOWS = platform.system() == "Windows"
-from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 from .ansi_strip import strip_ansi
 from .environments.local import _find_shell, _sanitize_subprocess_env
 from .interrupt import is_interrupted as _is_interrupted
-from .paths import get_toolkit_home
+from .process_models import (
+    FINISHED_TTL_SECONDS,
+    MAX_OUTPUT_CHARS,
+    MAX_PROCESSES,
+    WATCH_GLOBAL_COOLDOWN_SECONDS,
+    WATCH_GLOBAL_MAX_PER_WINDOW,
+    WATCH_GLOBAL_WINDOW_SECONDS,
+    WATCH_MIN_INTERVAL_SECONDS,
+    WATCH_STRIKE_LIMIT,
+    ProcessSession,
+    format_uptime_short,
+)
+from .process_storage import CHECKPOINT_PATH, _atomic_json_write
 
 logger = logging.getLogger(__name__)
 
 
 def _tool_error(message: str) -> str:
     return json.dumps({"error": message}, ensure_ascii=False)
-
-
-def _atomic_json_write(path, data) -> None:
-    tmp = path.with_suffix(".tmp")
-    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-    tmp.replace(path)
-
-
-# Checkpoint file for crash recovery
-CHECKPOINT_PATH = get_toolkit_home() / "processes.json"
-
-# Limits
-MAX_OUTPUT_CHARS = 200_000      # 200KB rolling output buffer
-FINISHED_TTL_SECONDS = 1800     # Keep finished processes for 30 minutes
-MAX_PROCESSES = 64              # Max concurrent tracked processes (LRU pruning)
-
-# Watch pattern rate limiting — PER SESSION.
-# Hard rule: at most ONE watch-match notification every WATCH_MIN_INTERVAL_SECONDS.
-# Any match arriving inside that cooldown window is dropped and counted as a strike.
-# After WATCH_STRIKE_LIMIT consecutive strike windows, watch_patterns for that
-# session is permanently disabled and the session falls back to notify_on_complete
-# semantics (one notification when the process actually exits).
-WATCH_MIN_INTERVAL_SECONDS = 15   # Minimum spacing between consecutive watch matches
-WATCH_STRIKE_LIMIT = 3            # Strikes in a row → disable watch + promote to notify_on_complete
-
-# Global circuit breaker — across all sessions. Secondary safety net so concurrent
-# siblings can't collectively flood the user even when each is under its own cap.
-WATCH_GLOBAL_MAX_PER_WINDOW = 15
-WATCH_GLOBAL_WINDOW_SECONDS = 10
-WATCH_GLOBAL_COOLDOWN_SECONDS = 30
-
-
-def format_uptime_short(seconds: int) -> str:
-    s = max(0, int(seconds))
-    if s < 60:
-        return f"{s}s"
-    mins, secs = divmod(s, 60)
-    if mins < 60:
-        return f"{mins}m {secs}s"
-    hours, mins = divmod(mins, 60)
-    return f"{hours}h {mins}m"
-
-
-@dataclass
-class ProcessSession:
-    """A tracked background process with output buffering."""
-    id: str                                     # Unique session ID ("proc_xxxxxxxxxxxx")
-    command: str                                 # Original command string
-    task_id: str = ""                           # Task/sandbox isolation key
-    session_key: str = ""                       # Gateway session key (for reset protection)
-    pid: Optional[int] = None                   # OS process ID
-    process: Optional[subprocess.Popen] = None  # Popen handle (local only)
-    env_ref: Any = None                         # Reference to the environment object
-    cwd: Optional[str] = None                   # Working directory
-    started_at: float = 0.0                     # time.time() of spawn
-    exited: bool = False                        # Whether the process has finished
-    exit_code: Optional[int] = None             # Exit code (None if still running)
-    output_buffer: str = ""                     # Rolling output (last MAX_OUTPUT_CHARS)
-    max_output_chars: int = MAX_OUTPUT_CHARS
-    detached: bool = False                      # True if recovered from crash (no pipe)
-    pid_scope: str = "host"                     # "host" for local/PTY PIDs, "sandbox" for env-local PIDs
-    # Watcher/notification metadata (persisted for crash recovery)
-    watcher_platform: str = ""
-    watcher_chat_id: str = ""
-    watcher_user_id: str = ""
-    watcher_user_name: str = ""
-    watcher_thread_id: str = ""
-    watcher_interval: int = 0                   # 0 = no watcher configured
-    notify_on_complete: bool = False             # Queue agent notification on exit
-    # Watch patterns — trigger agent notification when output matches any pattern
-    watch_patterns: List[str] = field(default_factory=list)
-    network_release: Any = field(default=None, repr=False)
-    network_release_error: str = ""
-    _watch_hits: int = field(default=0, repr=False)          # total matches delivered
-    _watch_suppressed: int = field(default=0, repr=False)    # matches dropped by rate limit
-    _watch_disabled: bool = field(default=False, repr=False) # permanently killed after strike limit
-    # Per-session rate limit state: at most one match every WATCH_MIN_INTERVAL_SECONDS.
-    # When an emission happens, _watch_cooldown_until is set to now + interval and
-    # _watch_strike_candidate becomes True. The next match to arrive before that
-    # deadline counts as one strike (regardless of how many matches were dropped in
-    # between — a strike is a window, not a match). After WATCH_STRIKE_LIMIT strikes
-    # in a row, watch_patterns is disabled and the session promotes to
-    # notify_on_complete.
-    _watch_last_emit_at: float = field(default=0.0, repr=False)
-    _watch_cooldown_until: float = field(default=0.0, repr=False)
-    _watch_strike_candidate: bool = field(default=False, repr=False)
-    _watch_consecutive_strikes: int = field(default=0, repr=False)
-    _lock: threading.Lock = field(default_factory=threading.Lock)
-    _reader_thread: Optional[threading.Thread] = field(default=None, repr=False)
-    _pty: Any = field(default=None, repr=False)  # ptyprocess handle (when use_pty=True)
 
 
 class ProcessRegistry:

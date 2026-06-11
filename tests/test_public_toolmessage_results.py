@@ -67,6 +67,25 @@ def test_task_empty_summary_returns_tool_message(monkeypatch):
     assert result.tool_call_id == "call-task-empty"
 
 
+def test_task_subagent_uses_configured_recursion_limit(monkeypatch):
+    import agent_core.delegation as delegation
+
+    calls = []
+
+    class FakeAgent:
+        def invoke(self, payload, config):
+            calls.append((payload, config))
+            return {"messages": []}
+
+    monkeypatch.setattr(delegation, "build_task_subagent", lambda: FakeAgent())
+
+    result = delegation.task.func("inspect repo", "empty", runtime=_runtime("call-task-limit"))
+
+    _assert_tool_result(result, "task", True)
+    assert calls[0][1] == {"recursion_limit": delegation._TASK_RECURSION_LIMIT}
+    assert delegation._TASK_RECURSION_LIMIT > 40
+
+
 def test_public_tool_entrypoints_register_runtime_for_injection():
     import agent_core.delegation as delegation
     import agent_tools.public.memory as memory
@@ -102,6 +121,36 @@ def test_web_search_preserves_runtime_tool_call_id(monkeypatch):
 
     _assert_tool_result(result, "web_search", False)
     assert result.tool_call_id == "call-web"
+
+
+def test_web_search_content_includes_result_preview(monkeypatch):
+    import agent_tools.public.web as web
+
+    class FakeBackend:
+        name = "fake"
+
+        def search(self, query, limit):
+            return {
+                "backend": self.name,
+                "results": [
+                    {
+                        "title": "LangChain RAG tutorial",
+                        "url": "https://python.langchain.com/docs/tutorials/rag/",
+                        "description": "Build a retrieval augmented generation application.",
+                        "position": 1,
+                        "metadata": {"provider": self.name},
+                    }
+                ],
+            }
+
+    monkeypatch.setattr(web, "get_backend", lambda: FakeBackend())
+
+    result = web.web_search.func("langchain rag", limit=3, runtime=_runtime("call-web-preview"))
+
+    _assert_tool_result(result, "web_search", True)
+    assert "LangChain RAG tutorial" in result.content
+    assert "https://python.langchain.com/docs/tutorials/rag/" in result.content
+    assert "retrieval augmented generation" in result.content
 
 
 def test_skills_list_preserves_runtime_tool_call_id():
@@ -167,6 +216,7 @@ def test_web_extract_preserves_runtime_tool_call_id(monkeypatch):
     _assert_tool_result(result, "web_extract", True)
     assert result.artifact["data"]["backend"] == "fake"
     assert result.artifact["data"]["results"][0]["content"] == "hello from example"
+    assert "hello from example" in result.content
     assert result.tool_call_id == "call-extract"
 
 

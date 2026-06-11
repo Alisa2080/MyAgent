@@ -6,18 +6,11 @@ import atexit
 import json
 import logging
 import os
-import re
 import shutil
 import subprocess
 import threading
 import time
 from typing import Any, Dict, List, Optional
-
-from agent_core.permissions.profiles import (
-    profile_enforces_docker_network,
-    resolve_runtime_profile,
-    resolve_terminal_env,
-)
 
 from .ansi_strip import strip_ansi
 from .approval import check_all_command_guards
@@ -34,26 +27,32 @@ from .environments.singularity import (
 from .environments.ssh import SSHEnvironment
 from .process_registry import process_registry
 from .redact import redact_sensitive_text
+from .terminal_config import (
+    _container_config_from_terminal_config,
+    _get_env_config,
+    _image_for_env_type,
+    _parse_env_var,
+    _resolve_container_task_id,
+    _safe_parse_import_env,
+    _ssh_config_from_terminal_config,
+)
+from .terminal_guidance import (
+    INLINE_BACKGROUND_AMP_RE as _INLINE_BACKGROUND_AMP_RE,
+    LONG_LIVED_FOREGROUND_PATTERNS as _LONG_LIVED_FOREGROUND_PATTERNS,
+    SHELL_LEVEL_BACKGROUND_RE as _SHELL_LEVEL_BACKGROUND_RE,
+    TRAILING_BACKGROUND_AMP_RE as _TRAILING_BACKGROUND_AMP_RE,
+    WORKDIR_SAFE_RE as _WORKDIR_SAFE_RE,
+    _command_requires_pipe_stdin,
+    _foreground_background_guidance,
+    _handle_sudo_failure,
+    _interpret_exit_code,
+    _looks_like_help_or_version_command,
+    _resolve_notification_flag_conflict,
+    _validate_workdir,
+)
 from .tool_output_limits import get_max_bytes
 
 logger = logging.getLogger(__name__)
-
-
-def _safe_parse_import_env(name: str, default: Any, converter, type_label: str):
-    raw = os.getenv(name)
-    if raw is None or raw == "":
-        return default
-    try:
-        return converter(raw)
-    except (TypeError, ValueError):
-        logger.warning(
-            "Invalid value for %s: %r (expected %s). Falling back to %r.",
-            name,
-            raw,
-            type_label,
-            default,
-        )
-        return default
 
 
 FOREGROUND_MAX_TIMEOUT = _safe_parse_import_env("TERMINAL_MAX_FOREGROUND_TIMEOUT", 600, int, "integer")
@@ -69,21 +68,6 @@ Background: set background=true to get a session_id for long-running tasks or se
 Use process(action="poll") for progress checks and process(action="wait") to block until done.
 Set pty=true for interactive CLI tools.
 """
-
-_WORKDIR_SAFE_RE = re.compile(r"^[A-Za-z0-9/\\:_\-.~ +@=,]+$")
-_SHELL_LEVEL_BACKGROUND_RE = re.compile(r"\b(?:nohup|disown|setsid)\b", re.IGNORECASE)
-_INLINE_BACKGROUND_AMP_RE = re.compile(r"\s&\s")
-_TRAILING_BACKGROUND_AMP_RE = re.compile(r"\s&\s*(?:#.*)?$")
-_LONG_LIVED_FOREGROUND_PATTERNS = (
-    re.compile(r"\b(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?(?:dev|start|serve|watch)\b", re.IGNORECASE),
-    re.compile(r"\bdocker\s+compose\s+up\b", re.IGNORECASE),
-    re.compile(r"\bnext\s+dev\b", re.IGNORECASE),
-    re.compile(r"\bvite(?:\s|$)", re.IGNORECASE),
-    re.compile(r"\bnodemon\b", re.IGNORECASE),
-    re.compile(r"\buvicorn\b", re.IGNORECASE),
-    re.compile(r"\bgunicorn\b", re.IGNORECASE),
-    re.compile(r"\bpython(?:3)?\s+-m\s+http\.server\b", re.IGNORECASE),
-)
 
 _active_environments: Dict[str, Any] = {}
 _last_activity: Dict[str, float] = {}
@@ -146,193 +130,6 @@ def _check_disk_usage_warning():
 
 def _check_all_guards(command: str, env_type: str) -> dict:
     return check_all_command_guards(command, env_type, approval_callback=_get_approval_callback())
-
-
-def _validate_workdir(workdir: str) -> str | None:
-    if not workdir:
-        return None
-    if not _WORKDIR_SAFE_RE.match(workdir):
-        for ch in workdir:
-            if not _WORKDIR_SAFE_RE.match(ch):
-                return (
-                    f"Blocked: workdir contains disallowed character {repr(ch)}. "
-                    "Use a simple filesystem path without shell metacharacters."
-                )
-        return "Blocked: workdir contains disallowed characters."
-    return None
-
-
-def _handle_sudo_failure(output: str) -> str:
-    sudo_failures = [
-        "sudo: a password is required",
-        "sudo: no tty present",
-        "sudo: a terminal is required",
-    ]
-    for failure in sudo_failures:
-        if failure in output:
-            return output + "\n\nTip: set SUDO_PASSWORD in the environment to enable non-interactive sudo."
-    return output
-
-
-def _looks_like_help_or_version_command(command: str) -> bool:
-    normalized = " ".join(command.lower().split())
-    return " --help" in normalized or normalized.endswith(" -h") or " --version" in normalized or normalized.endswith(" -v")
-
-
-def _foreground_background_guidance(command: str) -> str | None:
-    if _looks_like_help_or_version_command(command):
-        return None
-    if _SHELL_LEVEL_BACKGROUND_RE.search(command):
-        return (
-            "Foreground command uses shell-level background wrappers (nohup/disown/setsid). "
-            "Use background=true so the toolkit can track the process."
-        )
-    if _INLINE_BACKGROUND_AMP_RE.search(command) or _TRAILING_BACKGROUND_AMP_RE.search(command):
-        return (
-            "Foreground command uses '&' backgrounding. Use background=true for long-lived "
-            "processes, then run health checks and tests in follow-up terminal calls."
-        )
-    for pattern in _LONG_LIVED_FOREGROUND_PATTERNS:
-        if pattern.search(command):
-            return (
-                "This foreground command appears to start a long-lived server/watch process. "
-                "Run it with background=true, verify readiness, then execute tests separately."
-            )
-    return None
-
-
-def _resolve_notification_flag_conflict(*, notify_on_complete: bool, watch_patterns, background: bool) -> tuple:
-    if background and notify_on_complete and watch_patterns:
-        return None, (
-            "watch_patterns ignored because notify_on_complete=True; "
-            "these two flags produce duplicate notifications when combined"
-        )
-    return watch_patterns, ""
-
-
-def _command_requires_pipe_stdin(command: str) -> bool:
-    normalized = " ".join(command.lower().split())
-    return normalized.startswith("gh auth login") and "--with-token" in normalized
-
-
-def _interpret_exit_code(command: str, exit_code: int) -> str | None:
-    if exit_code == 0:
-        return None
-    segments = re.split(r"\s*(?:\|\||&&|[|;])\s*", command)
-    last_segment = (segments[-1] if segments else command).strip()
-    words = last_segment.split()
-    base_cmd = ""
-    for w in words:
-        if "=" in w and not w.startswith("-"):
-            continue
-        base_cmd = w.split("/")[-1]
-        break
-    semantics: dict[str, dict[int, str]] = {
-        "grep": {1: "No matches found (not an error)"},
-        "egrep": {1: "No matches found (not an error)"},
-        "fgrep": {1: "No matches found (not an error)"},
-        "rg": {1: "No matches found (not an error)"},
-        "ag": {1: "No matches found (not an error)"},
-        "ack": {1: "No matches found (not an error)"},
-        "diff": {1: "Files differ (expected, not an error)"},
-        "colordiff": {1: "Files differ (expected, not an error)"},
-        "find": {1: "Some directories were inaccessible (partial results may still be valid)"},
-        "test": {1: "Condition evaluated to false (expected, not an error)"},
-        "[": {1: "Condition evaluated to false (expected, not an error)"},
-        "curl": {
-            6: "Could not resolve host",
-            7: "Failed to connect to host",
-            22: "HTTP response code indicated error (e.g. 404, 500)",
-            28: "Operation timed out",
-        },
-        "git": {1: "Non-zero exit (often normal — e.g. 'git diff' returns 1 when files differ)"},
-    }
-    return semantics.get(base_cmd, {}).get(exit_code)
-
-
-def _resolve_container_task_id(task_id: Optional[str]) -> str:
-    return task_id or "default"
-
-
-def _parse_env_var(name: str, default: str, converter=int, type_label: str = "integer"):
-    raw = os.getenv(name, default)
-    try:
-        return converter(raw)
-    except (ValueError, json.JSONDecodeError) as exc:
-        raise ValueError(
-            f"Invalid value for {name}: {raw!r} (expected {type_label})."
-        ) from exc
-
-
-def _get_env_config() -> Dict[str, Any]:
-    default_image = "nikolaik/python-nodejs:python3.11-nodejs20"
-    profile = resolve_runtime_profile()
-    env_type = resolve_terminal_env(profile)
-    mount_docker_cwd = os.getenv("TERMINAL_DOCKER_MOUNT_CWD_TO_WORKSPACE", "false").lower() in ("true", "1", "yes")
-    explicit_network = os.getenv("TERMINAL_CONTAINER_NETWORK")
-    if profile_enforces_docker_network(profile) and env_type != "local":
-        container_network = False
-    elif explicit_network is None:
-        container_network = True
-    else:
-        container_network = explicit_network.lower() in ("true", "1", "yes")
-
-    if env_type == "local":
-        default_cwd = os.getcwd()
-    elif env_type == "ssh":
-        default_cwd = "~"
-    else:
-        default_cwd = "/root"
-
-    cwd = os.getenv("TERMINAL_CWD", default_cwd)
-    if cwd:
-        cwd = os.path.expanduser(cwd)
-    host_cwd = None
-    host_prefixes = ("/Users/", "/home/", "C:\\", "C:/")
-    if env_type == "docker" and mount_docker_cwd:
-        docker_cwd_source = os.getenv("TERMINAL_CWD") or os.getcwd()
-        candidate = os.path.abspath(os.path.expanduser(docker_cwd_source))
-        if any(candidate.startswith(p) for p in host_prefixes) or (
-            os.path.isabs(candidate) and os.path.isdir(candidate) and not candidate.startswith(("/workspace", "/root"))
-        ):
-            host_cwd = candidate
-            cwd = "/workspace"
-    elif env_type in ("docker", "singularity") and cwd:
-        is_host_path = any(cwd.startswith(p) for p in host_prefixes)
-        is_relative = not os.path.isabs(cwd)
-        if (is_host_path or is_relative) and cwd != default_cwd:
-            logger.info(
-                "Ignoring TERMINAL_CWD=%r for %s backend (host/relative path won't work in sandbox). Using %r instead.",
-                cwd,
-                env_type,
-                default_cwd,
-            )
-            cwd = default_cwd
-
-    return {
-        "runtime_profile": profile,
-        "env_type": env_type,
-        "docker_image": os.getenv("TERMINAL_DOCKER_IMAGE", default_image),
-        "singularity_image": os.getenv("TERMINAL_SINGULARITY_IMAGE", f"docker://{default_image}"),
-        "cwd": cwd,
-        "host_cwd": host_cwd,
-        "docker_mount_cwd_to_workspace": mount_docker_cwd,
-        "timeout": _parse_env_var("TERMINAL_TIMEOUT", "180"),
-        "lifetime_seconds": _parse_env_var("TERMINAL_LIFETIME_SECONDS", "300"),
-        "ssh_host": os.getenv("TERMINAL_SSH_HOST", ""),
-        "ssh_user": os.getenv("TERMINAL_SSH_USER", ""),
-        "ssh_port": _parse_env_var("TERMINAL_SSH_PORT", "22"),
-        "ssh_key": os.getenv("TERMINAL_SSH_KEY", ""),
-        "local_persistent": os.getenv("TERMINAL_LOCAL_PERSISTENT", "false").lower() in ("true", "1", "yes"),
-        "container_cpu": _parse_env_var("TERMINAL_CONTAINER_CPU", "1", float, "number"),
-        "container_memory": _parse_env_var("TERMINAL_CONTAINER_MEMORY", "5120"),
-        "container_disk": _parse_env_var("TERMINAL_CONTAINER_DISK", "51200"),
-        "container_persistent": os.getenv("TERMINAL_CONTAINER_PERSISTENT", "true").lower() in ("true", "1", "yes"),
-        "container_network": container_network,
-        "docker_volumes": _parse_env_var("TERMINAL_DOCKER_VOLUMES", "[]", json.loads, "valid JSON"),
-        "docker_forward_env": _parse_env_var("TERMINAL_DOCKER_FORWARD_ENV", "[]", json.loads, "valid JSON"),
-        "docker_run_as_host_user": os.getenv("TERMINAL_DOCKER_RUN_AS_HOST_USER", "false").lower() in ("true", "1", "yes"),
-    }
 
 
 def _tag_environment(env, *, env_type: str, configured_cwd: str, host_cwd: str | None = None):
@@ -472,42 +269,6 @@ def _cleanup_thread_worker():
             if not _cleanup_running:
                 break
             time.sleep(1)
-
-
-def _image_for_env_type(config: dict, env_type: str) -> str:
-    if env_type == "docker":
-        return config["docker_image"]
-    if env_type == "singularity":
-        return config["singularity_image"]
-    return ""
-
-
-def _ssh_config_from_terminal_config(config: dict) -> dict | None:
-    if config["env_type"] != "ssh":
-        return None
-    return {
-        "host": config.get("ssh_host", ""),
-        "user": config.get("ssh_user", ""),
-        "port": config.get("ssh_port", 22),
-        "key": config.get("ssh_key", ""),
-    }
-
-
-def _container_config_from_terminal_config(config: dict) -> dict | None:
-    if config["env_type"] not in ("docker", "singularity"):
-        return None
-    return {
-        "container_cpu": config.get("container_cpu", 1),
-        "container_memory": config.get("container_memory", 5120),
-        "container_disk": config.get("container_disk", 51200),
-        "container_persistent": config.get("container_persistent", True),
-        "container_network": config.get("container_network", True),
-        "docker_volumes": config.get("docker_volumes", []),
-        "docker_mount_cwd_to_workspace": config.get("docker_mount_cwd_to_workspace", False),
-        "docker_forward_env": config.get("docker_forward_env", []),
-        "docker_env": config.get("docker_env", {}),
-        "docker_run_as_host_user": config.get("docker_run_as_host_user", False),
-    }
 
 
 def get_or_create_active_env(

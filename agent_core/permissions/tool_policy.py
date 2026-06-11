@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from agent_core.permissions import command_policy, file_policy
@@ -19,6 +20,26 @@ def _int_or_default(value: Any, default: int) -> int:
         return default
 
 
+def _string_list_or_none(value: Any) -> list[str] | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return [value]
+    if not isinstance(value, list):
+        value = [value]
+    normalized = []
+    for item in value:
+        if item is None:
+            continue
+        if isinstance(item, str):
+            normalized.append(item)
+        elif isinstance(item, (dict, list)):
+            normalized.append(json.dumps(item, ensure_ascii=False))
+        else:
+            normalized.append(str(item))
+    return normalized
+
+
 def canonical_tool_args(tool_name: str, args: dict[str, Any]) -> dict[str, Any]:
     if tool_name == "terminal":
         return {
@@ -28,7 +49,7 @@ def canonical_tool_args(tool_name: str, args: dict[str, Any]) -> dict[str, Any]:
             "workdir": args.get("workdir"),
             "pty": bool(args.get("pty", False)),
             "notify_on_complete": bool(args.get("notify_on_complete", False)),
-            "watch_patterns": args.get("watch_patterns"),
+            "watch_patterns": _string_list_or_none(args.get("watch_patterns")),
         }
     if tool_name == "process":
         return {

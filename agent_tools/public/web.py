@@ -1,4 +1,7 @@
+import json
 import os
+import time
+from pathlib import Path
 from typing import Literal
 
 import dotenv
@@ -21,6 +24,25 @@ from agent_tools.web_toolkit.safety import is_safe_url
 
 
 dotenv.load_dotenv()
+
+_DEBUG_LOG_PATH = Path("/home/miku/projects/langchain/.cursor/debug-2a6044.log")
+
+
+def _debug_log(message: str, *, hypothesis_id: str, data: dict | None = None, run_id: str = "initial") -> None:
+    try:
+        payload = {
+            "sessionId": "2a6044",
+            "runId": run_id,
+            "hypothesisId": hypothesis_id,
+            "location": "agent_tools/public/web.py",
+            "message": message,
+            "data": data or {},
+            "timestamp": int(time.time() * 1000),
+        }
+        with _DEBUG_LOG_PATH.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(payload, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
 
 
 class SearchInput(BaseModel):
@@ -79,6 +101,43 @@ def _summarization_config(model: str | None) -> tuple[str | None, str | None, st
     if not selected_model or not base_url or not api_key:
         return None, None, None
     return selected_model, base_url, api_key
+
+
+def _trim_preview(text: object, limit: int) -> str:
+    preview = " ".join(str(text or "").split())
+    if len(preview) <= limit:
+        return preview
+    return preview[: max(0, limit - 3)].rstrip() + "..."
+
+
+def _web_search_observation(*, backend_name: str, results: list[dict]) -> str:
+    lines = [f"Search completed with {len(results)} result(s) using {backend_name}."]
+    for index, result in enumerate(results[:5], start=1):
+        title = _trim_preview(result.get("title") or "(untitled)", 160)
+        url = _trim_preview(result.get("url"), 240)
+        description = _trim_preview(result.get("description"), 300)
+        line = f"{index}. {title}"
+        if url:
+            line += f"\n   URL: {url}"
+        if description:
+            line += f"\n   Snippet: {description}"
+        lines.append(line)
+    return "\n".join(lines)
+
+
+def _web_extract_observation(*, backend_name: str, results: list[dict], successes: list[dict]) -> str:
+    lines = [f"Extracted {len(successes)} of {len(results)} URL(s) using {backend_name}."]
+    for index, doc in enumerate(successes[:3], start=1):
+        title = _trim_preview(doc.get("title") or "(untitled)", 160)
+        url = _trim_preview(doc.get("final_url") or doc.get("url"), 240)
+        content = str(doc.get("content") or "").strip()
+        line = f"{index}. {title}"
+        if url:
+            line += f"\n   URL: {url}"
+        if content:
+            line += f"\n   Content:\n{content}"
+        lines.append(line)
+    return "\n".join(lines)
 
 
 def _process_document(
@@ -151,9 +210,28 @@ def web_search(
     """Search the web and return metadata results. Returns JSON: status, message, data."""
     if not str(query or "").strip():
         return tool_failure("web_search", "query is required", code="invalid_input", runtime=runtime)
+    # #region agent log
+    _debug_log(
+        "web_search invoked",
+        hypothesis_id="H1",
+        data={
+            "query": str(query or "")[:200],
+            "limit": int(limit or 5),
+            "agent_web_backend_set": bool(os.getenv("AGENT_WEB_BACKEND")),
+            "tavily_key_set": bool(os.getenv("TAVILY_API_KEY")),
+        },
+    )
+    # #endregion
     clamped_limit = _clamp_limit(limit)
     try:
         backend = get_backend()
+        # #region agent log
+        _debug_log(
+            "web_search backend resolved",
+            hypothesis_id="H4",
+            data={"backend_name": str(getattr(backend, "name", "unknown"))},
+        )
+        # #endregion
         response = backend.search(str(query), clamped_limit)
     except BackendConfigurationError as exc:
         return tool_failure("web_search", _redact(exc), code=exc.code, runtime=runtime)
@@ -166,7 +244,7 @@ def web_search(
         "web_search",
         data={"query": query, "backend": backend_name, "results": results, "total": len(results)},
         message="Search completed.",
-        content=f"Search completed with {len(results)} result(s) using {backend_name}.",
+        content=_web_search_observation(backend_name=backend_name, results=results),
         runtime=runtime,
     )
 
@@ -237,6 +315,6 @@ def web_extract(
         "web_extract",
         data=data,
         message="Extraction completed.",
-        content=f"Extracted {len(successes)} of {len(results)} URL(s) using {backend_name}.",
+        content=_web_extract_observation(backend_name=str(backend_name), results=results, successes=successes),
         runtime=runtime,
     )

@@ -23,6 +23,20 @@ def _artifact(result: ToolMessage) -> dict:
     return result.artifact
 
 
+def test_terminal_tool_schema_coerces_watch_patterns_before_execution():
+    terminal_tools = _terminal_module()
+
+    parsed = terminal_tools.terminal._parse_input(
+        {
+            "command": "echo ready",
+            "watch_patterns": [{"pattern": "READY"}],
+        },
+        None,
+    )
+
+    assert parsed["watch_patterns"] == ['{"pattern": "READY"}']
+
+
 def test_low_risk_command_runs_without_approval(monkeypatch):
     from agent_core.permissions.approvals import clear_approvals
 

@@ -10,7 +10,7 @@ from agent_core.permissions import tool_policy
 from agent_core.permissions.approvals import ApprovalRecord, make_args_digest, record_approval
 from agent_core.permissions.audit import audit_policy_event
 from agent_core.permissions.profiles import resolve_runtime_profile
-from agent_core.policy_tool_gate import POLICY_ARG_BUILDERS
+from agent_core.policy.args import POLICY_ARG_BUILDERS
 from agent_core.session_context import runtime_task_id_from_runtime
 
 

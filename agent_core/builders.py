@@ -12,7 +12,7 @@ from langchain.agents.middleware import (
 from agent_core.human_loop import FlexibleHumanInTheLoopMiddleware
 from agent_core.memory import memory_store
 from agent_core.model_config import MAIN_MODEL, SMALL_MODEL
-from agent_core.policy_tool_gate import build_policy_pre_hook
+from agent_core.policy.gate import build_policy_pre_hook
 from agent_core.process_lifecycle import install_process_signal_handlers
 from agent_core.tool_bus_middleware import ToolBusHooks, ToolBusMiddleware
 from agent_core.system_prompt import (

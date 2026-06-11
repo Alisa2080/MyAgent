@@ -536,6 +536,41 @@ def test_web_extract_skips_summarization_without_auxiliary_config(monkeypatch):
     assert doc["content"].startswith("Long content.")
 
 
+def test_web_extract_content_includes_bounded_document_text_beyond_preview(monkeypatch):
+    import agent_tools.public.web as web
+
+    marker = "RAG_MARKER retrieval augmented generation"
+    long_content = ("Intro. " * 300) + marker
+
+    class FakeBackend:
+        name = "fake"
+
+        def extract(self, urls, format):
+            return [
+                {
+                    "url": urls[0],
+                    "final_url": urls[0],
+                    "title": "LangChain llms.txt",
+                    "content": long_content,
+                    "format": format,
+                    "metadata": {},
+                }
+            ]
+
+    monkeypatch.setattr(web, "get_backend", lambda: FakeBackend())
+    monkeypatch.setattr(web, "is_safe_url", lambda url: (True, None))
+
+    result = web.web_extract.func(
+        ["https://docs.langchain.com/llms.txt"],
+        use_llm_processing=False,
+        max_chars_per_url=5000,
+        runtime=_runtime("call-visible-content"),
+    )
+
+    assert marker in result.artifact["data"]["results"][0]["content"]
+    assert marker in result.content
+
+
 def test_web_extract_summarization_failure_falls_back_to_bounded_raw(monkeypatch):
     import agent_tools.public.web as web
 

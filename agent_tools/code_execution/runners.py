@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import os
 import platform
-import re
 import shlex
 import shutil
 import subprocess
@@ -13,214 +12,25 @@ from pathlib import Path
 from agent_core.session_context import RuntimeContext
 
 from agent_tools.code_execution.config import CodeExecutionConfig
+from agent_tools.code_execution.child_policy import CHILD_POLICY_SITE_CUSTOMIZE as _CHILD_POLICY_SITE_CUSTOMIZE
 from agent_tools.code_execution.dispatch import CodeExecutionDispatcher
 from agent_tools.code_execution.local_rpc import CodeExecutionRpcServer
+from agent_tools.code_execution.runner_env import (
+    SAFE_ENV_EXACT,
+    SAFE_ENV_PREFIXES,
+    SECRET_SUBSTRINGS,
+    _is_safe_env_name,
+    _join_roots,
+    safe_child_env,
+)
+from agent_tools.code_execution.runner_output import (
+    ANSI_RE,
+    _result_data,
+    sanitize_output,
+    sanitize_process_output,
+)
 from agent_tools.code_execution.safety import redact_code_execution_text
 from agent_tools.code_execution.stubs import generate_uds_tools_module, visible_sandbox_tools
-
-SAFE_ENV_EXACT = frozenset({
-    "PATH",
-    "HOME",
-    "USER",
-    "LANG",
-    "TERM",
-    "TMPDIR",
-    "TMP",
-    "TEMP",
-    "SHELL",
-    "LOGNAME",
-    "VIRTUAL_ENV",
-    "CONDA_PREFIX",
-})
-SAFE_ENV_PREFIXES = ("LC_", "XDG_", "CONDA_")
-SECRET_SUBSTRINGS = ("KEY", "TOKEN", "SECRET", "PASSWORD", "CREDENTIAL", "PASSWD", "AUTH")
-ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
-
-_CHILD_POLICY_SITE_CUSTOMIZE = r'''
-from __future__ import annotations
-
-import builtins
-import os
-import socket
-import sys
-import sysconfig
-
-_SANDBOX_ROOT = os.path.realpath(os.environ.get("CODE_EXECUTION_SANDBOX_ROOT", ""))
-_RPC_SOCKET = os.environ.get("CODE_EXECUTION_RPC_SOCKET", "")
-
-
-def _roots_from_env(name):
-    roots = []
-    for raw in os.environ.get(name, "").split(os.pathsep):
-        if raw:
-            roots.append(os.path.realpath(raw))
-    return roots
-
-
-_READ_ROOTS = _roots_from_env("CODE_EXECUTION_ALLOWED_READ_ROOTS")
-for _path in (
-    sys.prefix,
-    getattr(sys, "base_prefix", ""),
-    sysconfig.get_path("stdlib") or "",
-    sysconfig.get_path("platstdlib") or "",
-    sysconfig.get_path("purelib") or "",
-    sysconfig.get_path("platlib") or "",
-):
-    if _path:
-        _READ_ROOTS.append(os.path.realpath(_path))
-
-
-def _under(path, roots):
-    real = os.path.realpath(path)
-    for root in roots:
-        if real == root or real.startswith(root + os.sep):
-            return True
-    return False
-
-
-def _deny(action):
-    raise PermissionError(
-        f"execute_code policy denied {action}; use hermes_tools RPC wrappers for project files, terminal, and web access."
-    )
-
-
-def _is_write_open(mode, flags):
-    mode_text = str(mode or "")
-    if any(m in mode_text for m in ("w", "a", "x", "+")):
-        return True
-    if isinstance(flags, int):
-        return bool(flags & (os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_TRUNC | os.O_APPEND))
-    return False
-
-
-def _guard_open(file, mode="r", flags=0):
-    if isinstance(file, int):
-        return
-    if not isinstance(file, (str, bytes, os.PathLike)):
-        return
-    path_text = os.fsdecode(file)
-    if not path_text:
-        return
-    if not os.path.isabs(path_text):
-        path_text = os.path.join(os.getcwd(), path_text)
-    if _is_write_open(mode, flags):
-        if _SANDBOX_ROOT and _under(path_text, (_SANDBOX_ROOT,)):
-            return
-        _deny(f"direct file write to {path_text}")
-    if _under(path_text, _READ_ROOTS):
-        return
-    _deny(f"direct file read from {path_text}")
-
-
-_original_open = builtins.open
-
-
-def _policy_open(file, mode="r", buffering=-1, encoding=None, errors=None, newline=None, closefd=True, opener=None):
-    _guard_open(file, mode=mode)
-    return _original_open(file, mode, buffering, encoding, errors, newline, closefd, opener)
-
-
-builtins.open = _policy_open
-
-
-def _audit(event, args):
-    if event == "open":
-        path, mode, flags = (args + (None, None, 0))[:3]
-        _guard_open(path, mode=mode, flags=flags)
-    elif event in {"subprocess.Popen", "os.system", "os.posix_spawn", "os.posix_spawnp", "pty.spawn"}:
-        _deny(event)
-    elif event == "socket.connect":
-        sock, address = args
-        if getattr(sock, "family", None) == socket.AF_UNIX and address == _RPC_SOCKET:
-            return
-        _deny("direct socket connect")
-
-
-sys.addaudithook(_audit)
-'''
-
-
-def _is_safe_env_name(name: str) -> bool:
-    upper = name.upper()
-    if any(marker in upper for marker in SECRET_SUBSTRINGS):
-        return False
-    return name in SAFE_ENV_EXACT or any(name.startswith(prefix) for prefix in SAFE_ENV_PREFIXES)
-
-
-def safe_child_env(config: CodeExecutionConfig, extra: dict[str, str] | None = None) -> dict[str, str]:
-    env = {
-        name: value
-        for name, value in os.environ.items()
-        if _is_safe_env_name(name) and config.env_name_allowed(name)
-    }
-    for name in config.env_allowlist:
-        if config.env_name_allowed(name) and name in os.environ:
-            env[name] = os.environ[name]
-    env.update(extra or {})
-    return env
-
-
-def _join_roots(*roots: str | None) -> str:
-    return os.pathsep.join(str(root) for root in roots if root)
-
-
-def sanitize_output(text: str, *, limit: int) -> tuple[str, bool]:
-    cleaned = ANSI_RE.sub("", str(text or ""))
-    cleaned = redact_code_execution_text(cleaned)
-    if len(cleaned) <= limit:
-        return cleaned, False
-    return cleaned[:limit] + "\n[truncated]", True
-
-
-def _result_data(stdout: str, stderr: str, returncode: int, *, stdout_truncated: bool, stderr_truncated: bool) -> dict:
-    return {
-        "stdout": stdout,
-        "stderr": stderr,
-        "returncode": returncode,
-        "stdout_truncated": stdout_truncated,
-        "stderr_truncated": stderr_truncated,
-    }
-
-
-def sanitize_process_output(
-    *,
-    stdout_raw: str,
-    stderr_raw: str,
-    returncode: int,
-    config: CodeExecutionConfig,
-) -> dict:
-    """Apply per-stream sanitization then enforce a combined output limit.
-
-    Secrets are redacted before the total-limit budget is computed so that
-    redaction itself does not count toward the budget.  Each stream is capped
-    at its individual limit before the combined budget is applied.
-    """
-    stdout, stdout_truncated = sanitize_output(stdout_raw, limit=config.stdout_limit_chars)
-    stderr, stderr_truncated = sanitize_output(stderr_raw, limit=config.stderr_limit_chars)
-    combined_len = len(stdout) + len(stderr)
-    if combined_len > config.output_limit_chars:
-        # Allocate the remaining budget between streams, giving at least
-        # some share to stderr while preferring stdout.
-        stderr_reservation = min(len(stderr), config.output_limit_chars // 2)
-        stdout_budget = min(
-            len(stdout),
-            max(0, config.output_limit_chars - stderr_reservation),
-        )
-        stderr_budget = max(0, config.output_limit_chars - stdout_budget)
-        if len(stdout) > stdout_budget:
-            stdout = stdout[:stdout_budget]
-            stdout_truncated = True
-        if len(stderr) > stderr_budget:
-            stderr = stderr[:stderr_budget]
-            stderr_truncated = True
-    return _result_data(
-        stdout,
-        stderr,
-        int(returncode),
-        stdout_truncated=stdout_truncated,
-        stderr_truncated=stderr_truncated,
-    )
-
 
 def _execution_scope_for_runtime(runtime: object):
     """Return a context manager that registers the current thread as the active execution for the runtime's thread_id."""

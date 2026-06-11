@@ -1,0 +1,870 @@
+URL: https://docs.langchain.com/oss/python/langchain/retrieval
+STATUS: 200
+TITLE: 
+
+Retrieval - Docs by LangChain                                     !function(){var b="";
+function a(p){if(p==null)return"/";p=""+p;if(""===p)return"/";return"/"===p.charAt(0)?p:"/"+p}
+function u(p){if(p==null)return p;p=""+p;if(!p||p.charAt(p.length-1)==="/")return p.slice(0,-1);return p}
+function i(p){if(p==null)return p;p=""+p;if(6  (function(a,b){try{let c=document.getElementById("banner")?.innerText;if(c){for(let d=0;d          ((a,b,c,d,e,f,g,h)=>{let i=document.documentElement,j=["light","dark"];function k(b){var c;(Array.isArray(a)?a:[a]).forEach(a=>{let c="class"===a,d=c&&f?e.map(a=>f[a]||a):e;c?(i.classList.remove(...d),i.classList.add(f&&f[b]?f[b]:b)):i.setAttribute(a,b)}),c=b,h&&j.includes(c)&&(i.style.colorScheme=c)}if(d)k(d);else try{let a=localStorage.getItem(b)||c,d=g&&"system"===a?window.matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light":a;k(d)}catch(a){}})("class","isDarkMode","system",null,["dark","light","true","false","system"],{"true":"dark","false":"light","dark":"dark","light":"light"},true,false)   Documentation Index  Fetch the complete documentation index at:  /llms.txt   Use this file to discover all available pages before exploring further.   :root{--banner-height:0px!important}  (self.__next_s=self.__next_s||[]).push([0,{"children":"(function g(a,b,c,d,e){try{let f,g,h=[];try{h=window.location.pathname.split(\"/\").filter(a=\u003e\"\"!==a\u0026\u0026\"global\"!==a).slice(0,2)}catch{h=[]}let i=h.find(a=\u003ec.includes(a)),j=[];for(let c of(i?j.push(i):j.push(b),j.push(\"global\"),j)){if(!c)continue;let b=a[c];if(b?.content){f=b.content,g=c;break}}if(!f)return void document.documentElement.setAttribute(d,\"hidden\");let k=!0,l=0;for(;l\u003clocalStorage.length;){let a=localStorage.key(l);if(l++,!a?.endsWith(e))continue;let b=localStorage.getItem(a);if(b\u0026\u0026b===f){k=!1;break}g\u0026\u0026(a.startsWith(`lang:${g}_`)||!a.startsWith(\"lang:\"))\u0026\u0026(localStorage.removeItem(a),l--)}document.documentElement.setAttribute(d,k?\"visible\":\"hidden\")}catch(a){console.error(a),document.documentElement.setAttribute(d,\"hidden\")}})(\n  {},\n  \"en\",\n  [],\n  \"data-banner-state\",\n  \"bannerDismissed\",\n)","id":"_mintlify-banner-script"}])  @font-face {
+font-family: 'TWK Lausanne';
+src: url('/fonts/TWKLausanne-700.woff2') format('woff2');
+font-weight: 700;
+font-display: swap;
+}   :root {
+--font-family-headings-custom: "TWK Lausanne", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+--font-weight-headings-custom: 700;
+--font-family-body-custom: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+--font-weight-body-custom: 400;
+}
+:root {
+--primary: 22 31 52;
+--primary-light: 127 200 255;
+--primary-dark: 0 109 221;
+--tooltip-foreground: 255 255 255;
+--background-light: 255 255 255;
+--background-dark: 3 7 16;
+--gray-50: 243 243 244;
+--gray-100: 238 238 239;
+--gray-200: 223 223 224;
+--gray-300: 206 206 207;
+--gray-400: 159 159 160;
+--gray-500: 112 112 113;
+--gray-600: 80 80 81;
+--gray-700: 63 63 64;
+--gray-800: 38 38 38;
+--gray-900: 23 23 24;
+--gray-950: 10 11 11;
+}
+(function() {
+function loadKatex() {
+const link = document.querySelector('link[href="https://d4tuoctqmanu0.cloudfront.net/katex.min.css"]');
+if (link) link.rel = 'stylesheet';
+}
+if (document.readyState === 'loading') {
+document.addEventListener('DOMContentLoaded', loadKatex);
+} else {
+loadKatex();
+}
+})();
+(self.__next_s=self.__next_s||[]).push([0,{"suppressHydrationWarning":true,"children":"(function(a,b,c,d){var e;let f,g=\"mint\"===d||\"linden\"===d?\"sidebar\":\"sidebar-content\",h=(e=d,f=\"navbar-transition\",\"maple\"===e\u0026\u0026(f+=\"-maple\"),f),[i,j]=(()=\u003e{switch(d){case\"almond\":return[\"[--scroll-mt:2.5rem]\",\"[--scroll-mt:2.5rem]\"];case\"luma\":return[\"lg:[--scroll-mt:6rem]\",\"lg:[--scroll-mt:6rem]\"];case\"sequoia\":return[\"lg:[--scroll-mt:8.5rem]\",\"lg:[--scroll-mt:11rem]\"];default:return[\"lg:[--scroll-mt:9.5rem]\",\"lg:[--scroll-mt:12rem]\"]}})();function k(){document.documentElement.classList.add(i)}let l=document.documentElement.getAttribute(\"data-banner-state\"),m=null!=l?\"visible\"===l:b;function n(a){let b=m?`calc(${a-2.5}rem + var(--banner-height, 2.5rem))`:`${a}rem`;document.getElementById(g)?.style.setProperty(\"top\",b)}function o(a){let b=m?`calc(100vh - ${a-2.5}rem - var(--banner-height, 2.5rem))`:`calc(100vh - ${a}rem)`;document.getElementById(g)?.style.setProperty(\"height\",b)}function p(a,b){!a\u0026\u0026b||a\u0026\u0026!b?(k(),document.documentElement.classList.remove(j)):a\u0026\u0026b\u0026\u0026(document.documentElement.classList.add(j),document.documentElement.classList.remove(i))}switch(d){case\"mint\":n(c),p(a,m);break;case\"palm\":case\"aspen\":case\"sequoia\":n(c),o(c),p(a,m);break;case\"luma\":k();break;case\"linden\":n(c),m\u0026\u0026k();break;case\"almond\":k(),n(c),o(c)}let q=function(){let a=document.createElement(\"style\");return a.appendChild(document.createTextNode(\"*,*::before,*::after{-webkit-transition:none!important;-moz-transition:none!important;-o-transition:none!important;-ms-transition:none!important;transition:none!important}\")),document.head.appendChild(a),function(){window.getComputedStyle(document.body),setTimeout(()=\u003e{document.head.removeChild(a)},1)}}();(\"requestAnimationFrame\"in globalThis?requestAnimationFrame:setTimeout)(()=\u003e{let a;a=!1,a=window.scrollY\u003e50,document.getElementById(h)?.setAttribute(\"data-is-opaque\",`${!!a}`),q()})})(\n  true,\n  false,\n  (function l(a,b,c){let d=document.documentElement.getAttribute(\"data-banner-state\"),e=2.5*!!(null!=d?\"visible\"===d:b),f=3*!!a,g=4,h=e+g+f;switch(c){case\"mint\":case\"palm\":break;case\"aspen\":f=2.5*!!a,g=3.5,h=e+f+g;break;case\"luma\":g=3,h=e+g;break;case\"linden\":g=4,h=e+g;break;case\"almond\":g=3.5,h=e+g;break;case\"sequoia\":f=3*!!a,g=3,h=e+g+f}return h})(true, false, \"aspen\"),\n  \"aspen\",\n)","id":"_mintlify-scroll-top-script"}])      Skip to main content  (function g(a,b,c,d){try{if(window.matchMedia("(max-width: 1024px)").matches||!d){document.documentElement.style.setProperty(c,"0px"),document.documentElement.setAttribute("data-assistant-state","closed"),d||localStorage.setItem(a,"false");return}let e=localStorage.getItem(a);if(null===e){document.documentElement.style.setProperty(c,"0px"),document.documentElement.setAttribute("data-assistant-state","closed");return}let f=JSON.parse(e),g=localStorage.getItem(b),h=null!==g?JSON.parse(g):368;document.documentElement.style.setProperty(c,f?h+"px":"0px"),document.documentElement.setAttribute("data-assistant-state",f?"open":"closed")}catch(a){document.documentElement.style.setProperty(c,"0px"),document.documentElement.setAttribute("data-assistant-state","closed")}})(
+"chat-assistant-sheet-open",
+"chat-assistant-sheet-width",
+"--assistant-sheet-width",
+false
+)  html{--assistant-sheet-width:0px!important}               Docs by LangChain  home page         Open source                 Search...   ⌘ K           Ask AI      GitHub    Try LangSmith        Try LangSmith                                                 Search...              Navigation         Advanced usage       Retrieval       Deep Agents    LangChain    LangGraph    Integrations    Learn    Reference    Contribute                     Python                Overview              Get started         Install          Quickstart          Changelog                Philosophy               Core components         Agents          Models          Messages          Tools          Short-term memory          Event streaming          Streaming          Structured output               Middleware         Overview          Prebuilt middleware          Custom middleware               Frontend         Overview         Patterns              Integrations                    Advanced usage         Guardrails          Runtime          Context engineering          Model Context Protocol (MCP)          Human-in-the-loop         Multi-agent               Retrieval          Long-term memory               Agent development         LangSmith Studio         Test               Agent Chat UI               Deploy with LangSmith         Deployment          Observability        (function () {
+try {
+if (window.__mintlifyInitialSidebarScrollDone) return;
+window.__mintlifyInitialSidebarScrollDone = true;
+var path = (window.location.pathname || '/').split('#')[0].split('?')[0];
+if (path.endsWith('/index')) path = path.slice(0, -6);
+else if (path === 'index') path = '';
+var candidates = [];
+if (path) candidates.push(path);
+if (path.startsWith('/')) candidates.push(path.slice(1));
+else candidates.push('/' + path);
+var item = null;
+for (var i = 0; i  = parentRect.top && itemRect.bottom      document.documentElement.setAttribute('data-page-mode', "none");  (self.__next_s=self.__next_s||[]).push([0,{"suppressHydrationWarning":true,"children":"(function m(a,b,c){if(!document.getElementById(\"footer\")?.classList.contains(\"advanced-footer\")||\"maple\"===b||\"willow\"===b||\"almond\"===b||\"luma\"===b||\"sequoia\"===b)return;let d=document.documentElement.getAttribute(\"data-banner-state\"),e=null!=d?\"visible\"===d:c,f=document.documentElement.getAttribute(\"data-page-mode\"),g=document.getElementById(\"navbar\"),h=document.getElementById(\"navigation-items\"),i=document.getElementById(\"sidebar\"),j=document.getElementById(\"footer\"),k=document.getElementById(\"table-of-contents-content\"),l=document.getElementById(\"banner\"),m=e?l?.offsetHeight??40:0,n=(e?a-2.5:a)*16+m;if(!j||\"center\"===f)return;let o=j.getBoundingClientRect().top,p=window.innerHeight-o,q=(h?.clientHeight??0)+n+32*(\"mint\"===b||\"linden\"===b);if(i\u0026\u0026h)if(p\u003e0){let a=Math.max(0,q-o);i.style.bottom=`${p}px`,i.style.top=`${n-a}px`}else i.style.bottom=\"\",i.style.top=e?`calc(${a-2.5}rem + var(--banner-height, 2.5rem))`:`${a}rem`,i.style.height=\"auto\";k\u0026\u0026g\u0026\u0026(p\u003e0?k.style.top=\"custom\"===f?`${g.clientHeight-p}px`:`${40+g.clientHeight-p}px`:k.style.top=\"\")})(\n  (function l(a,b,c){let d=document.documentElement.getAttribute(\"data-banner-state\"),e=2.5*!!(null!=d?\"visible\"===d:b),f=3*!!a,g=4,h=e+g+f;switch(c){case\"mint\":case\"palm\":break;case\"aspen\":f=2.5*!!a,g=3.5,h=e+f+g;break;case\"luma\":g=3,h=e+g;break;case\"linden\":g=4,h=e+g;break;case\"almond\":g=3.5,h=e+g;break;case\"sequoia\":f=3*!!a,g=3,h=e+g+f}return h})(true, false, \"aspen\"),\n  \"aspen\",\n  false,\n)","id":"_mintlify-footer-and-sidebar-scroll-script"}])        @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:ital,wght@0,400;0,500;0,600;0,700;1,400;1,500;1,600;1,700&display=swap');
+/* TWK Lausanne theme variables (Mintlify theme fallback) */
+:root {
+--font-family-headings-custom: 'TWK Lausanne', sans-serif;
+--font-family-body-custom: 'Inter', sans-serif;
+--font-weight-body-custom: 400;
+--font-inter: 'Inter', sans-serif;
+}
+/* TWK Lausanne @font-face declarations (700 normal loaded via docs.json) */
+@font-face {
+font-family: 'TWK Lausanne';
+src: url('/fonts/TWKLausanne-250.woff2') format('woff2');
+font-weight: 250;
+font-style: normal;
+font-display: swap;
+}
+@font-face {
+font-family: 'TWK Lausanne';
+src: url('/fonts/TWKLausanne-250Italic.woff2') format('woff2');
+font-weight: 250;
+font-style: italic;
+font-display: swap;
+}
+@font-face {
+font-family: 'TWK Lausanne';
+src: url('/fonts/TWKLausanne-300.woff2') format('woff2');
+font-weight: 300;
+font-style: normal;
+font-display: swap;
+}
+@font-face {
+font-family: 'TWK Lausanne';
+src: url('/fonts/TWKLausanne-300Italic.woff2') format('woff2');
+font-weight: 300;
+font-style: italic;
+font-display: swap;
+}
+@font-face {
+font-family: 'TWK Lausanne';
+src: url('/fonts/TWKLausanne-350.woff2') format('woff2');
+font-weight: 350;
+font-style: normal;
+font-display: swap;
+}
+@font-face {
+font-family: 'TWK Lausanne';
+src: url('/fonts/TWKLausanne-350Italic.woff2') format('woff2');
+font-weight: 350;
+font-style: italic;
+font-display: swap;
+}
+@font-face {
+font-family: 'TWK Lausanne';
+src: url('/fonts/TWKLausanne-400Italic.woff2') format('woff2');
+font-weight: 400;
+font-style: italic;
+font-display: swap;
+}
+@font-face {
+font-family: 'TWK Lausanne';
+src: url('/fonts/TWKLausanne-400.woff2') format('woff2');
+font-weight: 400;
+font-style: normal;
+font-display: swap;
+}
+@font-face {
+font-family: 'TWK Lausanne';
+src: url('/fonts/TWKLausanne-600.woff2') format('woff2');
+font-weight: 600;
+font-style: normal;
+font-display: swap;
+}
+@font-face {
+font-family: 'TWK Lausanne';
+src: url('/fonts/TWKLausanne-600Italic.woff2') format('woff2');
+font-weight: 600;
+font-style: italic;
+font-display: swap;
+}
+@font-face {
+font-family: 'TWK Lausanne';
+src: url('/fonts/TWKLausanne-700.woff2') format('woff2');
+font-weight: 700;
+font-style: normal;
+font-display: swap;
+}
+@font-face {
+font-family: 'TWK Lausanne';
+src: url('/fonts/TWKLausanne-700Italic.woff2') format('woff2');
+font-weight: 700;
+font-style: italic;
+font-display: swap;
+}
+/* Body and main content — Inter */
+body,
+.mdx-content,
+.prose,
+.prose p,
+.prose li,
+article,
+[class*="prose"] {
+font-family: 'Inter', sans-serif !important;
+color: #030710 !important;
+}
+.dark body,
+.dark .mdx-content,
+.dark .prose,
+.dark .prose p,
+.dark .prose li,
+.dark article,
+.dark [class*="prose"] {
+color: #ffffff !important;
+}
+/* Ensure bold text is clearly visible */
+strong, b, .prose strong, .prose b, [class*="prose"] strong, [class*="prose"] b {
+font-weight: 700 !important;
+}
+/* Ensure links inside bold text inherit bold weight */
+strong a, b a, .prose strong a, .prose b a, [class*="prose"] strong a, [class*="prose"] b a {
+font-weight: 700 !important;
+}
+/* Use IBM Plex Mono for all code and monospace text */
+code, pre, kbd, samp {
+font-family: 'IBM Plex Mono', monospace !important;
+}
+/* Inline code background (dark mode only) */
+.dark :not(pre) > code {
+background-color: #161F34 !important;
+}
+/* Inline code inside callouts */
+[data-callout-type] :not(pre) > code {
+background-color: #FFFFFF20 !important;
+}
+/* Headings — TWK Lausanne (default weights: h1=700, h2/h3/h4=600) */
+h1, h2, h3, h4 {
+font-family: 'TWK Lausanne', sans-serif !important;
+color: #030710 !important;
+}
+.dark h1, .dark h2, .dark h3, .dark h4 {
+color: #ffffff !important;
+}
+[data-callout-type] :is(h1, h2, h3, h4) {
+color: inherit !important;
+}
+/* Card titles — TWK Lausanne (default weight: 600) */
+[data-component-part="card-title"] {
+font-family: 'TWK Lausanne', sans-serif !important;
+}
+/* Card icon SVGs inherit text color in dark mode */
+.dark .card img[src$=".svg"],
+.dark [data-component-part="card-icon"] img[src$=".svg"] {
+filter: invert(1);
+}
+/* Make sidebar title heavier weight */
+#sidebar-title {
+font-weight: 600 !important;
+}
+/*
+* Sidebar nav: prevent "open in new page" icon wrapper from stealing width.
+* Mintlify emits a flex wrapper that sometimes includes `flex-1`, which can force titles to wrap.
+*/
+/* Exact class combo (escaped) + a broad fallback. */
+:where(.h-\\[1lh\\].flex.items-center.flex-1.justify-end),
+:where([class*="h-[1lh]"][class*="items-center"][class*="flex-1"][class*="justify-end"]) {
+flex: 0 0 auto !important;
+width: fit-content !important;
+}
+:where(.h-\\[1lh\\].flex.items-center.flex-1.justify-end) svg,
+:where([class*="h-[1lh]"][class*="items-center"][class*="flex-1"][class*="justify-end"]) svg {
+flex-shrink: 0 !important;
+}
+/* Prose list styling */
+.prose, [class*="prose"] {
+--tw-prose-counters: currentColor !important;
+--tw-prose-bullets: currentColor !important;
+}
+.mdx-content li::marker {
+font-family: 'Inter', sans-serif !important;
+}
+/*
+* Hosted Mintlify builds omit span[data-as="p"] around react-medium-image-zoom blocks in
+* list items, so prose paragraph margins (about 2em) do not apply. Local mint dev wraps
+* the zoom in span[data-as="p"]. Match hosted spacing to local by margining the sibling.
+*/
+.prose li > span[data-as="p"] + span[data-rmiz],
+[class*="prose"] li > span[data-as="p"] + span[data-rmiz],
+.mdx-content li > span[data-as="p"] + span[data-rmiz],
+article li > span[data-as="p"] + span[data-rmiz] {
+display: block;
+margin-top: 2em;
+margin-bottom: 2em;
+}
+/* Inline code links inherit color from parent link */
+a code {
+color: inherit !important;
+text-decoration: underline !important;
+text-underline-offset: 3px !important;
+}
+/* Ensure mermaid diagrams are centered */
+.mermaid {
+text-align: center;
+display: flex;
+justify-content: center;
+}
+/* Skills composition diagram (custom SVG) */
+.skills-composition-diagram {
+margin: 1.5rem 0 2rem;
+text-align: center;
+}
+.skills-composition-diagram img {
+width: 100%;
+max-width: 920px;
+border-radius: 16px;
+display: inline-block;
+}
+/* Mermaid dark mode text overrides */
+/* Node labels: inherit color from classDef parent instead of being forced to white */
+.dark .nodeLabel,
+.dark .nodeLabel p {
+color: inherit !important;
+}
+/* Edge labels: brand-tinted light text for readability on dark backgrounds */
+.dark .edgeLabel,
+.dark .edgeLabel p,
+.dark .edgeLabel span {
+color: #CCE9FF !important;
+}
+.dark span.edgeLabel,
+.dark .edgeLabel p {
+background-color: #030710 !important;
+}
+.dark .edgeLabel rect,
+.dark .edgeLabel .labelBkg {
+fill: #030710 !important;
+}
+/* Sequence diagram actors, messages, labels, notes, and loops */
+.dark text.actor,
+.dark .messageText,
+.dark .labelText,
+.dark .loopText,
+.dark .noteText {
+fill: #CCE9FF;
+}
+/* Fix vertical alignment in table cells with mixed content (text and images) */
+.prose table td, article table td, .markdown table td, .content table td, [class*="prose"] table td,
+.prose table th, article table th, .markdown table th, .content table th, [class*="prose"] table th {
+vertical-align: middle !important;
+line-height: 1.5 !important;
+}
+/* Hide page description subtitle (kept in frontmatter for SEO) */
+.prose-gray.text-lg.mt-2 {
+display: none !important;
+}
+/* Hide pagination */
+#pagination {
+display: none;
+}
+/* Improve banner link readability in light mode */
+#banner a {
+color: inherit !important;
+}
+/* Compact first column for multi agent pattern comparison tables (no horizontal scroll) */
+.compact-first-col [data-table-wrapper] {
+overflow-x: visible !important;
+}
+.compact-first-col table {
+table-layout: auto !important;
+width: 100% !important;
+}
+.compact-first-col table td,
+.compact-first-col table th {
+min-width: 0 !important;
+}
+.compact-first-col table td:first-child,
+.compact-first-col table th:first-child {
+width: 1% !important;
+white-space: nowrap !important;
+}
+/* Deep Agents model eval category matrix: compact table width. Do not set width/display on
+[data-table-wrapper] — Mintlify uses flex, full-bleed calc width, and contain:inline-size; our
+earlier max-content + block rule collapsed the layout. Override Mintlify’s min-w-full w-full and
+[&_td]:min-w-[150px] on the table only. */
+.deepagents-eval-category-matrix {
+display: block;
+width: 100%;
+}
+.deepagents-eval-category-matrix table {
+width: auto !important;
+min-width: 0 !important;
+max-width: 100%;
+table-layout: auto !important;
+}
+.deepagents-eval-category-matrix table th,
+.deepagents-eval-category-matrix table td {
+min-width: 0 !important;
+box-sizing: border-box;
+}
+.deepagents-eval-category-matrix table th:not(:first-child),
+.deepagents-eval-category-matrix table td:not(:first-child) {
+white-space: nowrap;
+width: 1%;
+padding-left: 0.5rem;
+padding-right: 0.5rem;
+vertical-align: top;
+}
+/*
+* Home page CardGroup: Mintlify outputs container-query classes (@…/columns-container) plus
+* sm:grid-cols-[repeat(var(--cols),…)]. On hosted builds the named container can be missing or
+* differ from local dev, so container rules may not apply and the viewport sm rule can leave
+* four minmax columns on narrow viewports. Force column count from the viewport instead.
+*/
+.home-page .columns.card-group {
+grid-template-columns: minmax(0, 1fr) !important;
+}
+@media (min-width: 640px) {
+.home-page .columns.card-group {
+grid-template-columns: repeat(var(--cols, 1), minmax(0, 1fr)) !important;
+}
+}
+/* Hide source-links callouts on home page */
+body:has(.home-page) .source-links,
+:root:has(.home-page) .source-links {
+display: none !important;
+}
+.home-page ~ :is(.callout, [data-callout-type]) {
+display: none !important;
+}
+/* Note — Soft blue (#E0EDF8 / dark slate) */
+[data-callout-type="note"] {
+background-color: #e0edf8 !important;
+border-color: #7ba3c9 !important;
+}
+[data-callout-type="note"] [data-component-part="callout-content"],
+[data-callout-type="note"] [data-component-part="callout-content"] * {
+color: #1e3a52 !important;
+}
+[data-callout-type="note"] [data-component-part="callout-icon"] svg {
+color: #2c5282 !important;
+}
+.dark [data-callout-type="note"] {
+background-color: #2a3f5f !important;
+border-color: #3d5a80 !important;
+}
+.dark [data-callout-type="note"] [data-component-part="callout-content"],
+.dark [data-callout-type="note"] [data-component-part="callout-content"] *,
+.dark [data-callout-type="note"] [data-component-part="callout-icon"] svg {
+color: #d6eeff !important;
+}
+/* Tip & Check — Lime green (#d4e8a8) with olive (#8da042) */
+[data-callout-type="tip"],
+[data-callout-type="check"] {
+background-color: #d4e8a8 !important;
+border-color: #8da042 !important;
+}
+[data-callout-type="tip"] [data-component-part="callout-content"],
+[data-callout-type="tip"] [data-component-part="callout-content"] *,
+[data-callout-type="check"] [data-component-part="callout-content"],
+[data-callout-type="check"] [data-component-part="callout-content"] * {
+color: #2d3319 !important;
+}
+[data-callout-type="tip"] [data-component-part="callout-icon"] svg,
+[data-callout-type="check"] [data-component-part="callout-icon"] svg {
+color: #5a6b1f !important;
+}
+.dark [data-callout-type="tip"],
+.dark [data-callout-type="check"] {
+background-color: #2e3900 !important;
+border-color: #6e8900 !important;
+}
+.dark [data-callout-type="tip"] [data-component-part="callout-content"],
+.dark [data-callout-type="tip"] [data-component-part="callout-content"] *,
+.dark [data-callout-type="check"] [data-component-part="callout-content"],
+.dark [data-callout-type="check"] [data-component-part="callout-content"] * {
+color: #c3e796 !important;
+}
+.dark [data-callout-type="tip"] [data-component-part="callout-icon"] svg,
+.dark [data-callout-type="check"] [data-component-part="callout-icon"] svg {
+color: #c3e796 !important;
+}
+/* Warning — Warm yellow (#FEF3C7 / amber) */
+[data-callout-type="warning"] {
+background-color: #fef3c7 !important;
+border-color: #d97706 !important;
+}
+[data-callout-type="warning"] [data-component-part="callout-content"],
+[data-callout-type="warning"] [data-component-part="callout-content"] * {
+color: #78350f !important;
+}
+[data-callout-type="warning"] [data-component-part="callout-icon"] svg {
+color: #b45309 !important;
+}
+.dark [data-callout-type="warning"] {
+background-color: #5c3a0e !important;
+border-color: #b45309 !important;
+}
+.dark [data-callout-type="warning"] [data-component-part="callout-content"],
+.dark [data-callout-type="warning"] [data-component-part="callout-content"] *,
+.dark [data-callout-type="warning"] [data-component-part="callout-icon"] svg {
+color: #fde68a !important;
+}
+/* Danger — Salmon-tinted red */
+[data-callout-type="danger"] {
+background-color: #fce8e6 !important;
+border-color: #c75a52 !important;
+}
+[data-callout-type="danger"] [data-component-part="callout-content"],
+[data-callout-type="danger"] [data-component-part="callout-content"] * {
+color: #7d2a24 !important;
+}
+[data-callout-type="danger"] [data-component-part="callout-icon"] svg {
+color: #b91c1c !important;
+}
+.dark [data-callout-type="danger"] {
+background-color: rgb(239 68 68 / 0.15) !important;
+border-color: rgb(239 68 68 / 0.4) !important;
+}
+.dark [data-callout-type="danger"] [data-component-part="callout-content"],
+.dark [data-callout-type="danger"] [data-component-part="callout-content"] * {
+color: #fecaca !important;
+}
+.dark [data-callout-type="danger"] [data-component-part="callout-icon"] svg {
+color: #fca5a5 !important;
+}
+/* Info — Neutral grey (white/light grey bg, dark grey text, light grey border) */
+[data-callout-type="info"] {
+background-color: #fafafa !important;
+border-color: #d1d5db !important;
+}
+[data-callout-type="info"] [data-component-part="callout-content"],
+[data-callout-type="info"] [data-component-part="callout-content"] * {
+color: #374151 !important;
+}
+[data-callout-type="info"] [data-component-part="callout-icon"] svg {
+color: #6b7280 !important;
+}
+.dark [data-callout-type="info"] {
+background-color: #27272a !important;
+border-color: #52525b !important;
+}
+.dark [data-callout-type="info"] [data-component-part="callout-content"],
+.dark [data-callout-type="info"] [data-component-part="callout-content"] *,
+.dark [data-callout-type="info"] [data-component-part="callout-icon"] svg {
+color: #d4d4d8 !important;
+}
+/* Example — Pale pink (#F8E0ED) / plum (#735A6C) */
+[data-callout-type="example"] {
+background-color: #f8e0ed !important;
+border-color: #c9a8b8 !important;
+}
+[data-callout-type="example"] [data-component-part="callout-content"],
+[data-callout-type="example"] [data-component-part="callout-content"] * {
+color: #4a3540 !important;
+}
+[data-callout-type="example"] [data-component-part="callout-icon"] svg {
+color: #735a6c !important;
+}
+.dark [data-callout-type="example"] {
+background-color: #4a3d52 !important;
+border-color: #735a6c !important;
+}
+.dark [data-callout-type="example"] [data-component-part="callout-content"],
+.dark [data-callout-type="example"] [data-component-part="callout-content"] *,
+.dark [data-callout-type="example"] [data-component-part="callout-icon"] svg {
+color: #e8d4dc !important;
+}
+/* Question — Plum (#735A6C) with soft lavender */
+[data-callout-type="question"] {
+background-color: #e8e0ec !important;
+border-color: #735a6c !important;
+}
+[data-callout-type="question"] [data-component-part="callout-content"],
+[data-callout-type="question"] [data-component-part="callout-content"] * {
+color: #3d3142 !important;
+}
+[data-callout-type="question"] [data-component-part="callout-icon"] svg {
+color: #5a4a62 !important;
+}
+.dark [data-callout-type="question"] {
+background-color: rgb(115 90 108 / 0.25) !important;
+border-color: #735a6c !important;
+}
+.dark [data-callout-type="question"] [data-component-part="callout-content"],
+.dark [data-callout-type="question"] [data-component-part="callout-content"] * {
+color: #e8d4ec !important;
+}
+.dark [data-callout-type="question"] [data-component-part="callout-icon"] svg {
+color: #d5c3d7 !important;
+}
+/* Custom — Purple tint */
+[data-callout-type="callout"] {
+background-color: #ede9fe !important;
+border-color: #7c3aed !important;
+}
+[data-callout-type="callout"] [data-component-part="callout-content"],
+[data-callout-type="callout"] [data-component-part="callout-content"] * {
+color: #4c1d95 !important;
+}
+[data-callout-type="callout"] [data-component-part="callout-icon"] svg {
+color: #6d28d9 !important;
+}
+.dark [data-callout-type="callout"] {
+background-color: rgb(124 58 237 / 0.15) !important;
+border-color: #7c3aed !important;
+}
+.dark [data-callout-type="callout"] [data-component-part="callout-content"],
+.dark [data-callout-type="callout"] [data-component-part="callout-content"] * {
+color: #e9d5ff !important;
+}
+.dark [data-callout-type="callout"] [data-component-part="callout-icon"] svg {
+color: #c4b5fd !important;
+}
+/* Source links footer callouts */
+.source-links [data-callout-type] {
+background-color: #eef2f7 !important;
+border-color: #dde2e9 !important;
+}
+.source-links [data-callout-type] [data-component-part="callout-content"],
+.source-links [data-callout-type] [data-component-part="callout-content"] *,
+.source-links [data-callout-type] [data-component-part="callout-icon"] svg {
+color: #5c6370 !important;
+}
+.source-links [data-callout-type] [data-component-part="callout-icon"] svg {
+background-color: #5c6370 !important;
+}
+.source-links [data-callout-type] a {
+color: inherit !important;
+text-decoration-color: currentColor !important;
+}
+.dark .source-links [data-callout-type] {
+background-color: #1e2028 !important;
+border-color: #2a2d38 !important;
+}
+.dark .source-links [data-callout-type] [data-component-part="callout-content"],
+.dark .source-links [data-callout-type] [data-component-part="callout-content"] *,
+.dark .source-links [data-callout-type] [data-component-part="callout-icon"] svg {
+color: #8b8f99 !important;
+}
+.dark .source-links [data-callout-type] [data-component-part="callout-icon"] svg {
+background-color: #8b8f99 !important;
+}
+.dark .source-links [data-callout-type] a {
+color: inherit !important;
+text-decoration-color: currentColor !important;
+}
+/* Card background matches page background */
+.card {
+background-color: transparent !important;
+}
+/* Make card and dropdown borders visible in dark mode (WCAG 1.4.11: 3:1 min for UI components) */
+.dark .card,
+.dark [data-component="card"] {
+border-color: #4f5d73 !important;
+}
+.dark [data-radix-popper-content-wrapper] *,
+.dark [data-radix-collection-item],
+.dark [role="listbox"],
+.dark [role="menu"],
+.dark [role="combobox"],
+.dark details,
+.dark details > summary,
+.dark button[class*="border"],
+.dark [class*="border-"][class*="rounded"] {
+border-color: #4f5d73 !important;
+}
+/* Style links in tables to match regular content links */
+.dark table a {
+color: #7FC8FF !important;
+text-decoration: underline !important;
+text-decoration-color: #7FC8FF !important;
+text-underline-offset: 2px;
+}
+/* Make table borders visible in dark mode */
+.dark table * {
+border-color: #4f5d73 !important;
+}
+/* Force vertical alignment to top for table cells on products page */
+table.products-page td.tdlist,
+table.products-page th.tdlist {
+vertical-align: top !important;
+}
+/*
+* Horizontal overflow indicator for Mintlify tab lists (the "model switcher").
+*
+* Mintlify renders the Tabs component as a horizontally scrollable
+* ` `. When there are
+* more tabs than fit the content width, the list scrolls horizontally but
+* the edge truncates cleanly on the word boundary with no affordance that
+* more tabs exist.
+*
+* Apply a mask-image fade to the trailing edge so clipped content fades
+* out instead of cutting off sharply. In browsers that support
+* scroll-driven animations (Chromium 115+, Firefox 138+, Safari 26+), the
+* mask is animated against the list's own scroll position so only the
+* side(s) with hidden content are faded. In older browsers, the static
+* right-edge fade alone still reads as "there's more here".
+*
+* When the tablist is not scrollable, the mask fades only the trailing
+* sliver of the flex-gap region (which contains no tab content), so the
+* visual effect is imperceptible.
+*/
+[data-component-part="tabs-list"] {
+-webkit-mask-image:
+linear-gradient(
+to right,
+#000 0,
+#000 calc(100% - 1.5rem),
+transparent 100%
+);
+mask-image:
+linear-gradient(
+to right,
+#000 0,
+#000 calc(100% - 1.5rem),
+transparent 100%
+);
+}
+@supports (animation-timeline: scroll()) {
+[data-component-part="tabs-list"] {
+animation: tabs-overflow-mask linear both;
+animation-timeline: scroll(self inline);
+}
+@keyframes tabs-overflow-mask {
+0% {
+-webkit-mask-image:
+linear-gradient(
+to right,
+#000 0,
+#000 calc(100% - 1.5rem),
+transparent 100%
+);
+mask-image:
+linear-gradient(
+to right,
+#000 0,
+#000 calc(100% - 1.5rem),
+transparent 100%
+);
+}
+1%,
+99% {
+-webkit-mask-image:
+linear-gradient(
+to right,
+transparent 0,
+#000 1.5rem,
+#000 calc(100% - 1.5rem),
+transparent 100%
+);
+mask-image:
+linear-gradient(
+to right,
+transparent 0,
+#000 1.5rem,
+#000 calc(100% - 1.5rem),
+transparent 100%
+);
+}
+100% {
+-webkit-mask-image:
+linear-gradient(
+to right,
+transparent 0,
+#000 1.5rem,
+#000 100%
+);
+mask-image:
+linear-gradient(
+to right,
+transparent 0,
+#000 1.5rem,
+#000 100%
+);
+}
+}
+}
+html[data-current-path$="/deepagents/code/overview"] breadcrumb-list,
+html[data-current-path$="/deepagents/code/overview"] .breadcrumb-list {
+display: none !important;
+}
+On this page       Building a knowledge base    From retrieval to RAG    Retrieval pipeline    Building blocks      RAG architectures    2-step RAG    Agentic RAG    Hybrid RAG                Advanced usage     Retrieval           Copy page                      Copy page             Large Language Models (LLMs) are powerful, but they have two key limitations:
+Finite context —they can’t ingest entire corpora at once.
+Static knowledge —their training data is frozen at a point in time.
+Retrieval addresses these problems by fetching relevant external knowledge at query time. This is the foundation of  Retrieval-Augmented Generation (RAG) : enhancing an LLM’s answers with context-specific information.
+​         Building a knowledge base
+A  knowledge base  is a repository of documents or structured data used during retrieval.
+If you need a custom knowledge base, you can use LangChain’s document loaders and vector stores to build one from your own data.
+If you already have a knowledge base (e.g., a SQL database, CRM, or internal documentation system), you do  not  need to rebuild it. You can:
+Connect it as a  tool  for an agent in Agentic RAG.
+Query it and supply the retrieved content as context to the LLM  (2-Step RAG) .
+See the following tutorial to build a searchable knowledge base and minimal RAG workflow:
+Tutorial: Semantic search   Learn how to create a searchable knowledge base from your own data using LangChain’s document loaders, embeddings, and vector stores.
+In this tutorial, you’ll build a search engine over a PDF, enabling retrieval of passages relevant to a query. You’ll also implement a minimal RAG workflow on top of this engine to see how external knowledge can be integrated into LLM reasoning.    Learn more
+​         From retrieval to RAG
+Retrieval allows LLMs to access relevant context at runtime. But most real-world applications go one step further: they  integrate retrieval with generation  to produce grounded, context-aware answers.
+This is the core idea behind  Retrieval-Augmented Generation (RAG) . The retrieval pipeline becomes a foundation for a broader system that combines search with generation.
+​         Retrieval pipeline
+A typical retrieval workflow looks like this:
+Each component is modular: you can swap loaders, splitters, embeddings, or vector stores without rewriting the app’s logic.
+​         Building blocks
+Document loaders   Ingest data from external sources (Google Drive, Slack, Notion, etc.), returning standardized   Document   objects.    Learn more                         Text splitters   Break large docs into smaller chunks that will be retrievable individually and fit within a model’s context window.    Learn more                         Embedding models   An embedding model turns text into a vector of numbers so that texts with similar meaning land close together in that vector space.    Learn more                         Vector stores   Specialized databases for storing and searching embeddings.    Learn more                         Retrievers   A retriever is an interface that returns documents given an unstructured query.    Learn more
+​         RAG architectures
+RAG can be implemented in multiple ways, depending on your system’s needs. We outline each type in the sections below.
+Architecture  Description  Control  Flexibility  Latency  Example Use Case       2-Step RAG   Retrieval always happens before generation. Simple and predictable  ✅ High  ❌ Low  ⚡ Fast  FAQs, documentation bots     Agentic RAG   An LLM-powered agent decides  when  and  how  to retrieve during reasoning  ❌ Low  ✅ High  ⏳ Variable  Research assistants with access to multiple tools     Hybrid   Combines characteristics of both approaches with validation steps  ⚖️ Medium  ⚖️ Medium  ⏳ Variable  Domain-specific Q&amp;A with quality validation
+Latency : Latency is generally more  predictable  in  2-Step RAG , as the maximum number of LLM calls is known and capped. This predictability assumes that LLM inference time is the dominant factor. However, real-world latency may also be affected by the performance of retrieval steps—such as API response times, network delays, or database queries—which can vary based on the tools and infrastructure in use.
+​         2-step RAG
+In  2-Step RAG , the retrieval step is always executed before the generation step. This architecture is straightforward and predictable, making it suitable for many applications where the retrieval of relevant documents is a clear prerequisite for generating an answer.
+Tutorial: Retrieval-Augmented Generation (RAG)   See how to build a Q&amp;A chatbot that can answer questions grounded in your data using Retrieval-Augmented Generation.
+This tutorial walks through two approaches:
+A  RAG agent  that runs searches with a flexible tool—great for general-purpose use.
+A  2-step RAG  chain that requires just one LLM call per query—fast and efficient for simpler tasks.
+Learn more
+​         Agentic RAG
+Agentic Retrieval-Augmented Generation (RAG)  combines the strengths of Retrieval-Augmented Generation with agent-based reasoning. Instead of retrieving documents before answering, an agent (powered by an LLM) reasons step-by-step and decides  when  and  how  to retrieve information during the interaction.
+The only thing an agent needs to enable RAG behavior is access to one or more  tools  that can fetch external knowledge—such as documentation loaders, web APIs, or database queries.
+import   requests
+from   langchain  .  tools   import   tool
+from   langchain  .  chat_models   import   init_chat_model
+from   langchain  .  agents   import   create_agent
+@tool
+def   fetch_url  (  url  :   str  )   -&gt;   str  :
+&quot;&quot;&quot;Fetch text content from a URL&quot;&quot;&quot;
+response   =   requests  .  get  (  url  ,   timeout  =  10.0  )
+response  .  raise_for_status  ()
+return   response  .  text
+system_prompt   =   &quot;&quot;&quot;  \
+Use fetch_url when you need to fetch information from a web-page; quote relevant snippets.
+&quot;&quot;&quot;
+agent   =   create_agent  (
+model  =  &quot;claude-sonnet-4-6&quot;  ,
+tools  =  [  fetch_url  ],   # A tool for retrieval
+system_prompt  =  system_prompt  ,
+)
+Show   Extended example: Agentic RAG for LangGraph&#x27;s llms.txt     This example implements an  Agentic RAG system  to assist users in querying LangGraph documentation. The agent begins by loading  llms.txt , which lists available documentation URLs, and can then dynamically use a  fetch_documentation  tool to retrieve and process the relevant content based on the user’s question.                    import   requests
+from   langchain  .  agents   import   create_agent
+from   langchain  .  messages   import   HumanMessage
+from   langchain  .  tools   import   tool
+from   markdownify   import   markdownify
+ALLOWED_DOMAINS   =   [  &quot;https://langchain-ai.github.io/&quot;  ]
+LLMS_TXT   =   &#x27;https://langchain-ai.github.io/langgraph/llms.txt&#x27;
+@tool
+def   fetch_documentation  (  url  :   str  )   -&gt;   str  :
+&quot;&quot;&quot;Fetch and convert documentation from a URL&quot;&quot;&quot;
+if   not   any  (  url  .  startswith  (  domain  )   for   domain   in   ALLOWED_DOMAINS  ):
+return   (
+&quot;Error: URL not allowed. &quot;
+f  &quot;Must start with one of:   {  &#x27;, &#x27;  .  join  (  ALLOWED_DOMAINS  )  }  &quot;
+)
+response   =   requests  .  get  (  url  ,   timeout  =  10.0  )
+response  .  raise_for_status  ()
+return   markdownify  (  response  .  text  )
+# We will fetch the content of llms.txt, so this can
+# be done ahead of time without requiring an LLM request.
+llms_txt_content   =   requests  .  get  (  LLMS_TXT  ).  text
+# System prompt for the agent
+system_prompt   =   f  &quot;&quot;&quot;
+You are an expert Python developer and technical assistant.
+Your primary role is to help users with questions about LangGraph and related tools.
+Instructions:
+1. If a user asks a question you&#x27;re unsure about—or one that likely involves API usage,
+behavior, or configuration—you MUST use the `fetch_documentation` tool to consult the relevant docs.
+2. When citing documentation, summarize clearly and include relevant context from the content.
+3. Do not use any URLs outside of the allowed domain.
+4. If a documentation fetch fails, tell the user and proceed with your best expert understanding.
+You can access official documentation from the following approved sources:
+{  llms_txt_content  }
+You MUST consult the documentation to get up to date documentation
+before answering a user&#x27;s question about LangGraph.
+Your answers should be clear, concise, and technically accurate.
+&quot;&quot;&quot;
+tools   =   [  fetch_documentation  ]
+model   =   init_chat_model  (  &quot;claude-sonnet-4-0&quot;  ,   max_tokens  =  32_000  )
+agent   =   create_agent  (
+model  =  model  ,
+tools  =  tools  ,
+system_prompt  =  system_prompt  ,
+name  =  &quot;Agentic RAG&quot;  ,
+)
+response   =   agent  .  invoke  ({
+&#x27;messages&#x27;  :   [
+HumanMessage  (  content  =  (
+&quot;Write a short example of a langgraph agent using the &quot;
+&quot;prebuilt create react agent. the agent should be able &quot;
+&quot;to look up stock pricing information.&quot;
+))
+]
+})
+print  (  response  [  &#x27;  messages  &#x27;  ][  -  1  ].  content  )
+Tutorial: Retrieval-Augmented Generation (RAG)   See how to build a Q&amp;A chatbot that can answer questions grounded in your data using Retrieval-Augmented Generation.
+This tutorial walks through two approaches:
+A  RAG agent  that runs searches with a flexible tool—great for general-purpose use.
+A  2-step RAG  chain that requires just one LLM call per query—fast and efficient for simpler tasks.
+Learn more
+​         Hybrid RAG
+Hybrid RAG combines characteristics of both 2-Step and Agentic RAG. It introduces intermediate steps such as query preprocessing, retrieval validation, and post-generation checks. These systems offer more flexibility than fixed pipelines while maintaining some control over execution.
+Typical components include:
+Query enhancement : Modify the input question to improve retrieval quality. This can involve rewriting unclear queries, generating multiple variations, or expanding queries with additional context.
+Retrieval validation : Evaluate whether retrieved documents are relevant and sufficient. If not, the system may refine the query and retrieve again.
+Answer validation : Check the generated answer for accuracy, completeness, and alignment with source content. If needed, the system can regenerate or revise the answer.
+The architecture often supports multiple iterations between these steps:
+This architecture is suitable for:
+Applications with ambiguous or underspecified queries
+Systems that require validation or quality control steps
+Workflows involving multiple sources or iterative refinement
+Tutorial: Agentic RAG with Self-Correction   An example of  Hybrid RAG  that combines agentic reasoning with retrieval and self-correction.    Learn more
+Connect these docs  to Claude, VSCode, and more via MCP for real-time answers.           Edit this page on GitHub  or  file an issue .        Was this page helpful?         Yes        No            Custom workflow       Previous       Long-term memory       Next             ⌘ I                      Docs by LangChain  home page       github      x      linkedin      youtube          Resources  Forum  Changelog  LangChain Academy  Contact Sales      Company  Home  Trust Center  Careers  Blog       github      x      linkedin      youtube                  (self.__next_f=self.__next_f||[]).push([0])  self.__next_f.push([1,"1:\"$Sreact.fragment\"\n2:I[339756,[\"/mintlify-assets/_next/static/chunks/321c1fa0f04d01df.js?dpl=dpl_CCVdgve6RSn6rwF8tKd1aHzhZzVN\",\"/mintlify-assets/_next/static/chunks/b664fc8bb1e7ab0d.js?dpl=dpl_CCVdgve6RSn6rwF8tKd1aHzhZzVN\"],\"default\"]\n"])  self.__next_f.push([1,"3:I[556357,[\"/mintlify-assets/_next/static/chunks/321c1fa0f04d01df.js?dpl=dpl_CCVdgve6RSn6rwF8tKd1aHzhZzVN\",\"/mintlify-assets/_next/static/chunks/b664fc8bb1e7ab0d.js?dpl=dpl_CCVdgve6RSn6rwF8tKd1aHzhZzVN\",\"/mintlify-assets/_next/static/chunks/22bd90086d67b03b.js?dpl=dpl_CCVdgve6RSn6rwF8tKd1aHzhZzVN\",\"/mintlify-assets/_next/static/chunks/d6c64f3c281aaf60.js?dpl=dpl_CCVdgve6RSn6rwF8tKd1aHzhZzVN\",\"/mintlify-assets/_next/static/chunks/90079180db6f14a4.js?dpl=dpl_CCVdgve6RSn6rwF8tKd1aHzhZzVN\",\"/mintlify-assets/_next/static/chunks/86624a037f68cf7e.js?dpl=dpl_CCVdgve6RSn6rwF8tKd1aHzhZzVN\",\"/mintlify-assets/_next/static/chunks/55341d0a0dea6975.js?dpl=dpl_CCVdgve6RSn6rwF8tKd1aHzhZzVN\",\"/mintlify-assets/_next/static/chunks/22ae5a851e06ea20.js?dpl=dpl_CCVdgve6RSn6rwF8tKd1aHzhZzVN\",\"/mintlify-assets/_next/static/chunks/6fd3acb5d5a9a0e5.js?dpl=dpl_CCVdgve6RSn6rwF8tKd1aHzhZzVN\",\"/mintlify-assets/_next/static/chunks/13ebb4257dd3a545.js?dpl=dpl_CCVdgve6RSn6rwF8tKd1aHzhZzVN\",\"/mintlify-assets/_next/static/chunks/57e3934b0bef01f4.js?dpl=dpl_CCVdgve6RSn6rwF8tKd1aHzhZzVN\"],\"default\",1]\n"])  self.__next_f.push([1,"10:I[168027,[\"/mintlify-assets/_next/static/chunks/321c1fa0f04d01df.js?dpl=dpl_CCVdgve6RSn6rwF8tKd1aHzhZzVN\",\"/mintlify-assets/_next/static/chunks/b664fc8bb1e7ab0d.js?dpl=dpl_CCVdgve6RSn6rwF8tKd1aHzhZzVN\"],\"default\"]\n13:I[837457,[\"/mintlify-assets/_next/static/chunks/321c1fa0f04d01df.js?dpl=dpl_CCVdgve6RSn6rwF8tKd1aHzhZzVN\",\"/mintlify-assets/_next/static/chunks/b664fc8bb1e7ab0d.js?dpl=dpl_CCVdgve6RSn6rwF8tKd1aHzhZzVN\"],\"default\"]\n"])  self.__next_f.push([1,"14:I[894587,[\"/mintlify-assets/_next/static/chunks/321c1fa0f04d01df.js?dpl=dpl_CCVdgve6RSn6rwF8tKd1aHzhZzVN\",\"/mintlify-assets/_next/static/chunks/b664fc8bb1e7ab0d.js?dpl=dpl_CCVdgve6RSn6rwF8tKd1aHzhZzVN\",\"/mintlify-assets/_next/static/chunks/44f01ef68ed4db4f.js?dpl=dpl_CCVdgve6RSn6rwF8tKd1aHzhZzVN\",\"/mintlify-assets/_next/static/chunks/90079180db6f14a4.js?dpl=dpl_CCVdgve6RSn6rwF8tKd1aHzhZzVN\",\"/mintlify-assets/_next/static/chunks/6fd3acb5d5a9a0e5.js?dpl=dpl_CCVdgve6RSn6rwF8tKd1aHzhZzVN\",\"/mintlify-assets/_next/static/chunks/07eb678ee01a9cdf.js?dpl=dpl_CCVdgve6RSn6rwF8tKd1aHzhZzVN\",\"/mintlify-assets/_next/static/chunks/55341d0a0dea6975.js?dpl=dpl_CCVdgve6RSn6rwF8tKd1aHzhZzVN\",\"/mintlify-assets/_next/static/chunks/7285fd2749e1c6b9.js?dpl=dpl_CCVdgve6RSn6rwF8tKd1aHzhZzVN\",\"/mintlify-assets/_next/static/chunks/d297ce287e736ade.js?dpl=dpl_CCVdgve6RSn6rwF8tKd1aHzhZzVN\",\"/mintlify-assets/_next/static/chunks/2d697d73ad838347.js?dpl=dpl_CCVdgve6RSn6rwF8tKd1aHzhZzVN\",\"/mintlify-assets/_next/static/chunks/b725c5a68847f87d.js?dpl=dpl_CCVdgve6RSn6rwF8tKd1aHzhZzVN\",\"/mintlify-assets/_next/static/chunks/c6f7dca4d5a41397.js?dpl=dpl_CCVdgve6RSn6rwF8tKd1aHzhZzVN\",\"/mintlify-assets/_next/static/chunks/190e2d29d3b2239b.js?dpl=dpl_CCVdgve6RSn6rwF8tKd1aHzhZzVN\",\"/mintlify-assets/_next/static/chunks/247f8594ded6e6f1.js?dpl=dpl_CCVdgve6RSn6rwF8tKd1aHzhZzVN\",\"/mintlify-assets/_next/static/chunks/edf583267c695d7e.js?dpl=dpl_CCVdgve6RSn6rwF8tKd1aHzhZzVN\",\"/mintlify-assets/_next/static/chunks/c1070ee8d6d64175.js?dpl=dpl_CCVdgve6RSn6rwF8tKd1aHzhZzVN\",\"/mintlify-assets/_next/static/chunks/57e3934b0bef01f4.js?dpl=dpl_CCVdgve6RSn6rwF8tKd1aHzhZzVN\",\"/mintlify-assets/_next/static/chunks/13ebb4257dd3a545.js?dpl=dpl_CCVdgve6RSn6rwF8tKd1aHzhZzVN\",\"/mintlify-assets/_next/static/chunks/df769b4893ef4c07.js?dpl=dpl_CCVdgve6RSn6rwF8tKd1aHzhZzVN\",\"/mintlify-assets/_next/static/chunks/22ae5a851e06ea20.js?dpl=dpl_CCVdgve6RSn6rwF8tKd1aHzhZzVN\"],\"ThemeProvider\",1]\n"])  self.__next_f.push([1,"15:I[152823,[\"/mintlify-assets/_next/static/chunks/321c1fa0f04d01df.js?dpl=dpl_CCVdgve6RSn6rwF8tKd1aHzhZzVN\",\"/mintlify-assets/_next/static/chunks/b664fc8bb1e7ab0d.js?dpl=dpl_CCVdgve6RSn6rwF8tKd1aHzhZzVN\",\"/mintlify-assets/_next/static/chunks/44f01ef68ed4db4f.js?dpl=dpl_CCVdgve6RSn6rwF8tKd1aHzhZzVN\",\"/mintlify-assets/_next/static/chunks/90079180db6f14a4.js?dpl=dpl_CCVdgve6RSn6rwF8tKd1aHzhZzVN\",\"/mintlify-assets/_next/static/chunks/6fd3acb5d5a9a0e5.js?dpl=dpl_CCVdgve6RSn6rwF8tKd1aHzhZzVN\",\"/mintlify-assets/_next/static/chunks/07eb678ee01a9cdf.js?dpl=dpl_CCVdgve6RSn6rwF8tKd1aHzhZzVN\",\"/mintlify-assets/_next/static/chunks/55341d0a0dea6975.js?dpl=dpl_CCVdgve6RSn6rwF8tKd1aHzhZzVN\",\"/mintlify-assets/_next/static/chunks/7285fd2749e1c6b9.js?dpl=dpl_CCVdgve6RSn6rwF8tKd1aHzhZzVN\",\"/mintlify-assets/_next/static/chunks/d297ce287e736ade.js?dpl=dpl_CCVdgve6RSn6rwF8tKd1aHzhZzVN\",\"/mintlify-assets/_next/static/chunks/2d697d73ad838347.js?dpl=dpl_CCVdgve6RSn6rwF8tKd1aHzhZzVN\",\"/mintlify-assets/_next/static/chunks/b725c5a68847f87d.js?dpl=dpl_CCVdgve6RSn6rwF8tKd1aHzhZzVN\",\"/mintlify-assets/_next/static/chunks/c6f7dca4d5a41397.js?dpl=dpl_CCVdgve6RSn6rwF8tKd1aHzhZzVN\",\"/mintlify-assets/_next/static/chunks/190e2d29d3b2239b.js?dpl=dpl_CCVdgve6RSn6rwF8tKd1aHzhZzVN\",\"/mintlify-assets/_next/static/chunks/247f8594ded6e6f1.js?dpl=dpl_CCVdgve6RSn6rwF8tKd1aHzhZzVN\",\"/mintlify-assets/_next/static/chunks/edf583267c695d7e.js?dpl=dpl_CCVdgve6RSn6rwF8tKd1aHzhZzVN\",\"/mintlify-assets/_next/static/chunks/c1070ee8d6d64175.js?dpl=dpl_CCVdgve6RSn6rwF8tKd1aHzhZzVN\",\"/mintlify-assets/_next/static/chunks/57e3934b0bef01f4.js?dpl=dpl_CCVdgve6RSn6rwF8tKd1aHzhZzVN\",\"/mintlify-assets/_next/static/chunks/13ebb4257dd3a545.js?dpl=dpl_CCVdgve6RSn6rwF8tKd1aHzhZzVN\",\"/mintlify-assets/_next/static/chunks/df769b4893ef4c07.js?dpl=dpl_CCVdgve6RSn6rwF8tKd1aHzhZzVN\",\"/mintlify-assets/_next/static/chunks/22ae5a851e06ea20.js?dpl=dpl_CCVdgve6RSn6rwF8tKd1aHzhZzVN\"],\"ColorVariables\",1]\n"])  self.__next_f.push([1,"16:I[531961,[\"/mintlify-assets/_next/static/chunks/321c1fa0f04d01df.js?dpl=dpl_CCVdgve6RSn6rwF8tKd1aHzhZzVN\",\"/mintlify-assets/_next/static/chunks/b664fc8bb1e7ab0d.js?dpl=dpl_CCVdgve6RSn6rwF8tKd1aHzhZzVN\",\"/mintlify-assets/_next/static/chunks/44f01ef68ed4db4f.js?dpl=dpl_CCVdgve6RSn6rwF8tKd1aHzhZzVN\",\"/mintlify-assets/_next/static/chunks/90079180db6f14a4.js?dpl=dpl_CCVdgve6RSn6rwF8tKd1aHzhZzVN\",\"/mintlify-assets/_next/static/chunks/6fd3acb5d5a9a0e5.js?dpl=dpl_CCVdgve6RSn6rwF8tKd1aHzhZzVN\",\"/mintlify-assets/_next/static/chunks/07eb678ee01a9cdf.js?dpl=dpl_CCVdgve6RSn6rwF8tKd1aHzhZzVN\",\"/mintlify-assets/_next/static/chunks/55341d0a0dea6975.js?dpl=dpl_CCVdgve6RSn6rwF8tKd1aHzhZzVN\",\"/mintlify-assets/_next/static/chunks/7285fd2749e1c6b9.js?dpl=dpl_CCVdgve6RSn6rwF8tKd1aHzhZzVN\",\"/mintlify-assets
